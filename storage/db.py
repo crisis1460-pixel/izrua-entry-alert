@@ -1,0 +1,195 @@
+"""
+레벨 상태 DB (SQLite).
+
+한 "레벨" = TradingView 아이디어 글 하나에서 뽑은 (코인 + 엔트리가) 조합.
+상태 머신: watching → previewed(엔트리 ±밴드 접근) → touched(엔트리 하향 터치) / expired(7일 경과)
+
+가격 비교의 기준 통화: entry/sl/tp 는 TradingView(USDT 페어) 기준이라 USD 스케일로 저장하고,
+KRW 환산은 가격체크 시점의 실시간 USDT/KRW 로 그때그때 계산한다(환율 변동 반영).
+
+값(비밀) 없음 — 이 DB 는 공개 아티팩트로 올라가도 되는 시세/공개글 데이터만 담는다.
+"""
+
+import hashlib
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Optional
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS levels (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_key        TEXT UNIQUE NOT NULL,   -- 중복 방지 해시
+    coin_symbol       TEXT NOT NULL,          -- LINK
+    ticker            TEXT NOT NULL,          -- KRW-LINK
+    direction         TEXT NOT NULL,          -- long / short
+    entry_usd         REAL,
+    sl_usd            REAL,
+    tp_usd            REAL,
+    rr                REAL,                    -- 보상/위험비 (계산 가능 시)
+    grade             TEXT,                    -- S/A/B/C/D
+    score             REAL,
+    author            TEXT,
+    author_followers  INTEGER,
+    author_hit_rate   REAL,                    -- 워쳐 DB 적중률 (0~1), 없으면 NULL
+    author_hit_count  INTEGER,                 -- 표본 수
+    author_whitelisted INTEGER DEFAULT 0,      -- 워쳐 화이트리스트 여부 (0/1)
+    mcap_rank         INTEGER,                 -- 시총 순위 (수집 시점)
+    mcap_tier_icon    TEXT,                    -- 💎🥇🥈🥉
+    post_url          TEXT,
+    post_age_minutes  REAL,                    -- 수집 시점의 글 나이
+    status            TEXT NOT NULL DEFAULT 'watching',
+    collected_at      REAL NOT NULL,
+    previewed_at      REAL,
+    touched_at        REAL,
+    expired_at        REAL
+);
+CREATE INDEX IF NOT EXISTS idx_levels_status ON levels(status);
+CREATE INDEX IF NOT EXISTS idx_levels_coin   ON levels(coin_symbol);
+
+-- 알림 발송 로그 (코인당 하루 상한 계산 + 중복 방지용)
+CREATE TABLE IF NOT EXISTS alerts_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin_symbol  TEXT NOT NULL,
+    kind         TEXT NOT NULL,      -- preview / touch
+    level_ids    TEXT,               -- 병합 시 여러 id (콤마구분)
+    sent_at      REAL NOT NULL,
+    day_kst      TEXT NOT NULL       -- YYYY-MM-DD (KST) — 일일 카운트 키
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_day ON alerts_log(coin_symbol, day_kst);
+"""
+
+
+def make_signal_key(coin_symbol: str, entry_usd, author: str, post_url: str) -> str:
+    """같은 글의 같은 엔트리를 한 레벨로 식별. 엔트리는 소수 6자리로 라운딩해
+    부동소수 미세차로 중복 생성되는 걸 막는다."""
+    entry_str = f"{float(entry_usd):.6f}" if entry_usd is not None else "none"
+    raw = f"{coin_symbol}|{entry_str}|{author or ''}|{post_url or ''}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+@contextmanager
+def connect(db_path: str):
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_db(db_path: str) -> None:
+    with connect(db_path) as conn:
+        conn.executescript(SCHEMA)
+
+
+def upsert_level(conn, level: dict) -> bool:
+    """새 레벨이면 INSERT, 이미 있으면(같은 signal_key) 갱신 대상 필드만 UPDATE.
+    반환: 신규 삽입이면 True."""
+    key = level["signal_key"]
+    row = conn.execute("SELECT id, status FROM levels WHERE signal_key = ?", (key,)).fetchone()
+    if row is None:
+        conn.execute(
+            """INSERT INTO levels
+               (signal_key, coin_symbol, ticker, direction, entry_usd, sl_usd, tp_usd,
+                rr, grade, score, author, author_followers, author_hit_rate,
+                author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
+                post_url, post_age_minutes, status, collected_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                key, level["coin_symbol"], level["ticker"], level["direction"],
+                level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
+                level.get("rr"), level.get("grade"), level.get("score"),
+                level.get("author"), level.get("author_followers"),
+                level.get("author_hit_rate"), level.get("author_hit_count"),
+                1 if level.get("author_whitelisted") else 0,
+                level.get("mcap_rank"), level.get("mcap_tier_icon"),
+                level.get("post_url"), level.get("post_age_minutes"),
+                "watching", level.get("collected_at", time.time()),
+            ),
+        )
+        return True
+    # 기존 레벨: 시총순위/등급/작성자 통계 등 최신 메타만 갱신 (상태·시각은 보존)
+    conn.execute(
+        """UPDATE levels SET
+             grade=?, score=?, rr=?, author_followers=?, author_hit_rate=?,
+             author_hit_count=?, author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?
+           WHERE signal_key=?""",
+        (
+            level.get("grade"), level.get("score"), level.get("rr"),
+            level.get("author_followers"), level.get("author_hit_rate"),
+            level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
+            level.get("mcap_rank"), level.get("mcap_tier_icon"), key,
+        ),
+    )
+    return False
+
+
+def get_active_levels(conn, direction: Optional[str] = "long") -> list:
+    """감시 중(watching/previewed)인 레벨. 기본은 long 만 (하향 터치 알림 대상)."""
+    q = "SELECT * FROM levels WHERE status IN ('watching','previewed')"
+    params = ()
+    if direction:
+        q += " AND direction = ?"
+        params = (direction,)
+    return [dict(r) for r in conn.execute(q, params).fetchall()]
+
+
+def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
+    conn.execute(
+        "UPDATE levels SET status='previewed', previewed_at=? WHERE id=? AND status='watching'",
+        (now or time.time(), level_id),
+    )
+
+
+def mark_touched(conn, level_ids: list, now: Optional[float] = None) -> None:
+    now = now or time.time()
+    conn.executemany(
+        "UPDATE levels SET status='touched', touched_at=? WHERE id=? AND status IN ('watching','previewed')",
+        [(now, lid) for lid in level_ids],
+    )
+
+
+def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
+    """수집 후 max_age_sec 지난 미터치 레벨을 expired 처리. 반환: 만료 건수."""
+    now = now or time.time()
+    cutoff = now - max_age_sec
+    cur = conn.execute(
+        "UPDATE levels SET status='expired', expired_at=? "
+        "WHERE status IN ('watching','previewed') AND collected_at < ?",
+        (now, cutoff),
+    )
+    return cur.rowcount
+
+
+def count_alerts_today(conn, coin_symbol: str, day_kst: str, kind: Optional[str] = None) -> int:
+    q = "SELECT COUNT(*) AS n FROM alerts_log WHERE coin_symbol=? AND day_kst=?"
+    params = [coin_symbol, day_kst]
+    if kind:
+        q += " AND kind=?"
+        params.append(kind)
+    return conn.execute(q, params).fetchone()["n"]
+
+
+def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: str,
+                 now: Optional[float] = None) -> None:
+    conn.execute(
+        "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
+        (coin_symbol, kind, ",".join(str(i) for i in level_ids), now or time.time(), day_kst),
+    )
+
+
+def stats(conn) -> dict:
+    """대시보드/아침요약/헬스체크용 요약."""
+    def n(where):
+        return conn.execute(f"SELECT COUNT(*) AS n FROM levels WHERE {where}").fetchone()["n"]
+    return {
+        "watching": n("status='watching'"),
+        "previewed": n("status='previewed'"),
+        "touched": n("status='touched'"),
+        "expired": n("status='expired'"),
+        "total": conn.execute("SELECT COUNT(*) AS n FROM levels").fetchone()["n"],
+    }
