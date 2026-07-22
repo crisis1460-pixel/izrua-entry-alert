@@ -56,7 +56,7 @@ def calculate_grade(
             risk, reward = entry - stop_loss, target - entry
         else:
             risk, reward = stop_loss - entry, entry - target
-        if risk > 0:
+        if risk > 0 and reward > 0:
             rr = reward / risk
             if rr >= 5:
                 score += 55

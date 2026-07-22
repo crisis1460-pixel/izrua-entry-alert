@@ -27,9 +27,24 @@ _ENTRY_LABEL = re.compile(
 _SL_LABEL = re.compile(
     r"(stop\s*loss|stop|sl|손절가?|손절|스탑|스톱)\s*[:=]?\s*", re.I,
 )
+# "target(?!s)": "Take-Profit Targets:" 같은 복수형 섹션 헤더에서 "target"만 매칭돼
+# 그 뒤 실제 "TP1: 5.298" 라벨을 건너뛰고 엉뚱한 위치를 가리키는 것을 막는다
+# (2026-07-23 실전 발견 — 아래 _ORDINAL_LABEL 설명 참고).
 _TP_LABEL = re.compile(
-    r"(take\s*profit|target|tp\d?|목표가?|목표|타겟\s*\d?|익절가?)\s*[:=]?\s*", re.I,
+    r"(take\s*profit|target(?!s)|tp\d?|목표가?|목표|타겟\s*\d?|익절가?)\s*[:=]?\s*", re.I,
 )
+
+# 실전 버그(2026-07-23): "TP1: 5.298 / TP2: 5.420 / TP3: 5.560" 처럼 다중 목표가를
+# 번호 매긴 글에서, "Take-Profit Targets:"(복수형 헤더)가 먼저 매칭되고 그 검색창(30자)
+# 안에 있는 "TP1"의 "1"이라는 숫자를 실제 목표가로 오인하는 사고가 실전 알림에서
+# 발생했다(INJ 글: 진짜 목표가 5.298 대신 라벨 번호 1이 tp로 잡혀 RR이 마이너스로
+# 계산됨). 라벨의 서수(TP1/TP2/SL1 등)를 숫자 탐색 전에 미리 제거해 이 숫자가
+# "가격"으로 오인되지 않게 한다 — "TP1:" → "TP:" (라벨 자체는 유지, 서수만 제거).
+# 라벨과 숫자 사이에 공백을 절대 허용하지 않는다(\s* 아님) — "목표 68,000"처럼
+# 공백을 둔 정상 가격의 앞자리(68)까지 서수로 오인해 지워버리는 회귀가 실제로
+# 났었다(2026-07-23 자체 발견). "TP1"/"목표1"처럼 라벨에 숫자가 바로 붙어있을 때만
+# 서수로 간주한다.
+_ORDINAL_LABEL = re.compile(r"\b(TP|SL|타겟|목표)[0-9]{1,2}\b", re.I)
 
 # 가격 숫자 하나: 1,234.56 / 0.00123 / 12100 / $8.30 (콤마·$ 허용)
 _NUM = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]*\.[0-9]+|[0-9]+)"
@@ -51,10 +66,11 @@ def _to_float(s: str) -> Optional[float]:
 
 
 def _clean(text: str) -> str:
-    """숫자 오인 유발 토큰을 먼저 지운다(레버리지/퍼센트/연도)."""
+    """숫자 오인 유발 토큰을 먼저 지운다(레버리지/퍼센트/연도/라벨 서수)."""
     text = _LEVERAGE.sub(" ", text)
     text = _PERCENT.sub(" ", text)
     text = _YEAR.sub(" ", text)
+    text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
     return text
 
 
@@ -125,6 +141,22 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     tps = _grab_after(_TP_LABEL, clean)
     sl = sls[0][0] if sls else None
     tp = tps[0][-1] if tps else None  # 첫 타겟(범위면 상단)
+
+    # 방향성 sanity(방어선 2단계, 2026-07-23): 라벨 매칭이 정상이어도 파싱이 미묘하게
+    # 틀리면(신규 소스 포맷 등) TP/SL이 방향과 모순될 수 있다 — long인데 tp<=entry
+    # 이거나 sl>=entry면 손익비가 마이너스로 나오는 등 명백히 잘못된 값이므로, 값을
+    # 버리지 않고 억지로 쓰기보다 "판단 보류"(None)로 되돌린다(이 모듈의 기존 철학과
+    # 동일 — 모르는 것과 틀린 것을 구분).
+    if direction == "long":
+        if tp is not None and entry is not None and tp <= entry:
+            tp = None
+        if sl is not None and entry is not None and sl >= entry:
+            sl = None
+    else:
+        if tp is not None and entry is not None and tp >= entry:
+            tp = None
+        if sl is not None and entry is not None and sl <= entry:
+            sl = None
 
     # 손익비
     rr = None

@@ -34,5 +34,51 @@ for desc, text, price, exp_entry, exp_dir in CASES:
         ok += 1
     print(f"{mark} {desc}\n    → {got}")
 
-print(f"\n{ok}/{len(CASES)} 통과")
-sys.exit(0 if ok == len(CASES) else 1)
+# 2026-07-23 실전 INJ 알림에서 발견된 실제 버그 재현: "Take-Profit Targets:" 복수형
+# 헤더 뒤 "TP1"의 "1"이 목표가로 오인되어 tp=1.0(정답 5.298) → RR 마이너스로 노출됐다.
+# 아래는 그 실제 원문(izrua_entry_alert 라이브 수집, 2026-07-23 07:xx KST)으로 만든
+# 회귀 테스트 — 재발하면 반드시 잡혀야 한다.
+REAL_BUG_CASES = [
+    (
+        "실전버그 재현 - INJ LONG (TP1 라벨숫자 오인)",
+        "INJ USDT LONG SIGNAL\n#105  INJ/USDT – Trade Setup (LONG)\n\n"
+        "📈 Position Type: LONG\n🕒 Timeframe: 1H\n📊 Market: Futures\n\n"
+        "💰 Entry Zone:\n\n5.207\n\n\n\n🛑 Stop-Loss:\n\n5\n\n"
+        "🎯 Take-Profit Targets:\n\n• TP1:  5.298\n\n• TP2: 5.420\n\n"
+        "• TP3: 5.560\n\n• TP4: 5.700\n\n⚙️ Leverage:\n\n5 *10",
+        5.20,
+        {"entry": 5.207, "sl": 5.0, "tp": 5.298, "direction": "long"},
+    ),
+    (
+        "실전버그 재현 - INJ SHORT (동일 패턴)",
+        "INJ USDT SHORT SIGNAL\n#81.  INJ/USDT – Trade Setup (SHORT)\n\n"
+        "📈 Position Type: SHORT\n🕒 Timeframe: 1H\n📊 Market: Futures\n\n"
+        "💰 Entry Zone:\n\n5.090\n\n\n5.185\n\n🛑 Stop-Loss:\n\n5.290\n\n"
+        "🎯 Take-Profit Targets:\n\n• TP1: 4.970\n\n• TP2: 4.828\n\n"
+        "• TP3: 4.663\n\n• TP4: 4.434\n\n⚙️ Leverage:\n\n5 *10",
+        5.10,
+        {"entry": 5.09, "sl": 5.29, "tp": 4.970, "direction": "short"},
+    ),
+]
+
+for desc, text, price, expected in REAL_BUG_CASES:
+    r = parse_setup(text, current_price=price)
+    passed = (
+        r is not None
+        and r["direction"] == expected["direction"]
+        and abs(r["entry"] - expected["entry"]) < 0.01
+        and r["sl"] is not None and abs(r["sl"] - expected["sl"]) < 0.01
+        and r["tp"] is not None and abs(r["tp"] - expected["tp"]) < 0.01
+        and r["rr"] is not None and r["rr"] > 0  # 마이너스/None RR 재발 방지 확인
+    )
+    got = "None" if r is None else f"entry={r['entry']} sl={r['sl']} tp={r['tp']} rr={r['rr']}"
+    mark = "✅" if passed else "❌"
+    if passed:
+        ok += 1
+    print(f"{mark} {desc}\n    → {got}")
+    if not passed:
+        print(f"    (기대: {expected})")
+
+TOTAL = len(CASES) + len(REAL_BUG_CASES)
+print(f"\n{ok}/{TOTAL} 통과")
+sys.exit(0 if ok == TOTAL else 1)
