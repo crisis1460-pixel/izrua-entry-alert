@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────
+# 보안 1차 방어선: 비밀정보가 담긴 파일은 절대 커밋되지 않는다.
+# 이 목록은 "지우면 안 되는" 안전장치다. 수정 시 scripts/check_secrets.py도 함께 확인.
+# ─────────────────────────────────────────────────────────────
+
+# 실제 키가 들어가는 로컬 전용 파일 (커밋 금지 — GitHub Actions는 Secrets 사용)
+.env
+.env.*
+# 단, 플레이스홀더만 든 견본은 커밋 허용 (git은 인라인 주석을 지원 안 하므로 별도 줄)
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# 런타임 산출물
+cache/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# 파이썬
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
