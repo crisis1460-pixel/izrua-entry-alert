@@ -1,2 +1,5 @@
 requests>=2.31
 python-dotenv>=1.0
+# TradingView 무차단 운영 핵심(Chrome TLS 지문 위장) — izrua_watcher 수개월 실증.
+# 미설치 시 requests 폴백으로도 동작하지만, Actions(데이터센터 IP)에서는 필수 권장.
+curl_cffi>=0.7.0

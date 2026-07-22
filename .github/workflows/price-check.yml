@@ -1,0 +1,56 @@
+# 가격체크 잡 — cron-job.org 이 5~10분마다 workflow_dispatch 로 트리거.
+# 알림 지연을 줄이려 가볍게 유지 (실행 ~1분). 터치 소급 판정은 1분봉 저가로 하므로
+# 트리거가 밀려도 놓치지 않는다.
+name: price-check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bot-state-writer   # collect 와 공유 — DB 아티팩트 경합 방지
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 이전 상태(bot-state) 복원
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          ART_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=50" \
+            --jq '[.artifacts[] | select(.name=="bot-state" and .expired==false)] | sort_by(.created_at) | last | .id' || true)
+          if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$ART_ID/zip" > state.zip
+            mkdir -p cache && unzip -o state.zip -d cache && rm state.zip
+            echo "상태 복원 완료 (artifact $ART_ID)"
+          else
+            echo "이전 상태 없음 - 수집이 먼저 1회 돌아야 함 (레벨 0개로 정상 종료)"
+          fi
+
+      - name: 가격체크 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/run_price_check.py
+
+      - name: 상태 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-state
+          path: cache/
+          retention-days: 3
+          overwrite: false

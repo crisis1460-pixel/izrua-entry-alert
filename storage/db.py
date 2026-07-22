@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS alerts_log (
     day_kst      TEXT NOT NULL       -- YYYY-MM-DD (KST) — 일일 카운트 키
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_day ON alerts_log(coin_symbol, day_kst);
+
+-- 잡 간 공유 상태 (예: 가격체크의 last_check_at) — 아티팩트로 DB 와 함께 이동
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -179,6 +185,19 @@ def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: st
     conn.execute(
         "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
         (coin_symbol, kind, ",".join(str(i) for i in level_ids), now or time.time(), day_kst),
+    )
+
+
+def get_meta(conn, key: str, default: Optional[str] = None) -> Optional[str]:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_meta(conn, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
     )
 
 
