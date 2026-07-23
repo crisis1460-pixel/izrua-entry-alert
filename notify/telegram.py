@@ -124,20 +124,22 @@ def _author_block(rep: dict) -> list:
     달라 섞지 않고 병기. 자체 표본 5건 미만이면 표시하지 않음(조용한 누적)."""
     author = html.escape(rep.get("author") or "?")
     star = " ⭐⭐" if rep.get("author_whitelisted") else ""
-    lines = [f"작성자: @{author}{star}"]
+    # ✍️ 로 아래 📊/🏹/📎 행들과 시작 칸 정렬 (2026-07-24 사용자 확정)
+    lines = [f"✍️ 작성자: @{author}{star}"]
 
     wins = rep.get("author_self_wins") or 0
     losses = rep.get("author_self_losses") or 0
-    # 자체 성적은 별도 줄 (2026-07-23 사용자 확정: 이모지로 윗줄과 시작 위치 정렬)
+    # 자체 성적은 별도 줄 (이모지로 윗줄과 시작 위치 정렬). C안 함축 표기로 한 줄 유지
+    # (2026-07-24 사용자 확정: "승률67% (4승2패) 터치율67%").
     self_line = None
     if wins + losses >= _SELF_STATS_MIN_N:
         rate = wins / (wins + losses) * 100
-        self_line = f"🏹 터치후 승률: {rate:.0f}% ({wins}승{losses}패)"
+        self_line = f"🏹 승률{rate:.0f}% ({wins}승{losses}패)"
         # 터치율 병기 (선택편향 처방, ACCURACY_DB_PLAN — 표본 5건↑일 때만)
         touched_n = rep.get("author_touched_n") or 0
         untouched = rep.get("author_untouched_expired") or 0
         if touched_n + untouched >= _SELF_STATS_MIN_N:
-            self_line += f" · 터치율 {touched_n / (touched_n + untouched) * 100:.0f}%"
+            self_line += f" 터치율{touched_n / (touched_n + untouched) * 100:.0f}%"
 
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
     if hit_rate is not None and hit_count:

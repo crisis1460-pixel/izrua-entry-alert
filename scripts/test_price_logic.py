@@ -206,14 +206,14 @@ msg_a = tg.render_alert("touch", "LINK", [dict(
     post_age_minutes=60, collected_at=now, author_self_wins=8, author_self_losses=3)],
     8.35 * USDT_KRW, USDT_KRW)
 check("T14 워쳐+자체 병기 (별도줄)", "📊 평균 적중률: 72% (워쳐 25건)" in msg_a
-      and "\n🏹 터치후 승률: 73% (8승3패)" in msg_a)
+      and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ 작성자:" in msg_a)
 msg_b = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
     author="NewComer", author_followers=2300, author_hit_rate=None, author_hit_count=None,
     author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/b",
     post_age_minutes=60, collected_at=now, author_self_wins=4, author_self_losses=2)],
     8.35 * USDT_KRW, USDT_KRW)
-check("T14b 자체만 (워쳐없음)", "🏹 터치후 승률: 67% (4승2패)" in msg_b and "기록없음" not in msg_b)
+check("T14b 자체만 (워쳐없음)", "🏹 승률67% (4승2패)" in msg_b and "기록없음" not in msg_b)
 
 # ── 2026-07-24 감사 수정 검증 ──────────────────────────────────
 # T15: 여러 캔들에 걸쳐 TP 먼저 → SL 나중이면 순서대로 hit (뭉개면 가짜 ambiguous였음)
