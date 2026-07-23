@@ -176,7 +176,12 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     elif entry_rep:
         lines.append(f"    진입:  {_krw(entry_rep)}원")
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)
+    # 표시 직전 최종 가드(2026-07-23 SOL 실전 사고): 파서 수정 '이전'에 수집돼 DB에
+    # 남아있는 오염값(서수 오인 tp=1.0 등)이 다음 수집의 자동 치유 전까지 알림에
+    # 노출되는 걸 막는다 - 진입가 대비 4배/0.25배 밖 목표는 '데이터 없음' 처리.
     tp = rep.get("tp_usd")
+    if tp and entry_rep and not (entry_rep * 0.25 <= tp <= entry_rep * 4):
+        tp = None
     if tp and entry_rep:
         pct = (tp - entry_rep) / entry_rep * 100
         lines.append(f"    목표:  {_krw(tp)}원  ({pct:+.1f}%)")
