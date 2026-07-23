@@ -89,6 +89,7 @@ def main() -> int:
                         coin["symbol"], setup["entry"], idea.get("author"), idea.get("url")),
                     "judgment_window_hours": judgment_window_hours(
                         tf_hours, setup["entry"], setup.get("tp")),
+                    "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
                     "coin_symbol": coin["symbol"],
                     "ticker": coin["ticker"],
                     "direction": setup["direction"],
@@ -115,12 +116,14 @@ def main() -> int:
             if i < len(universe) - 1:
                 time.sleep(sleep_sec)
 
+        # 파서 개선 자동 전파: 원문 있는 기존 레벨을 현재 파서로 재파싱해 오염값 치유
+        reparsed = db.reparse_all(conn)
         expired = db.expire_old(conn, settings.get("level_expiry_hours") * 3600)
         st = db.stats(conn)
 
     logger.info(
-        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 레벨 %d건 / 만료 %d건 / DB %s",
-        time.time() - t0, n_posts, n_setup, n_new, expired, st,
+        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 재파싱치유 %d건 / 만료 %d건 / DB %s",
+        time.time() - t0, n_posts, n_setup, n_new, reparsed, expired, st,
     )
     return 0
 

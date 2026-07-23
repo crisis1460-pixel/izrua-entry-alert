@@ -101,6 +101,9 @@ _OUTCOME_COLUMNS = {
     "touch_price_krw": "REAL",    # 터치 시점 현재가 (타임박스/수익률 기준가)
     # 판정 창(시간). 작성자 타임프레임 기반 — extractor.judgment_window_hours (2026-07-23 B안)
     "judgment_window_hours": "REAL",
+    # 글 원문(제목+본문). 파서 개선 시 재수집 없이 재파싱해 오염값 자동 치유
+    # (2026-07-23 SEI/SOL 서수오인 재발 후 추가 — reparse_all 참고)
+    "raw_text": "TEXT",
 }
 
 
@@ -129,8 +132,9 @@ def upsert_level(conn, level: dict) -> bool:
                (signal_key, coin_symbol, ticker, direction, entry_usd, sl_usd, tp_usd,
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
-                post_url, post_age_minutes, status, collected_at, judgment_window_hours)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                post_url, post_age_minutes, status, collected_at, judgment_window_hours,
+                raw_text)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -141,7 +145,7 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("mcap_rank"), level.get("mcap_tier_icon"),
                 level.get("post_url"), level.get("post_age_minutes"),
                 "watching", level.get("collected_at", time.time()),
-                level.get("judgment_window_hours"),
+                level.get("judgment_window_hours"), level.get("raw_text"),
             ),
         )
         return True
@@ -154,7 +158,8 @@ def upsert_level(conn, level: dict) -> bool:
         """UPDATE levels SET
              grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, author_followers=?,
              author_hit_rate=?, author_hit_count=?, author_whitelisted=?,
-             mcap_rank=?, mcap_tier_icon=?, judgment_window_hours=?
+             mcap_rank=?, mcap_tier_icon=?, judgment_window_hours=?,
+             raw_text=COALESCE(?, raw_text)
            WHERE signal_key=?""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
@@ -162,10 +167,40 @@ def upsert_level(conn, level: dict) -> bool:
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
-            level.get("judgment_window_hours"), key,
+            level.get("judgment_window_hours"), level.get("raw_text"), key,
         ),
     )
     return False
+
+
+def reparse_all(conn) -> int:
+    """raw_text 가 있는 활성 레벨(watching/previewed)을 현재 파서로 재파싱해
+    sl/tp/rr/판정창을 갱신한다. 파서 개선이 기존 레벨 전체에 자동 전파 —
+    재수집 목록에서 밀려난 오래된 오염 레벨(예: 서수오인 tp=1.0)도 치유된다.
+    entry 는 signal_key 정체성이라 갱신하지 않는다. 반환: 값이 바뀐 레벨 수."""
+    from collector.extractor import parse_setup, parse_timeframe_hours, judgment_window_hours
+
+    changed = 0
+    rows = conn.execute(
+        "SELECT id, entry_usd, sl_usd, tp_usd, raw_text FROM levels "
+        "WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        setup = parse_setup(r["raw_text"], current_price=r["entry_usd"])
+        if not setup:
+            continue
+        new_sl, new_tp = setup.get("sl"), setup.get("tp")
+        if new_sl == r["sl_usd"] and new_tp == r["tp_usd"]:
+            continue
+        rr = setup.get("rr")
+        win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]),
+                                    r["entry_usd"], new_tp)
+        conn.execute(
+            "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=? WHERE id=?",
+            (new_sl, new_tp, rr, win, r["id"]),
+        )
+        changed += 1
+    return changed
 
 
 def get_active_levels(conn, direction: Optional[str] = "long") -> list:
