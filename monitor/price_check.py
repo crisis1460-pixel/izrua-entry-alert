@@ -17,6 +17,7 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from config import settings
 from monitor import upbit
@@ -26,6 +27,27 @@ from storage import db
 logger = logging.getLogger("alert.price_check")
 
 _KST = timezone(timedelta(hours=9))
+
+# 직전 체크 시각은 DB가 아니라 임시 파일에 둔다(2026-07-23): DB에 넣으면 매 실행마다
+# DB가 바뀌어 커밋백이 2분마다 커밋을 쌓는다(하루 ~720개). Actions 러너는 매번 새
+# 체크아웃이라 이 파일이 없고 → 기본 12분 소급 창을 쓰는데, 2분 주기 + 1분봉 소급
+# 판정은 멱등이라(이미 터치된 레벨 재알림 없음) 겹침 창은 무해하다.
+_LAST_CHECK_FILE = Path("cache/last_check.txt")
+
+
+def _load_last_check():
+    try:
+        return float(_LAST_CHECK_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _save_last_check(ts: float) -> None:
+    try:
+        _LAST_CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_CHECK_FILE.write_text(str(ts))
+    except OSError:
+        pass
 
 
 def _day_kst(now: float) -> str:
@@ -71,13 +93,13 @@ def run_once(now: float = None) -> dict:
         levels = db.get_active_levels(conn, direction="long")
         unresolved = db.get_unresolved_touched(conn)  # 적중판정 대상 (활성과 별개)
         if not levels and not unresolved:
-            db.set_meta(conn, "last_check_at", str(now))
+            _save_last_check(now)
             logger.info("[체크] 활성/판정 대상 레벨 없음")
             return summary
 
         # 직전 체크 시각 → 소급 저가 판정 구간
-        last = db.get_meta(conn, "last_check_at")
-        since_min = int((now - float(last)) / 60) + 2 if last else 12
+        last = _load_last_check()
+        since_min = int((now - last) / 60) + 2 if last else 12
 
         by_ticker: dict = {}
         for lv in levels:
@@ -197,7 +219,7 @@ def run_once(now: float = None) -> dict:
         summary["resolved"] = _judge_outcomes(
             conn, prices, usdt_krw, range_cache, since_min, now, cfg_get, candle_calls)
 
-        db.set_meta(conn, "last_check_at", str(now))
+        _save_last_check(now)
 
     logger.info("[체크] 완료: %s", summary)
     return summary
