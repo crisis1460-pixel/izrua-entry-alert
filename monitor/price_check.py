@@ -99,7 +99,7 @@ def run_once(now: float = None) -> dict:
 
         # 직전 체크 시각 → 소급 저가 판정 구간
         last = _load_last_check()
-        since_min = int((now - last) / 60) + 2 if last else 12
+        since_min = int((now - last) / 60) + 2 if last else 45
 
         by_ticker: dict = {}
         for lv in levels:
@@ -119,8 +119,8 @@ def run_once(now: float = None) -> dict:
         min_grade = cfg_get("alert_min_grade")
         daily_cap = cfg_get("alert_max_per_coin_per_day")
         day = _day_kst(now)
-        candle_calls = 0
-        range_cache: dict = {}  # ticker → (고, 저) — 터치감시·적중판정이 1콜 공유
+        budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
+        range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
 
         from collector.grading import meets_min_grade  # 순환 import 방지 지연 로드
         from monitor import market_sentiment
@@ -144,24 +144,38 @@ def run_once(now: float = None) -> dict:
                 vol_cache["ranks"] = upbit.fetch_volume_ranks(cfg_get("http_timeout_sec"))
             return vol_cache["ranks"]
 
-        for ticker, tlevels in by_ticker.items():
+        def _get_range(ticker, limit):
+            """캔들목록 조회 (예산·네거티브캐시 공유). 반환 목록|None."""
+            cached = range_cache.get(ticker)
+            if cached is not None:
+                return cached or None
+            if budget["calls"] >= limit:
+                return None
+            budget["calls"] += 1
+            rng = upbit.fetch_range_since(ticker, since_min, cfg_get("http_timeout_sec"))
+            range_cache[ticker] = rng if rng else False
+            return rng
+
+        # 엔트리 근접 순으로 순회 — 캔들 예산 소진 시 먼 티커부터 생략되게
+        # (2026-07-24 감사: 임의 순서면 같은 코인이 반복적으로 밀릴 수 있었음)
+        def _proximity(tlevels):
+            cur = prices.get(tlevels[0]["ticker"]) or 0
+            ents = [lv["entry_usd"] * usdt_krw for lv in tlevels if lv.get("entry_usd")]
+            return min((abs(cur - e) / e for e in ents), default=9e9) if cur else 9e9
+
+        for ticker, tlevels in sorted(by_ticker.items(), key=lambda kv: _proximity(kv[1])):
             current = prices.get(ticker)
             if not current:
                 continue
             summary["checked"] += 1
             coin = tlevels[0]["coin_symbol"]
 
-            # 소급 저가: 엔트리가 현재가의 +5% 이내에 있을 때만 캔들 소모 (호출 예산 30)
+            # 소급 저가: 엔트리가 현재가의 +5% 이내에 있을 때만 캔들 소모
             need_low = any(
                 lv["entry_usd"] * usdt_krw >= current * 0.95 for lv in tlevels if lv.get("entry_usd")
             )
-            low = None
-            if need_low and candle_calls < 30:
-                candle_calls += 1
-                rng = upbit.fetch_range_since(ticker, since_min, cfg_get("http_timeout_sec"))
-                if rng:
-                    range_cache[ticker] = rng  # 적중판정 단계에서 재사용 (마켓당 1콜 원칙)
-                    low = rng[1]
+            candles = _get_range(ticker, 30) if need_low else None
+            low = min((c[3] for c in candles), default=None) if candles else None
             eff_low = min(current, low) if low else current
 
             for cluster in _build_clusters(tlevels, cluster_band):
@@ -179,9 +193,13 @@ def run_once(now: float = None) -> dict:
                     continue  # 이미 예고한 클러스터
 
                 # 알림 필터 (상태 전이는 필터와 무관하게 수행 — 재알림 방지)
+                # 일일 상한은 터치(본알림)에만 적용 (2026-07-24 감사: 예고가 상한을
+                # 소진해 정작 본알림이 영구 소실되던 문제 — 예고는 클러스터당 1회라
+                # 자체 상한이 이미 있음)
                 send_ok = meets_min_grade(rep.get("grade") or "D", min_grade)
-                if send_ok and db.count_alerts_today(conn, coin, day) >= daily_cap:
-                    logger.info("[체크] %s 일일 알림 상한 도달 - 억제", coin)
+                if send_ok and kind == "touch" and \
+                        db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
+                    logger.info("[체크] %s 일일 본알림 상한 도달 - 억제", coin)
                     send_ok = False
 
                 if send_ok:
@@ -189,6 +207,8 @@ def run_once(now: float = None) -> dict:
                     for lv in cluster:
                         st = db.get_author_self_stats(conn, lv.get("author"))
                         lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
+                        lv["author_touched_n"] = st["touched"]
+                        lv["author_untouched_expired"] = st["untouched_expired"]
                     # 52주 고저 + 김프는 발송 확정건에만 조회 (회당 업비트 1콜 + 바이낸스 1콜)
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
@@ -210,14 +230,26 @@ def run_once(now: float = None) -> dict:
                     summary["suppressed"] += 1
 
                 if touched:
-                    db.mark_touched(conn, ids, now, touch_price_krw=min(current, top_krw))
+                    # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기
+                    # 엔트리, 지정가 체결 모델). 미도달 하단 레벨은 섀도 터치(재알림
+                    # 방지만, 통계 제외) — 2026-07-24 감사 수정
+                    touches = []
+                    for lv in cluster:
+                        e_krw = lv["entry_usd"] * usdt_krw if lv.get("entry_usd") else None
+                        reached = e_krw is not None and eff_low <= e_krw
+                        touches.append((lv["id"], e_krw if reached else None))
+                    db.mark_touched(conn, touches, now, usdt_krw=usdt_krw)
                 else:
                     for lid in ids:
                         db.mark_previewed(conn, lid, now)
 
+                # 발송·상태전이 즉시 확정 (2026-07-24 감사: 이후 크래시/타임아웃 시
+                # 롤백돼 같은 알림이 재발송되던 문제 방지)
+                conn.commit()
+
         # ── 적중 판정 (ACCURACY_DB_PLAN 1단계 — 조용한 누적, 표시·필터 무관) ──
         summary["resolved"] = _judge_outcomes(
-            conn, prices, usdt_krw, range_cache, since_min, now, cfg_get, candle_calls)
+            conn, prices, usdt_krw, _get_range, now, cfg_get)
 
         _save_last_check(now)
 
@@ -225,91 +257,107 @@ def run_once(now: float = None) -> dict:
     return summary
 
 
-def _judge_outcomes(conn, prices, usdt_krw, range_cache, since_min, now, cfg_get,
-                    candle_calls) -> int:
+
+def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
     """터치됐지만 미종결인 레벨들의 hit/miss 판정 + 24h/72h 수익률 기록.
 
-    확정 규칙(2026-07-23 질문카드): TP1 도달=hit / SL 도달=miss / 같은 구간 동시
-    =miss+ambiguous / TP 없으면 7일 타임박스(수익률 부호) / SL 없으면 tp_only 모드
-    (TP 도달=hit, 7일 내 미도달=miss) / R은 [-1,+5] 클리핑, SL 없으면 NULL.
-    판정 기준가는 KRW (entry/sl/tp 는 판정 시점 환율로 환산 — 감시 로직과 동일 원칙)."""
+    확정 규칙(2026-07-23 질문카드 + 2026-07-24 감사 반영):
+    - 캔들을 시간순으로 스캔하되 '터치 이후' 캔들만 본다 (터치 이전 가격이 섞여
+      급락 관통 시 가짜 hit 이 나던 감사 1번 수정)
+    - TP1 도달=hit / SL 도달=miss / '같은 캔들' 안에서 둘 다=보수적 miss+ambiguous
+      (여러 캔들에 걸쳐 순서가 확정되면 그 순서대로 — 감사 2번 수정)
+    - TP 없으면 타임박스(창 만료 시 수익률 부호), SL 터치는 즉시 miss
+    - 창 만료 강제 종결 시에도 judgment_mode 는 원래 모드 유지 (정보 보존)
+    - 타임박스/수익률 기준가는 터치 시점 환율로 보정 (장기 창의 환율 드리프트 제거)
+    - 시세 조회가 계속 불가한 티커(상폐 등)는 창+14일 후 판정불능 제외
+    """
     resolved = 0
     default_window_sec = cfg_get("outcome_window_hours") * 3600
     r_lo, r_hi = cfg_get("r_clip_low"), cfg_get("r_clip_high")
 
+    # ── 24h/72h 수익률 — 종결 여부 무관 + 도과 6시간 허용오차 안에서만 기록
+    #    (다운타임 뒤 70시간짜리 값이 '24h'로 오라벨되느니 NULL 이 낫다 — 감사 수정)
+    for lv in db.get_ret_pending(conn):
+        current = prices.get(lv["ticker"])
+        base = lv.get("touch_price_krw")
+        if not current or not base or not lv.get("touched_at"):
+            continue
+        t_rate = lv.get("touch_usdt_krw")
+        base_eff = base * (usdt_krw / t_rate) if (t_rate and usdt_krw) else base
+        elapsed = now - lv["touched_at"]
+        ret_pct = (current - base_eff) / base_eff * 100
+        if lv.get("ret_24h") is None and 24 * 3600 <= elapsed <= 30 * 3600:
+            db.record_ret(conn, lv["id"], "ret_24h", ret_pct)
+        if lv.get("ret_72h") is None and 72 * 3600 <= elapsed <= 78 * 3600:
+            db.record_ret(conn, lv["id"], "ret_72h", ret_pct)
+
     for lv in db.get_unresolved_touched(conn):
-        # 판정 창: 레벨별 저장값(작성자 타임프레임 기반, 2026-07-23 B안) 우선,
-        # 구버전 레코드(NULL)는 기본 7일
         window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
+        elapsed = now - lv["touched_at"]
         ticker = lv["ticker"]
         current = prices.get(ticker)
-        if not current or not usdt_krw:
+        entry_krw = (lv.get("entry_usd") or 0) * (usdt_krw or 0)
+        if not current or not usdt_krw or entry_krw <= 0:
+            if elapsed > window_sec + 14 * 86400:
+                conn.execute(
+                    "UPDATE levels SET status='expired' WHERE id=? AND outcome IS NULL",
+                    (lv["id"],))
+                logger.info("[적중판정] %s 시세 조회 불가 지속 - 판정불능 제외", ticker)
             continue
-        entry_krw = (lv.get("entry_usd") or 0) * usdt_krw
-        base_krw = lv.get("touch_price_krw") or entry_krw  # 타임박스/수익률 기준가
-        if entry_krw <= 0 or not lv.get("touched_at"):
-            continue
-        elapsed = now - lv["touched_at"]
 
-        # 24h/72h 수익률 기록 (최초 도과 시 1회)
-        if base_krw > 0:
-            ret_pct = (current - base_krw) / base_krw * 100
-            if elapsed >= 24 * 3600:
-                db.record_ret(conn, lv["id"], "ret_24h", ret_pct)
-            if elapsed >= 72 * 3600:
-                db.record_ret(conn, lv["id"], "ret_72h", ret_pct)
+        base = lv.get("touch_price_krw") or entry_krw
+        t_rate = lv.get("touch_usdt_krw")
+        base_eff = base * (usdt_krw / t_rate) if t_rate else base
 
         tp_krw = (lv.get("tp_usd") or 0) * usdt_krw
         sl_krw = (lv.get("sl_usd") or 0) * usdt_krw
-
-        # 이번 회차 구간 고저 — 터치 감시 단계에서 이미 받아온 마켓이면 재사용, 아니면
-        # 예산 내 추가 조회, 그도 안 되면 현재가 스냅샷으로 판정(다음 회차가 보완)
-        rng = range_cache.get(ticker)
-        if rng is None and candle_calls < 40:
-            rng = upbit.fetch_range_since(ticker, since_min, cfg_get("http_timeout_sec"))
-            if rng:
-                range_cache[ticker] = rng
-        high = max(current, rng[0]) if rng else current
-        low = min(current, rng[1]) if rng else current
 
         def _r(resolve_krw):
             if sl_krw <= 0 or entry_krw <= sl_krw:
                 return None
             return max(r_lo, min(r_hi, (resolve_krw - entry_krw) / (entry_krw - sl_krw)))
 
-        tp_hit = tp_krw > 0 and high >= tp_krw
-        sl_hit = sl_krw > 0 and low <= sl_krw
-
-        if tp_krw > 0:
-            mode = "tp_sl" if sl_krw > 0 else "tp_only"
-            if tp_hit and sl_hit:  # 같은 구간 동시 → 보수적 miss (freqtrade 관례)
-                db.resolve_outcome(conn, lv["id"], "miss", sl_krw, mode,
-                                   r_multiple=_r(sl_krw), ambiguous=True, now=now)
-                resolved += 1
+        # 캔들 시간순 스캔 (터치 이후 캔들만)
+        outcome = None
+        resolve_price = None
+        ambiguous = False
+        candles = get_range(ticker, 40) or []
+        for (c_start, c_end, c_high, c_low) in candles:
+            if c_end <= lv["touched_at"]:
+                continue
+            tp_hit = tp_krw > 0 and c_high >= tp_krw
+            sl_hit = sl_krw > 0 and c_low <= sl_krw
+            if tp_hit and sl_hit:
+                outcome, resolve_price, ambiguous = "miss", sl_krw, True
             elif tp_hit:
-                db.resolve_outcome(conn, lv["id"], "hit", tp_krw, mode,
-                                   r_multiple=_r(tp_krw), best_tp_hit=1, now=now)
-                resolved += 1
+                outcome, resolve_price = "hit", tp_krw
             elif sl_hit:
-                db.resolve_outcome(conn, lv["id"], "miss", sl_krw, mode,
-                                   r_multiple=_r(sl_krw), now=now)
-                resolved += 1
-            elif elapsed >= window_sec:  # 7일 내 TP/SL 미도달 → 타임박스 강제 종결
-                outcome = "timeboxed_win" if current >= base_krw else "timeboxed_loss"
-                db.resolve_outcome(conn, lv["id"], outcome, current, "timeboxed",
-                                   r_multiple=_r(current), now=now)
-                resolved += 1
-        else:
-            # TP 없음 → 순수 타임박스 판정 (7일 후 수익률 부호)
-            if sl_hit:
-                db.resolve_outcome(conn, lv["id"], "miss", sl_krw, "timeboxed",
-                                   r_multiple=_r(sl_krw), now=now)
-                resolved += 1
-            elif elapsed >= window_sec:
-                outcome = "timeboxed_win" if current >= base_krw else "timeboxed_loss"
-                db.resolve_outcome(conn, lv["id"], outcome, current, "timeboxed",
-                                   r_multiple=_r(current), now=now)
-                resolved += 1
+                outcome, resolve_price = "miss", sl_krw
+            if outcome:
+                break
+        if not outcome:
+            # 캔들 부재(예산/실패) 폴백: 현재가 스냅샷 (다음 회차가 보완)
+            if tp_krw > 0 and current >= tp_krw:
+                outcome, resolve_price = "hit", tp_krw
+            elif sl_krw > 0 and current <= sl_krw:
+                outcome, resolve_price = "miss", sl_krw
+
+        mode = ("tp_sl" if (tp_krw > 0 and sl_krw > 0)
+                else "tp_only" if tp_krw > 0 else "timeboxed")
+
+        if outcome == "hit":
+            db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
+                               r_multiple=_r(resolve_price), best_tp_hit=1, now=now)
+            resolved += 1
+        elif outcome == "miss":
+            db.resolve_outcome(conn, lv["id"], "miss", resolve_price, mode,
+                               r_multiple=_r(resolve_price), ambiguous=ambiguous, now=now)
+            resolved += 1
+        elif elapsed >= window_sec:
+            oc = "timeboxed_win" if current >= base_eff else "timeboxed_loss"
+            db.resolve_outcome(conn, lv["id"], oc, current, mode,
+                               r_multiple=_r(current), now=now)
+            resolved += 1
 
     if resolved:
         logger.info("[적중판정] %d건 종결", resolved)

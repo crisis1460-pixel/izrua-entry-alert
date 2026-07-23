@@ -133,6 +133,11 @@ def _author_block(rep: dict) -> list:
     if wins + losses >= _SELF_STATS_MIN_N:
         rate = wins / (wins + losses) * 100
         self_line = f"🏹 터치후 승률: {rate:.0f}% ({wins}승{losses}패)"
+        # 터치율 병기 (선택편향 처방, ACCURACY_DB_PLAN — 표본 5건↑일 때만)
+        touched_n = rep.get("author_touched_n") or 0
+        untouched = rep.get("author_untouched_expired") or 0
+        if touched_n + untouched >= _SELF_STATS_MIN_N:
+            self_line += f" · 터치율 {touched_n / (touched_n + untouched) * 100:.0f}%"
 
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
     if hit_rate is not None and hit_count:

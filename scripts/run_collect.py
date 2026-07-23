@@ -48,6 +48,29 @@ def main() -> int:
 
     universe = coingecko.build_universe()
     logger.info("유니버스 %d개", len(universe))
+
+    # 심볼 동명이인 가드 (2026-07-24 감사): CoinGecko 코인 A 와 업비트의 같은 심볼
+    # 다른 코인 B 가 묶이면 엉뚱한 자산에 레벨을 붙인다 — CG 달러가 × 환율 vs 업비트
+    # 원화가가 ±40% 넘게 어긋나면 다른 자산으로 보고 이번 주기 제외.
+    try:
+        from monitor import upbit as upbit_api
+        tickers = [u["ticker"] for u in universe] + ["KRW-USDT"]
+        krw_prices = upbit_api.fetch_prices(tickers, timeout)
+        usdt_krw = krw_prices.get("KRW-USDT")
+        if usdt_krw:
+            kept = []
+            for u in universe:
+                upbit_p, cg_p = krw_prices.get(u["ticker"]), u.get("price_usd")
+                if upbit_p and cg_p:
+                    expected = cg_p * usdt_krw
+                    if abs(upbit_p - expected) / expected > 0.40:
+                        logger.warning("동명이인 의심 제외: %s (업비트 %.6g원 vs 예상 %.6g원)",
+                                       u["symbol"], upbit_p, expected)
+                        continue
+                kept.append(u)
+            universe = kept
+    except Exception as e:  # noqa: BLE001 - 가드 실패가 수집을 막으면 안 됨
+        logger.warning("동명이인 가드 생략(오류): %s", e)
     if args.symbols:
         want = {s.strip().upper() for s in args.symbols.split(",")}
         universe = [u for u in universe if u["symbol"] in want]

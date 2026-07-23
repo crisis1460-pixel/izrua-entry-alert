@@ -62,10 +62,17 @@ _NUM = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]*\.[0-9]+|[0-9]+)"
 _RANGE = re.compile(_NUM + r"\s*[-–~〜]\s*" + _NUM)
 _SINGLE = re.compile(_NUM)
 
-# 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜연도
+# 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
 _PERCENT = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*%")
-_YEAR = re.compile(r"\b20[2-9]\d\b")
+# 2026-07-24 감사 수정: 예전 `\b20[2-9]\d\b`(연도 무조건 삭제)는 "Entry: 2050" 같은
+# $2,0xx 가격대 코인(ETH 등)의 진짜 가격을 지워 다음 숫자를 엔트리로 오인시키는
+# 치명 버그였다. 날짜 '문맥'일 때만 제거한다: 완전한 날짜형(2026-07-24), '2026년',
+# 전치사 동반("in 2026"). "Target: 2050-2100" 같은 가격 범위는 두 번째 구분자가
+# 없어 보존된다.
+_DATE_FULL = re.compile(r"\b20[2-9]\d[-./]\d{1,2}[-./]\d{1,2}\b")
+_YEAR_KR = re.compile(r"\b20[2-9]\d\s*년")
+_YEAR_CTX = re.compile(r"\b(?:in|by|since|until|late|early|year)\s+20[2-9]\d\b", re.I)
 
 # 타임프레임 파싱 (2026-07-23 적중창 결정 B: 작성자가 밝힌 지평으로 판정 창 결정)
 _TIMEFRAME = re.compile(
@@ -121,7 +128,9 @@ def _clean(text: str) -> str:
     """숫자 오인 유발 토큰을 먼저 지운다(레버리지/퍼센트/연도/라벨 서수)."""
     text = _LEVERAGE.sub(" ", text)
     text = _PERCENT.sub(" ", text)
-    text = _YEAR.sub(" ", text)
+    text = _DATE_FULL.sub(" ", text)
+    text = _YEAR_KR.sub(" ", text)
+    text = _YEAR_CTX.sub(" ", text)
     text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
     text = _SPACED_ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "Target 1:" → "Target:"
     return text

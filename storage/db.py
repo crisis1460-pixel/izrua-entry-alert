@@ -98,7 +98,8 @@ _OUTCOME_COLUMNS = {
     "judgment_mode": "TEXT",      # tp_sl | tp_only | timeboxed
     "ret_24h": "REAL",            # 터치 후 24h 수익률(%) — 최초 도과 시 1회 기록
     "ret_72h": "REAL",
-    "touch_price_krw": "REAL",    # 터치 시점 현재가 (타임박스/수익률 기준가)
+    "touch_price_krw": "REAL",    # 터치 시점 기준가 (지정가 체결 모델: 그 레벨의 entry_krw)
+    "touch_usdt_krw": "REAL",     # 터치 시점 USDT/KRW — 장기 판정창의 환율 드리프트 보정용
     # 판정 창(시간). 작성자 타임프레임 기반 — extractor.judgment_window_hours (2026-07-23 B안)
     "judgment_window_hours": "REAL",
     # 글 원문(제목+본문). 파서 개선 시 재수집 없이 재파싱해 오염값 자동 치유
@@ -154,13 +155,16 @@ def upsert_level(conn, level: dict) -> bool:
     # (예: 서수 오인 tp=1.0)이 그대로 알림에 노출되는 것을 막는다 — 매 수집마다
     # 재파싱 결과로 덮어써 파서 개선이 기존 레벨에도 전파되게 한다. entry 는
     # signal_key 정체성의 일부라 갱신하지 않는다.
+    # 2026-07-24 감사 수정(불변 스냅샷): 갱신은 활성(watching/previewed) 레벨에만 —
+    # 터치돼 판정 진행 중이거나 종결된 레벨의 SL/TP 가 재수집(작성자의 글 수정 포함)
+    # 으로 사후 변경되면 '판정 기준 골대 이동'이라 안티게이밍 원칙 위반.
     conn.execute(
         """UPDATE levels SET
              grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, author_followers=?,
              author_hit_rate=?, author_hit_count=?, author_whitelisted=?,
              mcap_rank=?, mcap_tier_icon=?, judgment_window_hours=?,
              raw_text=COALESCE(?, raw_text)
-           WHERE signal_key=?""",
+           WHERE signal_key=? AND status IN ('watching','previewed')""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
             level.get("sl_usd"), level.get("tp_usd"),
@@ -177,24 +181,36 @@ def reparse_all(conn) -> int:
     """raw_text 가 있는 활성 레벨(watching/previewed)을 현재 파서로 재파싱해
     sl/tp/rr/판정창을 갱신한다. 파서 개선이 기존 레벨 전체에 자동 전파 —
     재수집 목록에서 밀려난 오래된 오염 레벨(예: 서수오인 tp=1.0)도 치유된다.
-    entry 는 signal_key 정체성이라 갱신하지 않는다. 반환: 값이 바뀐 레벨 수."""
+    entry 는 signal_key 정체성이라 갱신하지 않는다. 반환: 값이 바뀐 레벨 수.
+
+    2026-07-24 감사 수정: 방향/크기 sanity 와 rr 을 파서가 새로 뽑은 entry 가 아니라
+    '저장된 entry' 기준으로 재검증·재계산한다 (파서 변경으로 entry 해석이 달라져도
+    저장 레벨의 판정 기준과 어긋나지 않게). 판정창/rr 변경도 갱신 대상에 포함."""
     from collector.extractor import parse_setup, parse_timeframe_hours, judgment_window_hours
 
     changed = 0
     rows = conn.execute(
-        "SELECT id, entry_usd, sl_usd, tp_usd, raw_text FROM levels "
-        "WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL"
+        "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text "
+        "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL"
     ).fetchall()
     for r in rows:
-        setup = parse_setup(r["raw_text"], current_price=r["entry_usd"])
-        if not setup:
+        entry = r["entry_usd"]
+        setup = parse_setup(r["raw_text"], current_price=entry)
+        if not setup or not entry or entry <= 0:
             continue
         new_sl, new_tp = setup.get("sl"), setup.get("tp")
-        if new_sl == r["sl_usd"] and new_tp == r["tp_usd"]:
+        # 저장 entry 기준 재검증 (long 전용: 방향 + 크기 0.25x~4x)
+        if new_tp is not None and not (entry < new_tp <= entry * 4):
+            new_tp = None
+        if new_sl is not None and not (entry * 0.25 <= new_sl < entry):
+            new_sl = None
+        rr = None
+        if new_sl and new_tp and entry > new_sl:
+            rr = round((new_tp - entry) / (entry - new_sl), 2)
+        win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]), entry, new_tp)
+        if (new_sl == r["sl_usd"] and new_tp == r["tp_usd"]
+                and rr == r["rr"] and win == r["judgment_window_hours"]):
             continue
-        rr = setup.get("rr")
-        win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]),
-                                    r["entry_usd"], new_tp)
         conn.execute(
             "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=? WHERE id=?",
             (new_sl, new_tp, rr, win, r["id"]),
@@ -220,22 +236,45 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
     )
 
 
-def mark_touched(conn, level_ids: list, now: Optional[float] = None,
-                 touch_price_krw: Optional[float] = None) -> None:
+def mark_touched(conn, touches: list, now: Optional[float] = None,
+                 usdt_krw: Optional[float] = None) -> None:
+    """touches: [(level_id, touch_price_krw|None), ...].
+
+    2026-07-24 감사 수정: 클러스터 상단 터치 시 하단 레벨(자기 엔트리 미도달)까지
+    같은 기준가로 판정되던 편향 제거 — price=None 인 레벨은 '섀도 터치'(재알림
+    방지용 상태 전이만, touched_at 없음 → 판정·통계에서 제외)로 처리하고,
+    도달 레벨은 자기 entry_krw(지정가 체결 모델)를 기준가로 저장한다."""
     now = now or time.time()
-    conn.executemany(
-        "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? "
-        "WHERE id=? AND status IN ('watching','previewed')",
-        [(now, touch_price_krw, lid) for lid in level_ids],
-    )
+    for lid, price in touches:
+        if price is None:
+            conn.execute(
+                "UPDATE levels SET status='touched' "
+                "WHERE id=? AND status IN ('watching','previewed')", (lid,))
+        else:
+            conn.execute(
+                "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
+                "touch_usdt_krw=? WHERE id=? AND status IN ('watching','previewed')",
+                (now, price, usdt_krw, lid))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────
 
 def get_unresolved_touched(conn) -> list:
-    """터치됐지만 아직 승패 미종결인 레벨 — 가격체크 잡이 매 회차 평가."""
+    """실제 도달 터치됐지만 아직 승패 미종결인 레벨 — 가격체크 잡이 매 회차 평가.
+    (섀도 터치(touched_at NULL)는 재알림 방지 전용이라 판정 대상 아님)"""
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM levels WHERE status='touched' AND outcome IS NULL"
+        "SELECT * FROM levels WHERE status='touched' AND outcome IS NULL "
+        "AND touched_at IS NOT NULL"
+    ).fetchall()]
+
+
+def get_ret_pending(conn) -> list:
+    """24h/72h 수익률 기록 대상 — 종결 여부와 무관 (2026-07-24 감사 수정:
+    조기 종결 건도 수익률은 계속 기록해야 데이터셋에 생존편향이 안 박힘)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, ticker, touched_at, touch_price_krw, touch_usdt_krw, entry_usd, "
+        "ret_24h, ret_72h FROM levels WHERE touched_at IS NOT NULL "
+        "AND (ret_24h IS NULL OR ret_72h IS NULL)"
     ).fetchall()]
 
 
@@ -253,18 +292,22 @@ def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
 
 
 def get_author_self_stats(conn, author: str) -> dict:
-    """자체 적중 DB 기준 작성자 성적 (터치 후 판정 건만).
-    승 = hit + timeboxed_win, 패 = miss + timeboxed_loss."""
+    """자체 적중 DB 기준 작성자 성적.
+    승 = hit + timeboxed_win, 패 = miss + timeboxed_loss.
+    터치율(선택편향 처방, ACCURACY_DB_PLAN): 도달터치 ÷ (도달터치 + 미터치만료)."""
     if not author:
-        return {"wins": 0, "losses": 0}
+        return {"wins": 0, "losses": 0, "touched": 0, "untouched_expired": 0}
     row = conn.execute(
         """SELECT
              SUM(CASE WHEN outcome IN ('hit','timeboxed_win') THEN 1 ELSE 0 END) AS w,
-             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l
-           FROM levels WHERE author=? AND outcome IS NOT NULL""",
+             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l,
+             SUM(CASE WHEN touched_at IS NOT NULL THEN 1 ELSE 0 END) AS t,
+             SUM(CASE WHEN status='expired' AND touched_at IS NULL THEN 1 ELSE 0 END) AS e
+           FROM levels WHERE author=?""",
         (author,),
     ).fetchone()
-    return {"wins": row["w"] or 0, "losses": row["l"] or 0}
+    return {"wins": row["w"] or 0, "losses": row["l"] or 0,
+            "touched": row["t"] or 0, "untouched_expired": row["e"] or 0}
 
 
 def record_ret(conn, level_id: int, field: str, value: float) -> None:

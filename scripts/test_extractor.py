@@ -18,6 +18,9 @@ CASES = [
     ("엔트리 없음→None", "BTC looking bullish, might pump soon. No clear levels.", 60000, None, None),
     ("연도 오인방지", "In 2026 this coin moons. Entry 0.85 SL 0.78 TP 1.10", 0.86, 0.85, "long"),
     ("sanity 실패(현재가와 동떨어짐)", "Entry 5.00 SL 4.5 TP 6", 100.0, None, None),
+    # 2026-07-24 감사: 예전엔 20xx 를 연도로 무조건 삭제해 ETH 급($2,0xx) 가격이
+    # 지워지고 SL(1980)이 엔트리로 오인되는 치명 버그가 있었다
+    ("가격 2050 연도 오인방지", "Long setup. Entry: 2050, SL: 1980, Target: 2200", 2040, 2050, "long"),
 ]
 
 ok = 0

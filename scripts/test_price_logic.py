@@ -39,11 +39,18 @@ with db.connect(TEST_DB) as conn:
 sent_messages = []
 telegram.send = lambda text: sent_messages.append(text) or True
 
-fake = {"price": None, "low": None, "high": None}
+fake = {"price": None, "low": None, "high": None, "candles": None}
 upbit.fetch_prices = lambda mkts, t: {m: (USDT_KRW if m == "KRW-USDT" else fake["price"]) for m in mkts}
-upbit.fetch_range_since = lambda m, mins, t: (
-    None if fake["low"] is None and fake["high"] is None
-    else (fake["high"] or fake["price"], fake["low"] or fake["price"]))
+
+def _fake_range(m, mins, t):
+    if fake["candles"] is not None:
+        return fake["candles"]
+    if fake["low"] is None and fake["high"] is None:
+        return None
+    # 기본: 직전 1~2분 사이의 캔들 1개 (end 가 최근이라 터치 이후 판정에 포함됨)
+    return [(now - 120, now - 60,
+             fake["high"] or fake["price"], fake["low"] or fake["price"])]
+upbit.fetch_range_since = _fake_range
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
 from monitor import binance
@@ -207,6 +214,40 @@ msg_b = tg.render_alert("touch", "LINK", [dict(
     post_age_minutes=60, collected_at=now, author_self_wins=4, author_self_losses=2)],
     8.35 * USDT_KRW, USDT_KRW)
 check("T14b 자체만 (워쳐없음)", "🏹 터치후 승률: 67% (4승2패)" in msg_b and "기록없음" not in msg_b)
+
+# ── 2026-07-24 감사 수정 검증 ──────────────────────────────────
+# T15: 여러 캔들에 걸쳐 TP 먼저 → SL 나중이면 순서대로 hit (뭉개면 가짜 ambiguous였음)
+lid15 = add_touched("LINK", 10.0, 9.0, 11.0, 7200, "t15")
+fake["price"] = 9.1 * USDT_KRW
+fake["candles"] = [
+    (now - 600, now - 540, 11.2 * USDT_KRW, 10.8 * USDT_KRW),  # TP 도달 캔들
+    (now - 540, now - 480, 10.9 * USDT_KRW, 8.9 * USDT_KRW),   # 이후 SL 캔들
+]
+price_check.run_once(now + 1020)
+o15 = outcome_of(lid15)
+check("T15 순서 확정 - TP 먼저는 hit", o15["outcome"] == "hit" and o15["ambiguous"] == 0)
+
+# T16: 터치 '이전' 캔들의 고가는 판정에서 제외 (가짜 hit 방지)
+lid16 = add_touched("LINK", 10.0, 9.0, 10.5, 30, "t16")  # 30초 전 터치
+fake["price"] = 9.9 * USDT_KRW
+fake["candles"] = [(now - 600, now - 300, 12.0 * USDT_KRW, 9.8 * USDT_KRW)]  # 전부 터치 이전
+price_check.run_once(now + 1080)
+o16 = outcome_of(lid16)
+check("T16 터치이전 캔들 제외 - 미종결", o16["outcome"] is None)
+fake["candles"] = None
+
+# T17: 불변 스냅샷 - touched 레벨은 재수집 upsert 로 sl/tp 가 안 바뀜
+with db.connect(TEST_DB) as conn:
+    row = conn.execute("SELECT signal_key, tp_usd FROM levels WHERE id=?", (lid12,)).fetchone()
+    lv = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=10.0,
+              sl_usd=8.0, tp_usd=99.0, rr=1.0, grade="A", score=80, author="A_t12",
+              author_followers=1, author_hit_rate=None, author_hit_count=None,
+              author_whitelisted=False, mcap_rank=1, mcap_tier_icon="💎",
+              post_url="https://tv.com/t12", post_age_minutes=1, collected_at=now,
+              signal_key=row["signal_key"])
+    db.upsert_level(conn, lv)
+    after = conn.execute("SELECT tp_usd FROM levels WHERE id=?", (lid12,)).fetchone()
+check("T17 불변스냅샷 - touched 레벨 tp 유지", abs(after["tp_usd"] - 14.0) < 1e-9)
 
 print()
 print("── 본알림 실제 렌더링 ──")

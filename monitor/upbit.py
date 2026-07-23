@@ -8,6 +8,7 @@ candle 호출만 페이싱(0.12s)한다.
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -72,25 +73,37 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
         return None
 
 
-def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[tuple]:
-    """최근 minutes 분간 1분봉의 (최고 high, 최저 low) — 체크 사이 스파이크의
-    터치(저가) 및 적중판정 TP/SL 도달(고가/저가) 소급 감지용. 마켓당 1콜로 겸용.
-    (1분봉 최대 200개 = 200분. 가격체크가 2~10분 주기이므로 잘릴 일은 사실상 없음)"""
-    count = max(1, min(200, minutes))
+def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[list]:
+    """최근 minutes 분간의 분봉 목록 [(시작epoch, 종료epoch, high, low), ...] 시간 오름차순.
+
+    2026-07-24 감사 수정: 예전엔 max(high)/min(low)로 뭉개서 반환했는데, 그러면
+    ① 터치 이전 가격이 적중판정에 섞이고(가짜 hit) ② TP→SL 도달 순서를 알 수 있는
+    경우까지 전부 '동시터치 miss'로 떨어졌다(승률 하향 편향). 캔들 목록을 그대로
+    반환해 호출부가 시간순으로 판정하게 한다.
+
+    소급 창이 200분을 넘으면(봇 다운타임) 15분봉으로 폴백해 최대 50시간까지 커버."""
+    unit = 1 if minutes <= 200 else 15
+    count = max(1, min(200, (minutes + unit - 1) // unit))
     try:
         resp = requests.get(
-            f"{_BASE}/candles/minutes/1",
+            f"{_BASE}/candles/minutes/{unit}",
             params={"market": market, "count": count},
             timeout=timeout,
         )
         resp.raise_for_status()
-        candles = resp.json()
+        raw = resp.json()
         time.sleep(_CANDLE_PACE_SEC)
-        if not candles:
+        if not raw:
             return None
-        return (max(float(c["high_price"]) for c in candles),
-                min(float(c["low_price"]) for c in candles))
+        out = []
+        for c in raw:  # 업비트는 최신순 반환 → 오름차순으로 뒤집는다
+            start = datetime.fromisoformat(c["candle_date_time_utc"]).replace(
+                tzinfo=timezone.utc).timestamp()
+            out.append((start, start + unit * 60,
+                        float(c["high_price"]), float(c["low_price"])))
+        out.sort(key=lambda x: x[0])
+        return out
     except Exception as e:  # noqa: BLE001
-        logger.warning("[upbit] %s 1분봉 조회 실패: %s", market, e)
+        logger.warning("[upbit] %s 분봉 조회 실패: %s", market, e)
         time.sleep(_CANDLE_PACE_SEC)
         return None

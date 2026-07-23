@@ -9,9 +9,12 @@ permissions:
   contents: write  # data/ 상태 커밋 백 (2026-07-23 적중DB 영속화 결정)
   actions: read    # 구버전 아티팩트에서 1회성 마이그레이션용
 
-# 가격체크 잡과 같은 그룹 — DB 아티팩트 동시 쓰기 경합(마지막 승자만 남는 유실) 방지.
+# 2026-07-24 감사 수정: 가격체크와 그룹을 공유하면 GitHub 이 pending 을 1개만
+# 유지하므로, 2분마다 오는 가격체크 트리거가 대기 중인 collect 를 반복 취소해
+# 수집이 굶는(starvation) 문제가 있었다. 별도 그룹으로 분리하고, 동시 실행으로
+# 생기는 data/ 커밋 경합은 커밋 단계의 재시도 루프로 처리한다.
 concurrency:
-  group: bot-state-writer
+  group: collect-runner
   cancel-in-progress: false
 
 jobs:
@@ -52,16 +55,22 @@ jobs:
           TV_COOKIE: ${{ secrets.TV_COOKIE }}
         run: python scripts/run_collect.py
 
-      - name: 상태 커밋 백 (변경 시에만 - 커밋 히스토리가 스냅샷 백업)
+      - name: 상태 커밋 백 (변경 시에만, 경합 재시도 - 커밋 히스토리가 스냅샷 백업)
         run: |
           set -e
           git config user.name "izrua-bot"
           git config user.email "actions@users.noreply.github.com"
           git add data/
           if git diff --cached --quiet; then
-            echo "상태 변경 없음"
-          else
-            git commit -m "data: collect $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
-            git pull --rebase origin main || true
-            git push origin main
+            echo "상태 변경 없음"; exit 0
           fi
+          git commit -m "data: collect $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          for i in 1 2 3; do
+            # 바이너리 DB 충돌 시 -X ours = 우리 커밋(방금 수집분) 우선.
+            # 동시 가격체크 커밋과 겹치면 드물게 상대 변경이 밀릴 수 있으나
+            # 다음 회차에 상태가 수렴한다 (수집 기아보다 훨씬 작은 비용)
+            git pull --rebase -X ours origin main || { git rebase --abort; sleep 3; continue; }
+            git push origin main && exit 0
+            sleep 3
+          done
+          echo "::warning::상태 커밋 push 3회 실패 - 다음 실행에서 재수집됨"

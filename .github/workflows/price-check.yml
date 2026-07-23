@@ -10,8 +10,10 @@ permissions:
   contents: write  # data/ 상태 커밋 백
   actions: read    # 구버전 아티팩트 마이그레이션용
 
+# 2026-07-24: collect 와 그룹 분리 (공유 시 pending collect 가 반복 취소되는
+# 수집 기아 문제). 가격체크끼리는 이 그룹으로 직렬화된다.
 concurrency:
-  group: bot-state-writer   # collect 와 공유 — DB 아티팩트 경합 방지
+  group: price-check-runner
   cancel-in-progress: false
 
 jobs:
@@ -51,16 +53,19 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/run_price_check.py
 
-      - name: 상태 커밋 백 (변경 시에만)
+      - name: 상태 커밋 백 (변경 시에만, 경합 재시도)
         run: |
           set -e
           git config user.name "izrua-bot"
           git config user.email "actions@users.noreply.github.com"
           git add data/
           if git diff --cached --quiet; then
-            echo "상태 변경 없음"
-          else
-            git commit -m "data: check $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
-            git pull --rebase origin main || true
-            git push origin main
+            echo "상태 변경 없음"; exit 0
           fi
+          git commit -m "data: check $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase -X ours origin main || { git rebase --abort; sleep 3; continue; }
+            git push origin main && exit 0
+            sleep 3
+          done
+          echo "::warning::상태 커밋 push 3회 실패 - 다음 회차에 재감지됨"
