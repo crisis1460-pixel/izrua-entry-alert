@@ -43,6 +43,13 @@ fake = {"price": None, "low": None}
 upbit.fetch_prices = lambda mkts, t: {m: (USDT_KRW if m == "KRW-USDT" else fake["price"]) for m in mkts}
 upbit.fetch_low_since = lambda m, mins, t: fake["low"]
 
+# 시장심리는 네트워크 없이 고정값 (렌더링 검증 겸용)
+from monitor import market_sentiment
+market_sentiment.get_sentiment = lambda conn: {
+    "btc_dominance": 56.6, "fear_greed": 31, "fear_greed_label": "Fear",
+    "altcoin_season_index": 32,
+}
+
 ok = True
 def check(name, cond):
     global ok
@@ -57,21 +64,25 @@ check("T1 원거리 - 무알림", s1["previews"] == 0 and s1["touches"] == 0 and
 # T2: +0.6% 접근 → 예고 1건 (클러스터 상단 8.30 기준)
 fake["price"] = 8.30 * USDT_KRW * 1.006
 s2 = price_check.run_once(now + 120)
-check("T2 접근 - 예고 1건", s2["previews"] == 1 and len(sent_messages) == 1 and "[접근]" in sent_messages[0])
+check("T2 접근 - 예고 1건", s2["previews"] == 1 and len(sent_messages) == 1 and "엔트리 접근" in sent_messages[0])
 
 # T3: 같은 조건 재체크 → 중복 예고 없음
 s3 = price_check.run_once(now + 180)
 check("T3 중복 예고 억제", s3["previews"] == 0 and len(sent_messages) == 1)
 
-# T4: 저가가 엔트리 하향 터치 → 본알림 1건, 엔트리 존 표기, 출처 2줄
+# T4: 저가가 엔트리 하향 터치 → 본알림 1건, 엔트리 존 표기, 출처 하이퍼링크 2개
 fake["price"] = 8.30 * USDT_KRW * 1.002
 fake["low"] = 8.24 * USDT_KRW
 s4 = price_check.run_once(now + 240)
 touch_msg = sent_messages[-1]
 check("T4 터치 - 본알림 1건", s4["touches"] == 1 and len(sent_messages) == 2)
-check("T4 [터치] 헤더+존 표기", "[터치]" in touch_msg and "엔트리 존" in touch_msg)
-check("T4 출처 최신순 2줄", touch_msg.count("tv.com") == 2)
-check("T4 적중률 표시", "적중 67%" in touch_msg and "✅화이트" in touch_msg)
+check("T4 터치 헤더+존 표기", "엔트리 터치" in touch_msg and "엔트리 존" in touch_msg)
+check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and touch_msg.count("출처2") == 1
+      and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
+check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" in touch_msg)
+check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
+      and "F&G: 31 (공포)" in touch_msg)
+check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
 
 # T5: 터치된 클러스터는 재알림 없음, 7.50 별개 레벨은 아직 활성
 with db.connect(TEST_DB) as conn:

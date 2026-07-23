@@ -118,14 +118,20 @@ def upsert_level(conn, level: dict) -> bool:
             ),
         )
         return True
-    # 기존 레벨: 시총순위/등급/작성자 통계 등 최신 메타만 갱신 (상태·시각은 보존)
+    # 기존 레벨: 시총순위/등급/작성자 통계 + SL/TP 를 최신값으로 갱신 (상태·시각은 보존).
+    # sl/tp 갱신 이유(2026-07-23): 추출기 버그 수정이 배포돼도 이미 저장된 오염값
+    # (예: 서수 오인 tp=1.0)이 그대로 알림에 노출되는 것을 막는다 — 매 수집마다
+    # 재파싱 결과로 덮어써 파서 개선이 기존 레벨에도 전파되게 한다. entry 는
+    # signal_key 정체성의 일부라 갱신하지 않는다.
     conn.execute(
         """UPDATE levels SET
-             grade=?, score=?, rr=?, author_followers=?, author_hit_rate=?,
-             author_hit_count=?, author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?
+             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, author_followers=?,
+             author_hit_rate=?, author_hit_count=?, author_whitelisted=?,
+             mcap_rank=?, mcap_tier_icon=?
            WHERE signal_key=?""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
+            level.get("sl_usd"), level.get("tp_usd"),
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"), key,

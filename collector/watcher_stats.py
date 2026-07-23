@@ -23,7 +23,10 @@ logger = logging.getLogger("alert.watcher_stats")
 _GITHUB_API = "https://api.github.com"
 _OWNER = "crisis1460-pixel"
 _REPO = "izrua_watcher"
-_ARTIFACT_NAME = "watcher-db"
+# 2026-07-23 수정: "watcher-db"로 추정해 짰다가 실제 이름과 달라 조용히 빈 결과만
+# 반환되고 있었다(적중률이 알림에 안 뜨던 근본 원인). 실제 이름은 upbit_bot
+# config.yaml watcher_feed.artifact_name 에서 확인한 "crypto-db".
+_ARTIFACT_NAME = "crypto-db"
 
 
 def _headers(token: str) -> dict:
@@ -80,12 +83,18 @@ def _parse_db(db_bytes: bytes) -> dict:
 
         out: dict = {}
         try:
-            for r in c.execute(
-                "SELECT username, hits, total FROM chartist_stats"
+            # 2026-07-23 수정: 실제 스키마는 (username, outcome∈'hit'/'miss', ...) 행 단위.
+            # 워쳐 database.py::get_chartist_accuracy() 와 동일한 집계로 계산한다.
+            hit_miss: dict = {}
+            for username, outcome, cnt in c.execute(
+                "SELECT username, outcome, COUNT(*) FROM chartist_stats "
+                "WHERE outcome IN ('hit','miss') GROUP BY username, outcome"
             ).fetchall():
-                total = r["total"] or 0
-                out[r["username"]] = {
-                    "hit_rate": (r["hits"] / total) if total else None,
+                hit_miss.setdefault(username, {"hit": 0, "miss": 0})[outcome] = cnt
+            for username, hm in hit_miss.items():
+                total = hm["hit"] + hm["miss"]
+                out[username] = {
+                    "hit_rate": (hm["hit"] / total) if total else None,
                     "hit_count": total,
                     "whitelisted": False,
                     "followers": None,

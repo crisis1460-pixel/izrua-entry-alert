@@ -50,6 +50,18 @@ REAL_BUG_CASES = [
         {"entry": 5.207, "sl": 5.0, "tp": 5.298, "direction": "long"},
     ),
     (
+        "실전버그2 재현 - ARB (공백 서수 'Target 1:')",
+        "#ARBUSDT | Testing Wedge Breakout Amid Key Support\n\n#ARB\n\n"
+        "The price is moving within a descending channel on the 1-hour timeframe.\n"
+        "There is a key support zone in green at 0.08325.\n\n"
+        "Entry Price: 0.08880\nTarget 1: 0.08977\nTarget 2: 0.09145\nTarget 3: 0.09330\n\n"
+        "Stop Loss: At the resistance zone in green\n\nRemember this simple rule: Money management.",
+        0.0885,
+        # sl 은 원문에 숫자가 없음(정상적으로 None). tp 는 첫 타겟 0.08977 이어야 하며
+        # 절대 1.0(서수 오인)이 아니어야 한다. sl 없으므로 rr 은 None.
+        {"entry": 0.0888, "sl": None, "tp": 0.08977, "direction": "long", "rr_none_ok": True},
+    ),
+    (
         "실전버그 재현 - INJ SHORT (동일 패턴)",
         "INJ USDT SHORT SIGNAL\n#81.  INJ/USDT – Trade Setup (SHORT)\n\n"
         "📈 Position Type: SHORT\n🕒 Timeframe: 1H\n📊 Market: Futures\n\n"
@@ -61,15 +73,24 @@ REAL_BUG_CASES = [
     ),
 ]
 
+def _close(a, b):
+    if b is None:
+        return a is None
+    return a is not None and abs(a - b) < max(0.01, abs(b) * 0.001)
+
+
 for desc, text, price, expected in REAL_BUG_CASES:
     r = parse_setup(text, current_price=price)
+    rr_ok = (r is not None) and (
+        (r["rr"] is None) if expected.get("rr_none_ok") else (r["rr"] is not None and r["rr"] > 0)
+    )
     passed = (
         r is not None
         and r["direction"] == expected["direction"]
-        and abs(r["entry"] - expected["entry"]) < 0.01
-        and r["sl"] is not None and abs(r["sl"] - expected["sl"]) < 0.01
-        and r["tp"] is not None and abs(r["tp"] - expected["tp"]) < 0.01
-        and r["rr"] is not None and r["rr"] > 0  # 마이너스/None RR 재발 방지 확인
+        and _close(r["entry"], expected["entry"])
+        and _close(r["sl"], expected["sl"])
+        and _close(r["tp"], expected["tp"])
+        and rr_ok
     )
     got = "None" if r is None else f"entry={r['entry']} sl={r['sl']} tp={r['tp']} rr={r['rr']}"
     mark = "✅" if passed else "❌"
@@ -79,6 +100,15 @@ for desc, text, price, expected in REAL_BUG_CASES:
     if not passed:
         print(f"    (기대: {expected})")
 
-TOTAL = len(CASES) + len(REAL_BUG_CASES)
+# 크기 sanity 방어선: 서수 오인이 어떤 신규 경로로 재발해도 4배/0.25배 밖 값은 차단
+r = parse_setup("Long entry 0.083, target 1.0, SL 0.079", current_price=0.083)
+guard_ok = r is not None and r["tp"] is None and _close(r["sl"], 0.079)
+print(("✅" if guard_ok else "❌"), "크기 sanity - entry 대비 12배 목표는 판단보류(None)")
+print(f"    → {r}")
+if guard_ok:
+    ok += 1
+TOTAL_EXTRA = 1
+
+TOTAL = len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)

@@ -97,6 +97,17 @@ def run_once(now: float = None) -> dict:
         candle_calls = 0
 
         from collector.grading import meets_min_grade  # 순환 import 방지 지연 로드
+        from monitor import market_sentiment
+
+        # 시장 심리(BTC.D/ALT.S/F&G)는 실제로 알림을 보낼 때만 1회 지연 조회
+        # (1시간 meta 캐시 — 5분 주기 체크가 CoinGecko 한도를 갉아먹지 않게)
+        sentiment_cache = {"loaded": False, "data": None}
+
+        def _sentiment():
+            if not sentiment_cache["loaded"]:
+                sentiment_cache["loaded"] = True
+                sentiment_cache["data"] = market_sentiment.get_sentiment(conn)
+            return sentiment_cache["data"]
 
         for ticker, tlevels in by_ticker.items():
             current = prices.get(ticker)
@@ -136,7 +147,8 @@ def run_once(now: float = None) -> dict:
                     send_ok = False
 
                 if send_ok:
-                    text = telegram.render_alert(kind, coin, cluster, current, usdt_krw)
+                    text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
+                                                 sentiment=_sentiment())
                     if telegram.send(text):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         summary["touches" if touched else "previews"] += 1

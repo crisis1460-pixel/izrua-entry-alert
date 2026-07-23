@@ -44,7 +44,17 @@ _TP_LABEL = re.compile(
 # 공백을 둔 정상 가격의 앞자리(68)까지 서수로 오인해 지워버리는 회귀가 실제로
 # 났었다(2026-07-23 자체 발견). "TP1"/"목표1"처럼 라벨에 숫자가 바로 붙어있을 때만
 # 서수로 간주한다.
-_ORDINAL_LABEL = re.compile(r"\b(TP|SL|타겟|목표)[0-9]{1,2}\b", re.I)
+_ORDINAL_LABEL = re.compile(r"\b(TP|SL|Target|Entry|타겟|목표)[0-9]{1,2}\b", re.I)
+
+# 2차 실전 버그(2026-07-23 저녁, ALGO/ARB 알림): "Target 1: 0.08977" 처럼 서수가
+# 공백으로 떨어져 있는 표기는 위 규칙이 못 잡아서, "Target"까지만 라벨로 매칭된 뒤
+# 창 안의 "1"이 목표가로 오인됐다(두 코인 모두 tp=1.0 → ₩1,458 표기 사고).
+# "목표 68,000" 오탐을 피하면서 이 표기만 잡는 결정적 차이는 숫자 뒤의 콜론:
+# 서수는 "Target 1:" 처럼 반드시 :/= 가 따라온다. 그래서 공백 서수는 콜론이
+# 뒤따를 때만 제거한다.
+_SPACED_ORDINAL_LABEL = re.compile(
+    r"\b(TP|SL|Target|Entry|타겟|목표|진입|손절)\s+[0-9]{1,2}(?=\s*[:=])", re.I
+)
 
 # 가격 숫자 하나: 1,234.56 / 0.00123 / 12100 / $8.30 (콤마·$ 허용)
 _NUM = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]*\.[0-9]+|[0-9]+)"
@@ -71,6 +81,7 @@ def _clean(text: str) -> str:
     text = _PERCENT.sub(" ", text)
     text = _YEAR.sub(" ", text)
     text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
+    text = _SPACED_ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "Target 1:" → "Target:"
     return text
 
 
@@ -156,6 +167,16 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         if tp is not None and entry is not None and tp >= entry:
             tp = None
         if sl is not None and entry is not None and sl <= entry:
+            sl = None
+
+    # 크기 sanity(방어선 3단계, 2026-07-23 ALGO/ARB 실전 사고 후 추가): 방향은 맞아도
+    # 엔트리 대비 4배(+300%) 초과 목표나 1/4 미만 손절은 스윙 셋업에서 비현실적 —
+    # 파싱 오인(서수/무관 숫자)일 확률이 압도적이므로 판단 보류(None)로 되돌린다.
+    # (ALGO 사례: entry 0.083에 tp 1.0 = 12배 → 알림에 '+1103%'로 노출됐던 값)
+    if entry is not None and entry > 0:
+        if tp is not None and not (entry * 0.25 <= tp <= entry * 4):
+            tp = None
+        if sl is not None and not (entry * 0.25 <= sl <= entry * 4):
             sl = None
 
     # 손익비
