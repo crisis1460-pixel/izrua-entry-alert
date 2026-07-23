@@ -128,20 +128,22 @@ def _author_block(rep: dict) -> list:
 
     wins = rep.get("author_self_wins") or 0
     losses = rep.get("author_self_losses") or 0
-    self_part = ""
+    # 자체 성적은 별도 줄 (2026-07-23 사용자 확정: 이모지로 윗줄과 시작 위치 정렬)
+    self_line = None
     if wins + losses >= _SELF_STATS_MIN_N:
-        self_part = f" · 자체 터치후 {wins}승{losses}패"
+        rate = wins / (wins + losses) * 100
+        self_line = f"🏹 터치후 승률: {rate:.0f}% ({wins}승{losses}패)"
 
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
     if hit_rate is not None and hit_count:
-        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (워쳐 {hit_count}건){self_part}")
-    elif self_part:
-        rate = wins / (wins + losses) * 100
-        lines.append(f"📊 자체 적중률(터치후): {wins}승{losses}패 ({rate:.0f}%)")
-    elif rep.get("author_followers"):
-        lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
-    else:
-        lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
+        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (워쳐 {hit_count}건)")
+    elif not self_line:
+        if rep.get("author_followers"):
+            lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
+        else:
+            lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
+    if self_line:
+        lines.append(self_line)
     return lines
 
 

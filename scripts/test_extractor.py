@@ -100,6 +100,36 @@ for desc, text, price, expected in REAL_BUG_CASES:
     if not passed:
         print(f"    (기대: {expected})")
 
+# 타임프레임 파싱 + 판정 창 정책 (2026-07-23 B안)
+from collector.extractor import judgment_window_hours, parse_timeframe_hours
+
+TF_CASES = [
+    ("🕒 Timeframe: 1H", 1.0), ("Time frame: 4h", 4.0), ("Timeframe:1D", 24.0),
+    ("타임프레임: 15m", 0.25), ("daily chart looking good", 24.0), ("no tf here", None),
+]
+for text, exp in TF_CASES:
+    got = parse_timeframe_hours(text)
+    passed = got == exp
+    print(("✅" if passed else "❌"), f"TF파싱 '{text[:20]}' → {got} (기대 {exp})")
+    if passed:
+        ok += 1
+
+WINDOW_CASES = [
+    # (tf_hours, entry, tp, 기대 시간, 설명)
+    (1.0, 10, 11, 168.0, "1H봉 → 7일"),
+    (4.0, 10, 11, 336.0, "4H봉 → 14일"),
+    (24.0, 10, 11, 720.0, "1D봉 → 30일"),
+    (None, 10, 12, 336.0, "TF없음+20%거리 → 14일"),
+    (None, 10, 25, 720.0, "TF없음+150%거리 → 30일 상한"),
+    (None, 10, None, 168.0, "TF·TP 둘다없음 → 기본 7일"),
+]
+for tf, e, tp, exp, desc in WINDOW_CASES:
+    got = judgment_window_hours(tf, e, tp)
+    passed = abs(got - exp) < 0.1
+    print(("✅" if passed else "❌"), f"판정창 {desc} → {got:.0f}h")
+    if passed:
+        ok += 1
+
 # 크기 sanity 방어선: 서수 오인이 어떤 신규 경로로 재발해도 4배/0.25배 밖 값은 차단
 r = parse_setup("Long entry 0.083, target 1.0, SL 0.079", current_price=0.083)
 guard_ok = r is not None and r["tp"] is None and _close(r["sl"], 0.079)
@@ -109,6 +139,6 @@ if guard_ok:
     ok += 1
 TOTAL_EXTRA = 1
 
-TOTAL = len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA
+TOTAL = len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES) + len(WINDOW_CASES)
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)

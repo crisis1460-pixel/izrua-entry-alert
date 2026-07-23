@@ -128,14 +128,14 @@ with db.connect(TEST_DB) as conn:
 check("T7 상한 억제 + 상태전이 수행", s7["suppressed"] == 1 and s7["touches"] == 0 and len(remaining) == 0)
 
 # ── 적중판정 엔진 (ACCURACY_DB_PLAN 1단계) ──────────────────────
-def add_touched(coin, entry, sl, tp, touched_ago_sec, key):
+def add_touched(coin, entry, sl, tp, touched_ago_sec, key, window_h=None):
     with db.connect(TEST_DB) as conn:
         lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
                   entry_usd=entry, sl_usd=sl, tp_usd=tp, rr=None, grade="B", score=60,
                   author=f"A_{key}", author_followers=100, author_hit_rate=None,
                   author_hit_count=None, author_whitelisted=False, mcap_rank=50,
                   mcap_tier_icon="🥇", post_url=f"https://tv.com/{key}",
-                  post_age_minutes=100, collected_at=now)
+                  post_age_minutes=100, collected_at=now, judgment_window_hours=window_h)
         lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], lv["post_url"])
         db.upsert_level(conn, lv)
         row = conn.execute("SELECT id FROM levels WHERE signal_key=?", (lv["signal_key"],)).fetchone()
@@ -176,6 +176,37 @@ fake["price"] = 10.5 * USDT_KRW; fake["low"] = 10.3 * USDT_KRW; fake["high"] = 1
 price_check.run_once(now + 780)
 o11 = outcome_of(lid11)
 check("T11 타임박스 7일 - win", o11["outcome"] == "timeboxed_win" and o11["judgment_mode"] == "timeboxed")
+
+# T12: 판정 창 존중 — 1D봉(30일 창) 글은 8일 지나도 강제 종결하지 않음
+lid12 = add_touched("LINK", 10.0, 9.0, 14.0, 8 * 86400, "t12", window_h=720.0)
+fake["price"] = 10.5 * USDT_KRW; fake["low"] = 10.3 * USDT_KRW; fake["high"] = 10.8 * USDT_KRW
+price_check.run_once(now + 900)
+o12 = outcome_of(lid12)
+check("T12 30일 창 - 8일차 미종결 유지", o12["outcome"] is None)
+
+# T13: 같은 조건이지만 7일 창이면 타임박스 종결됨 (대조군)
+lid13 = add_touched("LINK", 10.0, 9.0, 14.0, 8 * 86400, "t13", window_h=168.0)
+price_check.run_once(now + 960)
+o13 = outcome_of(lid13)
+check("T13 7일 창 대조군 - 타임박스 종결", o13["outcome"] == "timeboxed_win")
+
+# T14: 자체 성적 병기 줄 (🏹 별도 줄, 5건 이상 발동)
+from notify import telegram as tg
+msg_a = tg.render_alert("touch", "LINK", [dict(
+    coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4, grade="B", score=62,
+    author="ProChartist", author_followers=None, author_hit_rate=0.72, author_hit_count=25,
+    author_whitelisted=True, mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/a",
+    post_age_minutes=60, collected_at=now, author_self_wins=8, author_self_losses=3)],
+    8.35 * USDT_KRW, USDT_KRW)
+check("T14 워쳐+자체 병기 (별도줄)", "📊 평균 적중률: 72% (워쳐 25건)" in msg_a
+      and "\n🏹 터치후 승률: 73% (8승3패)" in msg_a)
+msg_b = tg.render_alert("touch", "LINK", [dict(
+    coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
+    author="NewComer", author_followers=2300, author_hit_rate=None, author_hit_count=None,
+    author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/b",
+    post_age_minutes=60, collected_at=now, author_self_wins=4, author_self_losses=2)],
+    8.35 * USDT_KRW, USDT_KRW)
+check("T14b 자체만 (워쳐없음)", "🏹 터치후 승률: 67% (4승2패)" in msg_b and "기록없음" not in msg_b)
 
 print()
 print("── 본알림 실제 렌더링 ──")

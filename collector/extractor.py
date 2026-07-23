@@ -67,6 +67,48 @@ _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
 _PERCENT = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*%")
 _YEAR = re.compile(r"\b20[2-9]\d\b")
 
+# 타임프레임 파싱 (2026-07-23 적중창 결정 B: 작성자가 밝힌 지평으로 판정 창 결정)
+_TIMEFRAME = re.compile(
+    r"(?:timeframe|time\s*frame|타임프레임|봉)\s*[:\-]?\s*([0-9]{1,3})\s*(m|min|h|hr|d|w)\b",
+    re.I,
+)
+_TIMEFRAME_WORD = re.compile(r"\b(daily|weekly|일봉|주봉)\b", re.I)
+_TF_UNIT_HOURS = {"m": 1 / 60, "min": 1 / 60, "h": 1.0, "hr": 1.0, "d": 24.0, "w": 168.0}
+
+
+def parse_timeframe_hours(text: str):
+    """글에 명시된 차트 타임프레임(시간 단위). 없으면 None.
+    예: '🕒 Timeframe: 1H' → 1.0, '4h' → 4.0, '1D' → 24.0"""
+    if not text:
+        return None
+    m = _TIMEFRAME.search(text)
+    if m:
+        return float(m.group(1)) * _TF_UNIT_HOURS[m.group(2).lower()]
+    w = _TIMEFRAME_WORD.search(text)
+    if w:
+        return 168.0 if w.group(1).lower() in ("weekly", "주봉") else 24.0
+    return None
+
+
+def judgment_window_hours(tf_hours, entry, tp) -> float:
+    """적중 판정 창 (2026-07-23 확정 B안): 작성자 타임프레임 우선, 없으면 목표 거리
+    비례(10% 거리당 7일), 어느 쪽이든 상한 30일.
+    근거: '+40% 목표를 7일 만에 채점'하는 부당함 제거 — 작성자가 밝힌 지평이
+    가장 공정한 귀속 기준(사용자 결정)."""
+    cap = 720.0  # 30일
+    if tf_hours is not None:
+        if tf_hours <= 0.5:      # ≤30분봉: 초단타
+            return 72.0          # 3일
+        if tf_hours <= 2:        # 1H~2H
+            return 168.0         # 7일
+        if tf_hours <= 12:       # 4H 등
+            return 336.0         # 14일
+        return cap               # 1D 이상: 30일
+    if entry and tp and entry > 0:
+        dist_pct = abs(tp - entry) / entry * 100
+        return max(168.0, min(cap, dist_pct / 10.0 * 168.0))
+    return 168.0
+
 
 def _to_float(s: str) -> Optional[float]:
     try:

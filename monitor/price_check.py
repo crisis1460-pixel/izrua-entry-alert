@@ -212,10 +212,13 @@ def _judge_outcomes(conn, prices, usdt_krw, range_cache, since_min, now, cfg_get
     (TP 도달=hit, 7일 내 미도달=miss) / R은 [-1,+5] 클리핑, SL 없으면 NULL.
     판정 기준가는 KRW (entry/sl/tp 는 판정 시점 환율로 환산 — 감시 로직과 동일 원칙)."""
     resolved = 0
-    window_sec = cfg_get("outcome_window_hours") * 3600
+    default_window_sec = cfg_get("outcome_window_hours") * 3600
     r_lo, r_hi = cfg_get("r_clip_low"), cfg_get("r_clip_high")
 
     for lv in db.get_unresolved_touched(conn):
+        # 판정 창: 레벨별 저장값(작성자 타임프레임 기반, 2026-07-23 B안) 우선,
+        # 구버전 레코드(NULL)는 기본 7일
+        window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
         ticker = lv["ticker"]
         current = prices.get(ticker)
         if not current or not usdt_krw:

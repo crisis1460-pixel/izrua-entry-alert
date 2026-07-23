@@ -25,7 +25,7 @@ except Exception:
     pass
 
 from collector import coingecko, tradingview, watcher_stats
-from collector.extractor import parse_setup
+from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
 from collector.grading import calculate_grade
 from config import settings
 from storage import db
@@ -83,9 +83,12 @@ def main() -> int:
                     followers, setup["direction"], setup["entry"],
                     setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
                 )
+                tf_hours = parse_timeframe_hours(text)
                 level = {
                     "signal_key": db.make_signal_key(
                         coin["symbol"], setup["entry"], idea.get("author"), idea.get("url")),
+                    "judgment_window_hours": judgment_window_hours(
+                        tf_hours, setup["entry"], setup.get("tp")),
                     "coin_symbol": coin["symbol"],
                     "ticker": coin["ticker"],
                     "direction": setup["direction"],

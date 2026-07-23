@@ -99,6 +99,8 @@ _OUTCOME_COLUMNS = {
     "ret_24h": "REAL",            # 터치 후 24h 수익률(%) — 최초 도과 시 1회 기록
     "ret_72h": "REAL",
     "touch_price_krw": "REAL",    # 터치 시점 현재가 (타임박스/수익률 기준가)
+    # 판정 창(시간). 작성자 타임프레임 기반 — extractor.judgment_window_hours (2026-07-23 B안)
+    "judgment_window_hours": "REAL",
 }
 
 
@@ -127,8 +129,8 @@ def upsert_level(conn, level: dict) -> bool:
                (signal_key, coin_symbol, ticker, direction, entry_usd, sl_usd, tp_usd,
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
-                post_url, post_age_minutes, status, collected_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                post_url, post_age_minutes, status, collected_at, judgment_window_hours)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -139,6 +141,7 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("mcap_rank"), level.get("mcap_tier_icon"),
                 level.get("post_url"), level.get("post_age_minutes"),
                 "watching", level.get("collected_at", time.time()),
+                level.get("judgment_window_hours"),
             ),
         )
         return True
@@ -151,14 +154,15 @@ def upsert_level(conn, level: dict) -> bool:
         """UPDATE levels SET
              grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, author_followers=?,
              author_hit_rate=?, author_hit_count=?, author_whitelisted=?,
-             mcap_rank=?, mcap_tier_icon=?
+             mcap_rank=?, mcap_tier_icon=?, judgment_window_hours=?
            WHERE signal_key=?""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
             level.get("sl_usd"), level.get("tp_usd"),
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
-            level.get("mcap_rank"), level.get("mcap_tier_icon"), key,
+            level.get("mcap_rank"), level.get("mcap_tier_icon"),
+            level.get("judgment_window_hours"), key,
         ),
     )
     return False
