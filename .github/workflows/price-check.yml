@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  actions: read
+  contents: write  # data/ 상태 커밋 백
+  actions: read    # 구버전 아티팩트 마이그레이션용
 
 concurrency:
   group: bot-state-writer   # collect 와 공유 — DB 아티팩트 경합 방지
@@ -26,17 +26,21 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
 
-      - name: 이전 상태(bot-state) 복원
+      - name: 구버전 아티팩트 마이그레이션 (data/ 에 DB 없을 때 1회만)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          if [ -f data/levels.db ]; then
+            echo "data/levels.db 존재 - 마이그레이션 불필요"
+            exit 0
+          fi
           ART_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=50" \
             --jq '[.artifacts[] | select(.name=="bot-state" and .expired==false)] | sort_by(.created_at) | last | .id' || true)
           if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
             gh api "repos/${{ github.repository }}/actions/artifacts/$ART_ID/zip" > state.zip
-            mkdir -p cache && unzip -o state.zip -d cache && rm state.zip
-            echo "상태 복원 완료 (artifact $ART_ID)"
+            mkdir -p data && unzip -o state.zip -d data && rm state.zip
+            echo "아티팩트 → data/ 마이그레이션 완료 (artifact $ART_ID)"
           else
             echo "이전 상태 없음 - 수집이 먼저 1회 돌아야 함 (레벨 0개로 정상 종료)"
           fi
@@ -47,10 +51,16 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/run_price_check.py
 
-      - name: 상태 업로드
-        uses: actions/upload-artifact@v4
-        with:
-          name: bot-state
-          path: cache/
-          retention-days: 3
-          overwrite: false
+      - name: 상태 커밋 백 (변경 시에만)
+        run: |
+          set -e
+          git config user.name "izrua-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "상태 변경 없음"
+          else
+            git commit -m "data: check $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+            git pull --rebase origin main || true
+            git push origin main
+          fi

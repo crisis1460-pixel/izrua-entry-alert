@@ -72,10 +72,10 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
         return None
 
 
-def fetch_low_since(market: str, minutes: int, timeout: float) -> Optional[float]:
-    """최근 minutes 분간 1분봉 저가의 최솟값 — 체크 사이 스파이크 터치 소급 감지용.
-    (1분봉 최대 200개 = 200분. 그 이상은 200분까지만 본다 — 가격체크가 5~10분
-    주기이므로 실운영에서 잘릴 일은 사실상 없음)"""
+def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[tuple]:
+    """최근 minutes 분간 1분봉의 (최고 high, 최저 low) — 체크 사이 스파이크의
+    터치(저가) 및 적중판정 TP/SL 도달(고가/저가) 소급 감지용. 마켓당 1콜로 겸용.
+    (1분봉 최대 200개 = 200분. 가격체크가 2~10분 주기이므로 잘릴 일은 사실상 없음)"""
     count = max(1, min(200, minutes))
     try:
         resp = requests.get(
@@ -84,9 +84,12 @@ def fetch_low_since(market: str, minutes: int, timeout: float) -> Optional[float
             timeout=timeout,
         )
         resp.raise_for_status()
-        lows = [float(c["low_price"]) for c in resp.json()]
+        candles = resp.json()
         time.sleep(_CANDLE_PACE_SEC)
-        return min(lows) if lows else None
+        if not candles:
+            return None
+        return (max(float(c["high_price"]) for c in candles),
+                min(float(c["low_price"]) for c in candles))
     except Exception as e:  # noqa: BLE001
         logger.warning("[upbit] %s 1분봉 조회 실패: %s", market, e)
         time.sleep(_CANDLE_PACE_SEC)

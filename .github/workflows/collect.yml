@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  actions: read   # 이전 아티팩트 조회/다운로드
+  contents: write  # data/ 상태 커밋 백 (2026-07-23 적중DB 영속화 결정)
+  actions: read    # 구버전 아티팩트에서 1회성 마이그레이션용
 
 # 가격체크 잡과 같은 그룹 — DB 아티팩트 동시 쓰기 경합(마지막 승자만 남는 유실) 방지.
 concurrency:
@@ -26,17 +26,21 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
 
-      - name: 이전 상태(bot-state) 복원 (첫 실행이면 빈 상태로 시작)
+      - name: 구버전 아티팩트 마이그레이션 (data/ 에 DB 없을 때 1회만)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          if [ -f data/levels.db ]; then
+            echo "data/levels.db 존재 - 마이그레이션 불필요"
+            exit 0
+          fi
           ART_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=50" \
             --jq '[.artifacts[] | select(.name=="bot-state" and .expired==false)] | sort_by(.created_at) | last | .id' || true)
           if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
             gh api "repos/${{ github.repository }}/actions/artifacts/$ART_ID/zip" > state.zip
-            mkdir -p cache && unzip -o state.zip -d cache && rm state.zip
-            echo "상태 복원 완료 (artifact $ART_ID)"
+            mkdir -p data && unzip -o state.zip -d data && rm state.zip
+            echo "아티팩트 → data/ 마이그레이션 완료 (artifact $ART_ID)"
           else
             echo "이전 상태 없음 - 신규 시작"
           fi
@@ -48,10 +52,16 @@ jobs:
           TV_COOKIE: ${{ secrets.TV_COOKIE }}
         run: python scripts/run_collect.py
 
-      - name: 상태 업로드
-        uses: actions/upload-artifact@v4
-        with:
-          name: bot-state
-          path: cache/
-          retention-days: 3
-          overwrite: false
+      - name: 상태 커밋 백 (변경 시에만 - 커밋 히스토리가 스냅샷 백업)
+        run: |
+          set -e
+          git config user.name "izrua-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "상태 변경 없음"
+          else
+            git commit -m "data: collect $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+            git pull --rebase origin main || true
+            git push origin main
+          fi

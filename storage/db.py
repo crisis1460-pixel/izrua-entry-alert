@@ -87,9 +87,33 @@ def connect(db_path: str):
         conn.close()
 
 
+# 적중 DB 확장 컬럼 (2026-07-23 ACCURACY_DB_PLAN 확정) — 기존 DB 무중단 마이그레이션용
+_OUTCOME_COLUMNS = {
+    "outcome": "TEXT",            # hit | miss | timeboxed_win | timeboxed_loss
+    "resolved_at": "REAL",
+    "resolve_price_krw": "REAL",
+    "best_tp_hit": "INTEGER",     # 도달한 최고 TP 차수 (v1은 1만 사용)
+    "r_multiple": "REAL",         # (청산-진입)/(진입-SL), [-1,+5] 클리핑, SL 없으면 NULL
+    "ambiguous": "INTEGER DEFAULT 0",   # 같은 구간 TP·SL 동시 터치(보수적 miss 처리됨)
+    "judgment_mode": "TEXT",      # tp_sl | tp_only | timeboxed
+    "ret_24h": "REAL",            # 터치 후 24h 수익률(%) — 최초 도과 시 1회 기록
+    "ret_72h": "REAL",
+    "touch_price_krw": "REAL",    # 터치 시점 현재가 (타임박스/수익률 기준가)
+}
+
+
+def _migrate(conn) -> None:
+    """기존 DB에 없는 컬럼만 ALTER 로 추가 (레포 커밋백 DB는 스키마가 과거일 수 있음)."""
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+    for col, decl in _OUTCOME_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE levels ADD COLUMN {col} {decl}")
+
+
 def init_db(db_path: str) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def upsert_level(conn, level: dict) -> bool:
@@ -157,11 +181,58 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
     )
 
 
-def mark_touched(conn, level_ids: list, now: Optional[float] = None) -> None:
+def mark_touched(conn, level_ids: list, now: Optional[float] = None,
+                 touch_price_krw: Optional[float] = None) -> None:
     now = now or time.time()
     conn.executemany(
-        "UPDATE levels SET status='touched', touched_at=? WHERE id=? AND status IN ('watching','previewed')",
-        [(now, lid) for lid in level_ids],
+        "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? "
+        "WHERE id=? AND status IN ('watching','previewed')",
+        [(now, touch_price_krw, lid) for lid in level_ids],
+    )
+
+
+# ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────
+
+def get_unresolved_touched(conn) -> list:
+    """터치됐지만 아직 승패 미종결인 레벨 — 가격체크 잡이 매 회차 평가."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM levels WHERE status='touched' AND outcome IS NULL"
+    ).fetchall()]
+
+
+def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
+                    judgment_mode: str, r_multiple: Optional[float] = None,
+                    ambiguous: bool = False, best_tp_hit: Optional[int] = None,
+                    now: Optional[float] = None) -> None:
+    conn.execute(
+        """UPDATE levels SET outcome=?, resolved_at=?, resolve_price_krw=?,
+             judgment_mode=?, r_multiple=?, ambiguous=?, best_tp_hit=?
+           WHERE id=? AND outcome IS NULL""",
+        (outcome, now or time.time(), resolve_price_krw, judgment_mode,
+         r_multiple, 1 if ambiguous else 0, best_tp_hit, level_id),
+    )
+
+
+def get_author_self_stats(conn, author: str) -> dict:
+    """자체 적중 DB 기준 작성자 성적 (터치 후 판정 건만).
+    승 = hit + timeboxed_win, 패 = miss + timeboxed_loss."""
+    if not author:
+        return {"wins": 0, "losses": 0}
+    row = conn.execute(
+        """SELECT
+             SUM(CASE WHEN outcome IN ('hit','timeboxed_win') THEN 1 ELSE 0 END) AS w,
+             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l
+           FROM levels WHERE author=? AND outcome IS NOT NULL""",
+        (author,),
+    ).fetchone()
+    return {"wins": row["w"] or 0, "losses": row["l"] or 0}
+
+
+def record_ret(conn, level_id: int, field: str, value: float) -> None:
+    """터치 후 24h/72h 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지)."""
+    assert field in ("ret_24h", "ret_72h")
+    conn.execute(
+        f"UPDATE levels SET {field}=? WHERE id=? AND {field} IS NULL", (value, level_id)
     )
 
 

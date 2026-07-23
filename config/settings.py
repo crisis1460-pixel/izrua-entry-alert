@@ -42,9 +42,14 @@ SETTINGS = {
     # 네트워크
     "http_timeout_sec": 10.0,
 
-    # 파일 경로
-    "db_path": "cache/levels.db",
-    "universe_cache_path": "cache/universe.json",
+    # 적중 DB (2026-07-23 확정: ACCURACY_DB_PLAN.md)
+    "outcome_window_hours": 168,     # 터치 후 이 시간 내 미종결 시 타임박스 강제 종결
+    "r_clip_low": -1.0,              # R-멀티플 윈저라이즈 하한
+    "r_clip_high": 5.0,              # 상한
+
+    # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
+    "db_path": "data/levels.db",
+    "universe_cache_path": "data/universe.json",
 }
 
 

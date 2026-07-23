@@ -20,6 +20,10 @@ cache/
 *.sqlite3
 *.log
 logs/
+# 단, data/ 의 상태 파일은 커밋 대상 — 적중 DB 영속화(2026-07-23 결정, 커밋 히스토리=백업)
+!data/
+!data/levels.db
+!data/universe.json
 
 # 파이썬
 __pycache__/

@@ -39,9 +39,11 @@ with db.connect(TEST_DB) as conn:
 sent_messages = []
 telegram.send = lambda text: sent_messages.append(text) or True
 
-fake = {"price": None, "low": None}
+fake = {"price": None, "low": None, "high": None}
 upbit.fetch_prices = lambda mkts, t: {m: (USDT_KRW if m == "KRW-USDT" else fake["price"]) for m in mkts}
-upbit.fetch_low_since = lambda m, mins, t: fake["low"]
+upbit.fetch_range_since = lambda m, mins, t: (
+    None if fake["low"] is None and fake["high"] is None
+    else (fake["high"] or fake["price"], fake["low"] or fake["price"]))
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
 from monitor import binance
@@ -124,6 +126,56 @@ s7 = price_check.run_once(now + 360)
 with db.connect(TEST_DB) as conn:
     remaining = db.get_active_levels(conn)
 check("T7 상한 억제 + 상태전이 수행", s7["suppressed"] == 1 and s7["touches"] == 0 and len(remaining) == 0)
+
+# ── 적중판정 엔진 (ACCURACY_DB_PLAN 1단계) ──────────────────────
+def add_touched(coin, entry, sl, tp, touched_ago_sec, key):
+    with db.connect(TEST_DB) as conn:
+        lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
+                  entry_usd=entry, sl_usd=sl, tp_usd=tp, rr=None, grade="B", score=60,
+                  author=f"A_{key}", author_followers=100, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False, mcap_rank=50,
+                  mcap_tier_icon="🥇", post_url=f"https://tv.com/{key}",
+                  post_age_minutes=100, collected_at=now)
+        lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], lv["post_url"])
+        db.upsert_level(conn, lv)
+        row = conn.execute("SELECT id FROM levels WHERE signal_key=?", (lv["signal_key"],)).fetchone()
+        conn.execute("UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? WHERE id=?",
+                     (now - touched_ago_sec, entry * USDT_KRW, row["id"]))
+        return row["id"]
+
+def outcome_of(lid):
+    with db.connect(TEST_DB) as conn:
+        r = conn.execute("SELECT outcome, judgment_mode, r_multiple, ambiguous FROM levels WHERE id=?", (lid,)).fetchone()
+        return dict(r)
+
+# T8: TP 도달 → hit, R=+2 근처
+lid8 = add_touched("LINK", 10.0, 9.0, 12.0, 3600, "t8")
+fake["price"] = 12.1 * USDT_KRW; fake["low"] = 11.5 * USDT_KRW; fake["high"] = 12.2 * USDT_KRW
+price_check.run_once(now + 420)
+o8 = outcome_of(lid8)
+check("T8 판정 hit + R기록", o8["outcome"] == "hit" and o8["judgment_mode"] == "tp_sl"
+      and o8["r_multiple"] is not None and abs(o8["r_multiple"] - 2.0) < 0.01)
+
+# T9: SL 도달 → miss, R=-1
+lid9 = add_touched("LINK", 10.0, 9.0, 12.0, 3600, "t9")
+fake["price"] = 9.2 * USDT_KRW; fake["low"] = 8.9 * USDT_KRW; fake["high"] = 9.4 * USDT_KRW
+price_check.run_once(now + 540)
+o9 = outcome_of(lid9)
+check("T9 판정 miss + R=-1", o9["outcome"] == "miss" and abs(o9["r_multiple"] + 1.0) < 0.01)
+
+# T10: 같은 구간 TP·SL 동시 → 보수적 miss + ambiguous
+lid10 = add_touched("LINK", 10.0, 9.0, 12.0, 3600, "t10")
+fake["price"] = 10.0 * USDT_KRW; fake["low"] = 8.9 * USDT_KRW; fake["high"] = 12.2 * USDT_KRW
+price_check.run_once(now + 660)
+o10 = outcome_of(lid10)
+check("T10 동시터치 - miss+ambiguous", o10["outcome"] == "miss" and o10["ambiguous"] == 1)
+
+# T11: TP 없음 + 7일 경과 → 타임박스 승 판정
+lid11 = add_touched("LINK", 10.0, None, None, 8 * 86400, "t11")
+fake["price"] = 10.5 * USDT_KRW; fake["low"] = 10.3 * USDT_KRW; fake["high"] = 10.6 * USDT_KRW
+price_check.run_once(now + 780)
+o11 = outcome_of(lid11)
+check("T11 타임박스 7일 - win", o11["outcome"] == "timeboxed_win" and o11["judgment_mode"] == "timeboxed")
 
 print()
 print("── 본알림 실제 렌더링 ──")

@@ -14,6 +14,7 @@
 
 import html
 import logging
+import time
 
 import requests
 
@@ -90,6 +91,20 @@ def _fmt_age(minutes) -> str:
     return f"{minutes // 1440:.0f}일 전"
 
 
+def _fresh_age_min(level: dict):
+    """알림 시점 기준 글 나이(분). DB의 post_age_minutes 는 '수집 당시' 나이라
+    그대로 쓰면 낡는다(2026-07-23 WLD 사고: TV는 2일 전인데 알림은 1일 전) —
+    수집 시각(collected_at)에서 게시 시각을 역산해 지금 기준으로 재계산한다."""
+    age = level.get("post_age_minutes")
+    collected = level.get("collected_at")
+    if age is None:
+        return None
+    if not collected:
+        return age
+    published_epoch = collected - age * 60.0
+    return (time.time() - published_epoch) / 60.0
+
+
 def _fmt_followers(count) -> str:
     if not count or count <= 0:
         return ""
@@ -100,14 +115,29 @@ def _fmt_followers(count) -> str:
     return str(int(count))
 
 
+_SELF_STATS_MIN_N = 5  # 자체 표본이 이 이상일 때만 병기 (ACCURACY_DB_PLAN 2단계 발동 조건)
+
+
 def _author_block(rep: dict) -> list:
-    """작성자 라인 + 적중률 라인 (워쳐 스타일). 적중률 없으면 팔로워로 대체."""
+    """작성자 라인 + 적중률 라인 (워쳐 스타일 + 자체 적중 병기).
+    2026-07-23 카드4 확정: 워쳐(글 시점 기준)와 자체(터치 시점 기준)는 측정 기준이
+    달라 섞지 않고 병기. 자체 표본 5건 미만이면 표시하지 않음(조용한 누적)."""
     author = html.escape(rep.get("author") or "?")
     star = " ⭐⭐" if rep.get("author_whitelisted") else ""
     lines = [f"작성자: @{author}{star}"]
+
+    wins = rep.get("author_self_wins") or 0
+    losses = rep.get("author_self_losses") or 0
+    self_part = ""
+    if wins + losses >= _SELF_STATS_MIN_N:
+        self_part = f" · 자체 터치후 {wins}승{losses}패"
+
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
     if hit_rate is not None and hit_count:
-        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (총 {hit_count}건 기반)")
+        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (워쳐 {hit_count}건){self_part}")
+    elif self_part:
+        rate = wins / (wins + losses) * 100
+        lines.append(f"📊 자체 적중률(터치후): {wins}승{losses}패 ({rate:.0f}%)")
     elif rep.get("author_followers"):
         lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
     else:
@@ -148,7 +178,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     grade = f"{rep['grade']}등급" if rep.get("grade") else ""
 
     head_meta = " · ".join(x for x in [f"{tier} {rank}".strip(), grade,
-                                       _fmt_age(rep.get("post_age_minutes"))] if x)
+                                       _fmt_age(_fresh_age_min(rep))] if x)
 
     lines = [
         _SEP,
@@ -240,7 +270,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)
-    srcs = sorted(cluster, key=lambda l: l.get("post_age_minutes") or 1e12)
+    srcs = sorted(cluster, key=lambda l: _fresh_age_min(l) or 1e12)
     links = []
     for i, lv in enumerate(srcs[:5], 1):
         url = html.escape(lv.get("post_url") or "", quote=True)
