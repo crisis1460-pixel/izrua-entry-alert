@@ -17,7 +17,6 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from config import settings
 from monitor import upbit
@@ -28,26 +27,20 @@ logger = logging.getLogger("alert.price_check")
 
 _KST = timezone(timedelta(hours=9))
 
-# 직전 체크 시각은 DB가 아니라 임시 파일에 둔다(2026-07-23): DB에 넣으면 매 실행마다
-# DB가 바뀌어 커밋백이 2분마다 커밋을 쌓는다(하루 ~720개). Actions 러너는 매번 새
-# 체크아웃이라 이 파일이 없고 → 기본 12분 소급 창을 쓰는데, 2분 주기 + 1분봉 소급
-# 판정은 멱등이라(이미 터치된 레벨 재알림 없음) 겹침 창은 무해하다.
-_LAST_CHECK_FILE = Path("cache/last_check.txt")
-
-
-def _load_last_check():
+# 직전 체크 시각은 DB meta 에 저장한다(2026-07-24 감사 #3). 예전엔 cache/ 임시파일에
+# 뒀는데 커밋백 대상이 아니라 러너 재체크아웃마다 소실 → 소급창이 늘 기본값(45분)에
+# 고착돼 15분봉 다운타임 폴백이 사문화됐다. meta 는 data/levels.db 안이라 커밋백으로
+# 이어달리기된다. 갱신은 어차피 매 회차 다른 상태변화와 함께 커밋되므로 추가 소음 없음.
+def _load_last_check(conn):
     try:
-        return float(_LAST_CHECK_FILE.read_text().strip())
-    except (OSError, ValueError):
+        v = db.get_meta(conn, "last_check_at")
+        return float(v) if v else None
+    except (ValueError, TypeError):
         return None
 
 
-def _save_last_check(ts: float) -> None:
-    try:
-        _LAST_CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LAST_CHECK_FILE.write_text(str(ts))
-    except OSError:
-        pass
+def _save_last_check(conn, ts: float) -> None:
+    db.set_meta(conn, "last_check_at", str(ts))
 
 
 def _day_kst(now: float) -> str:
@@ -92,22 +85,28 @@ def run_once(now: float = None) -> dict:
 
         levels = db.get_active_levels(conn, direction="long")
         unresolved = db.get_unresolved_touched(conn)  # 적중판정 대상 (활성과 별개)
-        if not levels and not unresolved:
-            _save_last_check(now)
-            logger.info("[체크] 활성/판정 대상 레벨 없음")
+        ret_pending = db.get_ret_pending(conn)        # 24/72h 수익률 기록 대상 (종결 무관)
+        if not levels and not unresolved and not ret_pending:
+            _save_last_check(conn, now)
+            logger.info("[체크] 활성/판정/수익률 대상 레벨 없음")
             return summary
 
-        # 직전 체크 시각 → 소급 저가 판정 구간
-        last = _load_last_check()
+        # 직전 체크 시각 → 소급 저가 판정 구간. 2026-07-24 감사 #3: last_check 를
+        # data/meta 에 영속화(러너 재체크아웃에도 보존)해 실제 다운타임을 반영 →
+        # 200분 초과 시 15분봉 폴백이 실제로 발동한다(예전엔 항상 45분 고정이라 사문화).
+        last = _load_last_check(conn)
         since_min = int((now - last) / 60) + 2 if last else 45
 
         by_ticker: dict = {}
         for lv in levels:
             by_ticker.setdefault(lv["ticker"], []).append(lv)
 
-        # 시세는 활성 + 판정대상 티커 모두 — 활성 레벨이 사라진 코인의 미종결 건도
-        # 판정이 계속되도록 (2026-07-23 자체 발견 버그 수정)
-        markets = sorted(set(by_ticker.keys()) | {lv["ticker"] for lv in unresolved})
+        # 시세는 활성 + 미종결 + 수익률대기 티커 모두 — 활성 레벨이 사라진 코인의
+        # 미종결 건도 판정되고, 조기 종결 건도 24/72h 수익률이 유실되지 않도록
+        # (2026-07-24 감사 #1: ret 대기 티커 누락으로 조기종결 건 수익률 영구 NULL)
+        markets = sorted(set(by_ticker.keys())
+                         | {lv["ticker"] for lv in unresolved}
+                         | {lv["ticker"] for lv in ret_pending})
         prices = upbit.fetch_prices(markets + ["KRW-USDT"], cfg_get("http_timeout_sec"))
         usdt_krw = prices.get("KRW-USDT")
         if not usdt_krw:
@@ -251,7 +250,7 @@ def run_once(now: float = None) -> dict:
         summary["resolved"] = _judge_outcomes(
             conn, prices, usdt_krw, _get_range, now, cfg_get)
 
-        _save_last_check(now)
+        _save_last_check(conn, now)
 
     logger.info("[체크] 완료: %s", summary)
     return summary

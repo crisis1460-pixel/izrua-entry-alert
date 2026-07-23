@@ -69,7 +69,7 @@ jobs:
             # 바이너리 DB 충돌 시 -X ours = 우리 커밋(방금 수집분) 우선.
             # 동시 가격체크 커밋과 겹치면 드물게 상대 변경이 밀릴 수 있으나
             # 다음 회차에 상태가 수렴한다 (수집 기아보다 훨씬 작은 비용)
-            git pull --rebase -X ours origin main || { git rebase --abort; sleep 3; continue; }
+            git pull --rebase -X ours origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
             git push origin main && exit 0
             sleep 3
           done

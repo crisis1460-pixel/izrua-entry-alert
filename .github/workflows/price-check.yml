@@ -64,7 +64,7 @@ jobs:
           fi
           git commit -m "data: check $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
           for i in 1 2 3; do
-            git pull --rebase -X ours origin main || { git rebase --abort; sleep 3; continue; }
+            git pull --rebase -X ours origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
             git push origin main && exit 0
             sleep 3
           done

@@ -189,9 +189,13 @@ def reparse_all(conn) -> int:
     from collector.extractor import parse_setup, parse_timeframe_hours, judgment_window_hours
 
     changed = 0
+    # long 전용 sanity 라서 long 레벨만 재검증한다 (2026-07-24 감사 #4: 숏 레벨에
+    # long 규칙을 적용하면 유효한 숏 sl/tp 를 NULL 로 파괴). 이 봇은 long 만 알림하나
+    # DB 무결성을 위해 방향 한정.
     rows = conn.execute(
         "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text "
-        "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL"
+        "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
+        "AND direction='long'"
     ).fetchall()
     for r in rows:
         entry = r["entry_usd"]
