@@ -83,6 +83,9 @@ check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" in touch
 check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
       and "F&G: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
+check("T4 표기수정(2026-07-23)", "[엔트리 터치]" in touch_msg and "손절" not in touch_msg
+      and "평균 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg
+      and "$8.3 " in touch_msg)
 
 # T5: 터치된 클러스터는 재알림 없음, 7.50 별개 레벨은 아직 활성
 with db.connect(TEST_DB) as conn:

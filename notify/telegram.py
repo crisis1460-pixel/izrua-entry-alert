@@ -59,19 +59,15 @@ def send(text: str) -> bool:
 # ── 포맷 유틸 (워쳐 notifier.py 이식) ─────────────────────────────
 
 def _fmt_usd(value) -> str:
-    """가격대별 소수 자릿수 (워쳐 _format_price 동일)."""
+    """달러 표기 - 소수 1자리 (2026-07-23 사용자: 소수점 너무 길다, 한자리까지만).
+    단 $1 미만 코인은 1자리로 반올림하면 값 자체가 뭉개져($0.0888→$0.1) 유효숫자
+    3개만 남긴다 - '짧게'라는 취지 유지."""
     if value is None or value == 0:
         return "N/A"
     v = abs(value)
-    if v >= 100:
-        return f"{value:,.2f}"
     if v >= 1:
-        return f"{value:,.4f}"
-    if v >= 0.01:
-        return f"{value:.5f}"
-    if v >= 0.0001:
-        return f"{value:.7f}"
-    return f"{value:.9f}"
+        return f"{value:,.1f}"
+    return f"{value:.3g}"
 
 
 def _fmt_krw_paren(usd_value, usdt_krw) -> str:
@@ -111,7 +107,7 @@ def _author_block(rep: dict) -> list:
     lines = [f"작성자: @{author}{star}"]
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
     if hit_rate is not None and hit_count:
-        lines.append(f"📊 작성자 평균 적중률: {hit_rate * 100:.0f}% (총 {hit_count}건 기반)")
+        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (총 {hit_count}건 기반)")
     elif rep.get("author_followers"):
         lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
     else:
@@ -132,7 +128,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
 
     tier = rep.get("mcap_tier_icon") or ""
     rank = f"시총 {rep['mcap_rank']}위" if rep.get("mcap_rank") else ""
-    kind_kr = "🎯 <b>엔트리 터치</b>" if kind == "touch" else "⚠️ <b>엔트리 접근</b>"
+    kind_kr = "🎯 <b>[엔트리 터치]</b>" if kind == "touch" else "⚠️ <b>[엔트리 접근]</b>"
     grade = f"{rep['grade']}등급" if rep.get("grade") else ""
 
     head_meta = " · ".join(x for x in [f"{tier} {rank}".strip(), grade,
@@ -158,12 +154,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     elif entry_rep:
         lines.append(f"    엔트리  ${_fmt_usd(entry_rep)} {_fmt_krw_paren(entry_rep, usdt_krw)}")
 
-    sl, tp = rep.get("sl_usd"), rep.get("tp_usd")
-    if sl and entry_rep:
-        pct = (sl - entry_rep) / entry_rep * 100
-        lines.append(f"    손절  ${_fmt_usd(sl)} {_fmt_krw_paren(sl, usdt_krw)}  {pct:+.1f}%")
-    else:
-        lines.append("    손절  데이터 없음")
+    # 손절 행은 표시하지 않는다(2026-07-23 사용자 결정 - 데이터는 저장·R:R 계산에 계속 사용)
+    tp = rep.get("tp_usd")
     if tp and entry_rep:
         pct = (tp - entry_rep) / entry_rep * 100
         lines.append(f"    목표  ${_fmt_usd(tp)} {_fmt_krw_paren(tp, usdt_krw)}  {pct:+.1f}%")
