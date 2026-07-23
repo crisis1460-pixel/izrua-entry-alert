@@ -42,6 +42,10 @@ telegram.send = lambda text: sent_messages.append(text) or True
 fake = {"price": None, "low": None}
 upbit.fetch_prices = lambda mkts, t: {m: (USDT_KRW if m == "KRW-USDT" else fake["price"]) for m in mkts}
 upbit.fetch_low_since = lambda m, mins, t: fake["low"]
+upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
+upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
+from monitor import binance
+binance.fetch_usdt_price = lambda s, t: (fake["price"] / USDT_KRW) * 0.997  # 김프 +0.3%대
 
 # 시장심리는 네트워크 없이 고정값 (렌더링 검증 겸용)
 from monitor import market_sentiment
@@ -64,7 +68,7 @@ check("T1 원거리 - 무알림", s1["previews"] == 0 and s1["touches"] == 0 and
 # T2: +0.6% 접근 → 예고 1건 (클러스터 상단 8.30 기준)
 fake["price"] = 8.30 * USDT_KRW * 1.006
 s2 = price_check.run_once(now + 120)
-check("T2 접근 - 예고 1건", s2["previews"] == 1 and len(sent_messages) == 1 and "엔트리 접근" in sent_messages[0])
+check("T2 접근 - 예고 1건", s2["previews"] == 1 and len(sent_messages) == 1 and "진입가 접근" in sent_messages[0])
 
 # T3: 같은 조건 재체크 → 중복 예고 없음
 s3 = price_check.run_once(now + 180)
@@ -76,16 +80,22 @@ fake["low"] = 8.24 * USDT_KRW
 s4 = price_check.run_once(now + 240)
 touch_msg = sent_messages[-1]
 check("T4 터치 - 본알림 1건", s4["touches"] == 1 and len(sent_messages) == 2)
-check("T4 터치 헤더+존 표기", "엔트리 터치" in touch_msg and "엔트리 존" in touch_msg)
+check("T4 터치 헤더+진입가 표기", "진입가 터치" in touch_msg and "진입:" in touch_msg)
 check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and touch_msg.count("출처2") == 1
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
 check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" in touch_msg)
 check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
       and "F&G: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
-check("T4 표기수정(2026-07-23)", "[엔트리 터치]" in touch_msg and "손절" not in touch_msg
-      and "평균 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg
-      and "$8.3 " in touch_msg)
+check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not in touch_msg
+      and "평균 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg)
+check("T4 표기수정 최종(워쳐식 타점+원화단독)", "타점" in touch_msg and "현재:" in touch_msg
+      and "진입:" in touch_msg and "목표:" in touch_msg and "$" not in touch_msg
+      and "엔트리" not in touch_msg and "~" in touch_msg)
+check("T4 R:R삭제+거래순위+4칸정렬", "R:R" not in touch_msg and "    거래:  5위" in touch_msg
+      and "\n    현재:" in touch_msg and "\n    고가" in touch_msg)
+check("T4 김프+52주", "김프" in touch_msg and "52주" in touch_msg
+      and "고가" in touch_msg and "지점" in touch_msg)
 
 # T5: 터치된 클러스터는 재알림 없음, 7.50 별개 레벨은 아직 활성
 with db.connect(TEST_DB) as conn:

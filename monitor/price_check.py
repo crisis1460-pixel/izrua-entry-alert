@@ -109,6 +109,15 @@ def run_once(now: float = None) -> dict:
                 sentiment_cache["data"] = market_sentiment.get_sentiment(conn)
             return sentiment_cache["data"]
 
+        # 거래량 순위도 발송 시에만 1회 조회해 이번 회차 알림들이 공유 (조회 시점 기준)
+        vol_cache = {"loaded": False, "ranks": {}}
+
+        def _volume_ranks():
+            if not vol_cache["loaded"]:
+                vol_cache["loaded"] = True
+                vol_cache["ranks"] = upbit.fetch_volume_ranks(cfg_get("http_timeout_sec"))
+            return vol_cache["ranks"]
+
         for ticker, tlevels in by_ticker.items():
             current = prices.get(ticker)
             if not current:
@@ -147,8 +156,18 @@ def run_once(now: float = None) -> dict:
                     send_ok = False
 
                 if send_ok:
+                    # 52주 고저 + 김프는 발송 확정건에만 조회 (회당 업비트 1콜 + 바이낸스 1콜)
+                    from monitor import binance
+                    week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
+                    kimchi = None
+                    usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
+                    if usd_global and usd_global > 0 and usdt_krw:
+                        effective = current / usd_global
+                        kimchi = (effective - usdt_krw) / usdt_krw * 100
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
-                                                 sentiment=_sentiment())
+                                                 sentiment=_sentiment(), week52=week52,
+                                                 kimchi_pct=kimchi,
+                                                 volume_rank=_volume_ranks().get(ticker))
                     if telegram.send(text):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         summary["touches" if touched else "previews"] += 1

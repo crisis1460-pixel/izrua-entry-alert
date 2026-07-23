@@ -115,10 +115,26 @@ def _author_block(rep: dict) -> list:
     return lines
 
 
+def _vwidth(s: str) -> int:
+    """대략적 시각 폭 — 한글/CJK 는 2, 그 외 1 (모바일 한 줄 초과 판정용)."""
+    return sum(2 if ord(ch) > 0x1100 else 1 for ch in s)
+
+
+def _price_row(label: str, value: str, wrap_limit: int = 34) -> list:
+    """'라벨: 값' 한 줄 — 폭 초과가 예상되면 라벨 줄 아래 4칸 들여쓰기로 값 줄을
+    내린다(2026-07-23 사용자 지시 #8: 진입가 범위처럼 긴 값이 중간에서 꺾이는 것 방지)."""
+    one = f"{label} {value}"
+    if _vwidth(one) <= wrap_limit:
+        return [one]
+    return [label, f"    {value}"]
+
+
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
-                 usdt_krw: float, sentiment: dict = None) -> str:
+                 usdt_krw: float, sentiment: dict = None, week52: tuple = None,
+                 kimchi_pct: float = None, volume_rank: int = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
-    sentiment: {btc_dominance, fear_greed, fear_greed_label, altcoin_season_index}|None"""
+    sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
+    kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None."""
     rep = max(cluster, key=lambda l: l.get("score") or 0)
     current_usd = (current_krw / usdt_krw) if (current_krw and usdt_krw) else None
 
@@ -128,7 +144,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
 
     tier = rep.get("mcap_tier_icon") or ""
     rank = f"시총 {rep['mcap_rank']}위" if rep.get("mcap_rank") else ""
-    kind_kr = "🎯 <b>[엔트리 터치]</b>" if kind == "touch" else "⚠️ <b>[엔트리 접근]</b>"
+    kind_kr = "🎯 <b>[진입가 터치]</b>" if kind == "touch" else "⚠️ <b>[진입가 접근]</b>"
     grade = f"{rep['grade']}등급" if rep.get("grade") else ""
 
     head_meta = " · ".join(x for x in [f"{tier} {rank}".strip(), grade,
@@ -142,48 +158,61 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     lines.extend(_author_block(rep))
     lines.append(_SEP)
 
-    # ── 타점 (워쳐 동일: 현재 → 엔트리 → 손절 → 목표, 들여쓰기 4칸) ──
+    # ── 타점 (워쳐식 복귀 + 원화 단독 표기, 2026-07-23 사용자 최종 확정:
+    #    터치 시점엔 어차피 현재가≈진입가라 달러 병기가 불필요 — 원화만 한 줄씩) ──
+    def _krw(usd_value):
+        if not usd_value or not usdt_krw:
+            return None
+        v = usd_value * usdt_krw
+        return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+
+    # 들여쓰기 4칸 = 52주 블록의 고가/저가 행과 시작 위치 정렬 (2026-07-23 사용자 지시).
+    # R:R 행은 삭제(사용자가 직접 판단) — 그 자리에 거래량 순위.
     lines.append("타점")
     if current_usd:
-        lines.append(f"    현재  ${_fmt_usd(current_usd)} {_fmt_krw_paren(current_usd, usdt_krw)}")
+        lines.append(f"    현재:  {_krw(current_usd)}원")
     if lo is not None and hi is not None and hi > lo:
-        lines.append(
-            f"    엔트리 존  ${_fmt_usd(lo)}~${_fmt_usd(hi)} "
-            f"{_fmt_krw_paren(lo, usdt_krw)}~{_fmt_krw_paren(hi, usdt_krw)}"
-        )
+        lines.append(f"    진입:  {_krw(lo)}~{_krw(hi)}원")
     elif entry_rep:
-        lines.append(f"    엔트리  ${_fmt_usd(entry_rep)} {_fmt_krw_paren(entry_rep, usdt_krw)}")
-
-    # 손절 행은 표시하지 않는다(2026-07-23 사용자 결정 - 데이터는 저장·R:R 계산에 계속 사용)
+        lines.append(f"    진입:  {_krw(entry_rep)}원")
+    # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)
     tp = rep.get("tp_usd")
     if tp and entry_rep:
         pct = (tp - entry_rep) / entry_rep * 100
-        lines.append(f"    목표  ${_fmt_usd(tp)} {_fmt_krw_paren(tp, usdt_krw)}  {pct:+.1f}%")
+        lines.append(f"    목표:  {_krw(tp)}원  ({pct:+.1f}%)")
     else:
-        lines.append("    목표  데이터 없음")
+        lines.append("    목표:  데이터 없음")
+    if volume_rank:
+        lines.append(f"    거래:  {volume_rank}위")
 
-    # R:R (워쳐 라벨 체계)
-    rr = rep.get("rr")
-    if rr and rr > 0:
-        if rr >= 5:
-            rr_label = "🔥 (매우 좋음)"
-        elif rr >= 3:
-            rr_label = "✅ (좋음)"
-        elif rr >= 2:
-            rr_label = "✅ (권장)"
-        elif rr >= 1.5:
-            rr_label = "(보통)"
-        elif rr >= 1:
-            rr_label = "⚠️ (위험)"
-        else:
-            rr_label = "🚫 (매매 비추)"
-        lines.append(f"📊 R:R 1:{rr:.2f} {rr_label}")
-    else:
-        lines.append("📊 R:R 데이터 부족")
+    # ── 52주 고저 + 현재 위치 바 (워쳐 notifier.py 표기 그대로, 2026-07-23 #9) ──
+    if week52 and current_krw:
+        high52, low52 = week52
+        if high52 and low52 and high52 > 0 and low52 > 0:
+            from_high = (current_krw - high52) / high52 * 100
+            from_low = (current_krw - low52) / low52 * 100
+            lines.append("")
+            lines.append("52주")
+            lines.append(f"    고가  {from_high:+.1f}% ({high52:,.0f}원)")
+            lines.append(f"    저가  {from_low:+.1f}% ({low52:,.0f}원)")
+            if high52 > low52:
+                pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
+                filled = max(1, min(10, round(pos / 10)))
+                lines.append("")
+                lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
+                lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
-    # ── 시장 심리 (워쳐 표기 그대로: BTC.D 행 / ALT.S 행 / F&G 행) ──
-    if sentiment:
+    # ── 시장 심리 (워쳐 표기 그대로: 김프 행 → BTC.D 행 / ALT.S 행 / F&G 행) ──
+    if sentiment or kimchi_pct is not None:
         lines.append(_SEP)
+    if kimchi_pct is not None:
+        if abs(kimchi_pct) < 0.01:
+            lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%)")
+        elif kimchi_pct > 0:
+            lines.append(f"🌶️ 김프 {kimchi_pct:+.2f}%")
+        else:
+            lines.append(f"❄️ 김프 {kimchi_pct:+.2f}%")
+    if sentiment:
         btc_d = sentiment.get("btc_dominance")
         alt_s = sentiment.get("altcoin_season_index")
         fng = sentiment.get("fear_greed")
