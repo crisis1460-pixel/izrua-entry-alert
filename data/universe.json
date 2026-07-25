@@ -1,12 +1,12 @@
 {
-  "updated_at": 1784847641.5696728,
+  "updated_at": 1784948443.6456487,
   "universe": [
     {
       "symbol": "BTC",
       "ticker": "KRW-BTC",
       "rank": 1,
       "name": "Bitcoin",
-      "price_usd": 65147,
+      "price_usd": 63968,
       "tier_icon": "💎"
     },
     {
@@ -14,7 +14,7 @@
       "ticker": "KRW-ETH",
       "rank": 2,
       "name": "Ethereum",
-      "price_usd": 1882.31,
+      "price_usd": 1857.27,
       "tier_icon": "💎"
     },
     {
@@ -22,7 +22,7 @@
       "ticker": "KRW-XRP",
       "rank": 6,
       "name": "XRP",
-      "price_usd": 1.11,
+      "price_usd": 1.092,
       "tier_icon": "💎"
     },
     {
@@ -30,7 +30,7 @@
       "ticker": "KRW-SOL",
       "rank": 7,
       "name": "Solana",
-      "price_usd": 76.13,
+      "price_usd": 74.02,
       "tier_icon": "💎"
     },
     {
@@ -38,7 +38,7 @@
       "ticker": "KRW-TRX",
       "rank": 8,
       "name": "TRON",
-      "price_usd": 0.328423,
+      "price_usd": 0.330875,
       "tier_icon": "💎"
     },
     {
@@ -46,7 +46,7 @@
       "ticker": "KRW-DOGE",
       "rank": 11,
       "name": "Dogecoin",
-      "price_usd": 0.069507,
+      "price_usd": 0.069557,
       "tier_icon": "🥇"
     },
     {
@@ -54,31 +54,31 @@
       "ticker": "KRW-LINK",
       "rank": 18,
       "name": "Chainlink",
-      "price_usd": 8.47,
-      "tier_icon": "🥇"
-    },
-    {
-      "symbol": "ADA",
-      "ticker": "KRW-ADA",
-      "rank": 19,
-      "name": "Cardano",
-      "price_usd": 0.169042,
+      "price_usd": 8.33,
       "tier_icon": "🥇"
     },
     {
       "symbol": "XLM",
       "ticker": "KRW-XLM",
-      "rank": 20,
+      "rank": 19,
       "name": "Stellar",
-      "price_usd": 0.182503,
+      "price_usd": 0.17895,
+      "tier_icon": "🥇"
+    },
+    {
+      "symbol": "ADA",
+      "ticker": "KRW-ADA",
+      "rank": 20,
+      "name": "Cardano",
+      "price_usd": 0.163861,
       "tier_icon": "🥇"
     },
     {
       "symbol": "CC",
       "ticker": "KRW-CC",
-      "rank": 21,
+      "rank": 22,
       "name": "Canton",
-      "price_usd": 0.122483,
+      "price_usd": 0.116295,
       "tier_icon": "🥇"
     },
     {
@@ -86,7 +86,7 @@
       "ticker": "KRW-BCH",
       "rank": 23,
       "name": "Bitcoin Cash",
-      "price_usd": 211.81,
+      "price_usd": 210.32,
       "tier_icon": "🥇"
     },
     {
@@ -94,7 +94,7 @@
       "ticker": "KRW-USD1",
       "rank": 24,
       "name": "USD1",
-      "price_usd": 0.999046,
+      "price_usd": 0.998648,
       "tier_icon": "🥇"
     },
     {
@@ -102,15 +102,15 @@
       "ticker": "KRW-HBAR",
       "rank": 29,
       "name": "Hedera",
-      "price_usd": 0.071317,
+      "price_usd": 0.07053,
       "tier_icon": "🥇"
     },
     {
       "symbol": "SUI",
       "ticker": "KRW-SUI",
-      "rank": 30,
+      "rank": 31,
       "name": "Sui",
-      "price_usd": 0.747355,
+      "price_usd": 0.710718,
       "tier_icon": "🥇"
     },
     {
@@ -118,111 +118,111 @@
       "ticker": "KRW-AVAX",
       "rank": 32,
       "name": "Avalanche",
-      "price_usd": 6.3,
+      "price_usd": 6.25,
       "tier_icon": "🥇"
     },
     {
       "symbol": "CRO",
       "ticker": "KRW-CRO",
-      "rank": 34,
+      "rank": 33,
       "name": "Cronos",
-      "price_usd": 0.056953,
-      "tier_icon": "🥇"
-    },
-    {
-      "symbol": "XAUT",
-      "ticker": "KRW-XAUT",
-      "rank": 36,
-      "name": "Tether Gold",
-      "price_usd": 4046.08,
-      "tier_icon": "🥇"
-    },
-    {
-      "symbol": "NEAR",
-      "ticker": "KRW-NEAR",
-      "rank": 37,
-      "name": "NEAR Protocol",
-      "price_usd": 1.89,
+      "price_usd": 0.057027,
       "tier_icon": "🥇"
     },
     {
       "symbol": "SHIB",
       "ticker": "KRW-SHIB",
-      "rank": 38,
+      "rank": 36,
       "name": "Shiba Inu",
-      "price_usd": 4.14e-06,
+      "price_usd": 4.21e-06,
+      "tier_icon": "🥇"
+    },
+    {
+      "symbol": "XAUT",
+      "ticker": "KRW-XAUT",
+      "rank": 37,
+      "name": "Tether Gold",
+      "price_usd": 4049.44,
       "tier_icon": "🥇"
     },
     {
       "symbol": "UNI",
       "ticker": "KRW-UNI",
-      "rank": 39,
+      "rank": 38,
       "name": "Uniswap",
-      "price_usd": 3.76,
+      "price_usd": 3.75,
       "tier_icon": "🥇"
     },
     {
-      "symbol": "ONDO",
-      "ticker": "KRW-ONDO",
-      "rank": 41,
-      "name": "Ondo",
-      "price_usd": 0.402752,
+      "symbol": "NEAR",
+      "ticker": "KRW-NEAR",
+      "rank": 39,
+      "name": "NEAR Protocol",
+      "price_usd": 1.8,
       "tier_icon": "🥇"
     },
     {
       "symbol": "TAO",
       "ticker": "KRW-TAO",
-      "rank": 42,
+      "rank": 41,
       "name": "Bittensor",
-      "price_usd": 193.18,
+      "price_usd": 191.24,
+      "tier_icon": "🥇"
+    },
+    {
+      "symbol": "ONDO",
+      "ticker": "KRW-ONDO",
+      "rank": 42,
+      "name": "Ondo",
+      "price_usd": 0.376537,
       "tier_icon": "🥇"
     },
     {
       "symbol": "WLFI",
       "ticker": "KRW-WLFI",
-      "rank": 43,
+      "rank": 44,
       "name": "World Liberty Financial",
-      "price_usd": 0.057644,
+      "price_usd": 0.056647,
       "tier_icon": "🥇"
     },
     {
       "symbol": "AAVE",
       "ticker": "KRW-AAVE",
-      "rank": 51,
-      "name": "Aave",
-      "price_usd": 95.71,
-      "tier_icon": "🥈"
-    },
-    {
-      "symbol": "SKY",
-      "ticker": "KRW-SKY",
       "rank": 52,
-      "name": "Sky",
-      "price_usd": 0.061314,
+      "name": "Aave",
+      "price_usd": 91.0,
       "tier_icon": "🥈"
     },
     {
       "symbol": "DOT",
       "ticker": "KRW-DOT",
-      "rank": 54,
+      "rank": 53,
       "name": "Polkadot",
-      "price_usd": 0.816512,
-      "tier_icon": "🥈"
-    },
-    {
-      "symbol": "WLD",
-      "ticker": "KRW-WLD",
-      "rank": 55,
-      "name": "Worldcoin",
-      "price_usd": 0.384413,
+      "price_usd": 0.808583,
       "tier_icon": "🥈"
     },
     {
       "symbol": "MNT",
       "ticker": "KRW-MNT",
-      "rank": 56,
+      "rank": 54,
       "name": "Mantle",
-      "price_usd": 0.407309,
+      "price_usd": 0.409817,
+      "tier_icon": "🥈"
+    },
+    {
+      "symbol": "SKY",
+      "ticker": "KRW-SKY",
+      "rank": 55,
+      "name": "Sky",
+      "price_usd": 0.057292,
+      "tier_icon": "🥈"
+    },
+    {
+      "symbol": "WLD",
+      "ticker": "KRW-WLD",
+      "rank": 57,
+      "name": "Worldcoin",
+      "price_usd": 0.344975,
       "tier_icon": "🥈"
     },
     {
@@ -230,23 +230,23 @@
       "ticker": "KRW-ICP",
       "rank": 59,
       "name": "Internet Computer",
-      "price_usd": 2.16,
+      "price_usd": 2.12,
       "tier_icon": "🥈"
     },
     {
       "symbol": "PEPE",
       "ticker": "KRW-PEPE",
-      "rank": 60,
+      "rank": 61,
       "name": "Pepe",
-      "price_usd": 2.78e-06,
+      "price_usd": 2.71e-06,
       "tier_icon": "🥈"
     },
     {
       "symbol": "ETC",
       "ticker": "KRW-ETC",
-      "rank": 63,
+      "rank": 64,
       "name": "Ethereum Classic",
-      "price_usd": 6.84,
+      "price_usd": 6.55,
       "tier_icon": "🥈"
     },
     {
@@ -254,15 +254,15 @@
       "ticker": "KRW-ENA",
       "rank": 74,
       "name": "Ethena",
-      "price_usd": 0.089041,
+      "price_usd": 0.087778,
       "tier_icon": "🥈"
     },
     {
       "symbol": "JST",
       "ticker": "KRW-JST",
-      "rank": 76,
+      "rank": 75,
       "name": "JUST",
-      "price_usd": 0.10059,
+      "price_usd": 0.101955,
       "tier_icon": "🥈"
     },
     {
@@ -270,31 +270,31 @@
       "ticker": "KRW-POL",
       "rank": 77,
       "name": "POL (ex-MATIC)",
-      "price_usd": 0.076197,
-      "tier_icon": "🥈"
-    },
-    {
-      "symbol": "RENDER",
-      "ticker": "KRW-RENDER",
-      "rank": 79,
-      "name": "Render",
-      "price_usd": 1.48,
+      "price_usd": 0.07677,
       "tier_icon": "🥈"
     },
     {
       "symbol": "ALGO",
       "ticker": "KRW-ALGO",
-      "rank": 80,
+      "rank": 78,
       "name": "Algorand",
-      "price_usd": 0.083423,
+      "price_usd": 0.08518,
+      "tier_icon": "🥈"
+    },
+    {
+      "symbol": "RENDER",
+      "ticker": "KRW-RENDER",
+      "rank": 80,
+      "name": "Render",
+      "price_usd": 1.46,
       "tier_icon": "🥈"
     },
     {
       "symbol": "ATOM",
       "ticker": "KRW-ATOM",
-      "rank": 81,
+      "rank": 82,
       "name": "Cosmos Hub",
-      "price_usd": 1.42,
+      "price_usd": 1.39,
       "tier_icon": "🥈"
     },
     {
@@ -302,7 +302,7 @@
       "ticker": "KRW-PUMP",
       "rank": 83,
       "name": "Pump.fun",
-      "price_usd": 0.00184024,
+      "price_usd": 0.00180706,
       "tier_icon": "🥈"
     },
     {
@@ -310,71 +310,71 @@
       "ticker": "KRW-JUP",
       "rank": 89,
       "name": "Jupiter",
-      "price_usd": 0.187426,
-      "tier_icon": "🥈"
-    },
-    {
-      "symbol": "FIL",
-      "ticker": "KRW-FIL",
-      "rank": 90,
-      "name": "Filecoin",
-      "price_usd": 0.728067,
-      "tier_icon": "🥈"
-    },
-    {
-      "symbol": "ARB",
-      "ticker": "KRW-ARB",
-      "rank": 92,
-      "name": "Arbitrum",
-      "price_usd": 0.086373,
+      "price_usd": 0.186494,
       "tier_icon": "🥈"
     },
     {
       "symbol": "VVV",
       "ticker": "KRW-VVV",
-      "rank": 93,
+      "rank": 91,
       "name": "Venice Token",
-      "price_usd": 11.87,
+      "price_usd": 12.4,
       "tier_icon": "🥈"
     },
     {
-      "symbol": "APT",
-      "ticker": "KRW-APT",
-      "rank": 99,
-      "name": "Aptos",
-      "price_usd": 0.617956,
+      "symbol": "FIL",
+      "ticker": "KRW-FIL",
+      "rank": 92,
+      "name": "Filecoin",
+      "price_usd": 0.720015,
+      "tier_icon": "🥈"
+    },
+    {
+      "symbol": "ARB",
+      "ticker": "KRW-ARB",
+      "rank": 96,
+      "name": "Arbitrum",
+      "price_usd": 0.082172,
       "tier_icon": "🥈"
     },
     {
       "symbol": "INJ",
       "ticker": "KRW-INJ",
-      "rank": 100,
+      "rank": 97,
       "name": "Injective",
-      "price_usd": 5.17,
+      "price_usd": 5.28,
+      "tier_icon": "🥈"
+    },
+    {
+      "symbol": "APT",
+      "ticker": "KRW-APT",
+      "rank": 100,
+      "name": "Aptos",
+      "price_usd": 0.601078,
       "tier_icon": "🥈"
     },
     {
       "symbol": "ETHFI",
       "ticker": "KRW-ETHFI",
-      "rank": 106,
+      "rank": 109,
       "name": "Ether.fi",
-      "price_usd": 0.452807,
+      "price_usd": 0.41773,
       "tier_icon": "🥉"
     },
     {
       "symbol": "AERO",
       "ticker": "KRW-AERO",
-      "rank": 109,
+      "rank": 110,
       "name": "Aerodrome Finance",
-      "price_usd": 0.424654,
+      "price_usd": 0.416626,
       "tier_icon": "🥉"
     },
     {
       "symbol": "VET",
       "ticker": "KRW-VET",
-      "rank": 110,
+      "rank": 111,
       "name": "VeChain",
-      "price_usd": 0.00478263,
+      "price_usd": 0.00467181,
       "tier_icon": "🥉"
     },
     {
@@ -382,39 +382,39 @@
       "ticker": "KRW-VIRTUAL",
       "rank": 112,
       "name": "Virtuals Protocol",
-      "price_usd": 0.613725,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "PENGU",
-      "ticker": "KRW-PENGU",
-      "rank": 113,
-      "name": "Pudgy Penguins",
-      "price_usd": 0.00608304,
+      "price_usd": 0.586156,
       "tier_icon": "🥉"
     },
     {
       "symbol": "TRUMP",
       "ticker": "KRW-TRUMP",
-      "rank": 114,
+      "rank": 113,
       "name": "Official Trump",
-      "price_usd": 1.61,
+      "price_usd": 1.56,
       "tier_icon": "🥉"
     },
     {
-      "symbol": "PYTH",
-      "ticker": "KRW-PYTH",
-      "rank": 115,
-      "name": "Pyth Network",
-      "price_usd": 0.04574122,
+      "symbol": "PENGU",
+      "ticker": "KRW-PENGU",
+      "rank": 114,
+      "name": "Pudgy Penguins",
+      "price_usd": 0.00601636,
       "tier_icon": "🥉"
     },
     {
       "symbol": "SUN",
       "ticker": "KRW-SUN",
-      "rank": 118,
+      "rank": 116,
       "name": "Sun Token",
-      "price_usd": 0.01833682,
+      "price_usd": 0.01835917,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "PYTH",
+      "ticker": "KRW-PYTH",
+      "rank": 117,
+      "name": "Pyth Network",
+      "price_usd": 0.04424288,
       "tier_icon": "🥉"
     },
     {
@@ -422,7 +422,7 @@
       "ticker": "KRW-TIA",
       "rank": 121,
       "name": "Celestia",
-      "price_usd": 0.34813,
+      "price_usd": 0.342387,
       "tier_icon": "🥉"
     },
     {
@@ -430,159 +430,143 @@
       "ticker": "KRW-SPX",
       "rank": 125,
       "name": "SPX6900",
-      "price_usd": 0.344951,
+      "price_usd": 0.330602,
       "tier_icon": "🥉"
     },
     {
       "symbol": "JTO",
       "ticker": "KRW-JTO",
-      "rank": 126,
+      "rank": 127,
       "name": "Jito",
-      "price_usd": 0.625385,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "SEI",
-      "ticker": "KRW-SEI",
-      "rank": 128,
-      "name": "Sei",
-      "price_usd": 0.04565484,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "STX",
-      "ticker": "KRW-STX",
-      "rank": 130,
-      "name": "Stacks",
-      "price_usd": 0.164302,
+      "price_usd": 0.604192,
       "tier_icon": "🥉"
     },
     {
       "symbol": "ZRO",
       "ticker": "KRW-ZRO",
-      "rank": 133,
+      "rank": 128,
       "name": "LayerZero",
-      "price_usd": 0.791559,
+      "price_usd": 0.858415,
       "tier_icon": "🥉"
     },
     {
-      "symbol": "PENDLE",
-      "ticker": "KRW-PENDLE",
-      "rank": 136,
-      "name": "Pendle",
-      "price_usd": 1.58,
+      "symbol": "SEI",
+      "ticker": "KRW-SEI",
+      "rank": 130,
+      "name": "Sei",
+      "price_usd": 0.04367776,
       "tier_icon": "🥉"
     },
     {
       "symbol": "BSV",
       "ticker": "KRW-BSV",
-      "rank": 137,
+      "rank": 136,
       "name": "Bitcoin SV",
-      "price_usd": 13.44,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "KITE",
-      "ticker": "KRW-KITE",
-      "rank": 138,
-      "name": "Kite",
-      "price_usd": 0.112597,
+      "price_usd": 13.18,
       "tier_icon": "🥉"
     },
     {
       "symbol": "BTT",
       "ticker": "KRW-BTT",
-      "rank": 139,
+      "rank": 137,
       "name": "BitTorrent",
-      "price_usd": 2.70458e-07,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "MON",
-      "ticker": "KRW-MON",
-      "rank": 140,
-      "name": "Monad",
-      "price_usd": 0.02241028,
+      "price_usd": 2.66354e-07,
       "tier_icon": "🥉"
     },
     {
       "symbol": "BONK",
       "ticker": "KRW-BONK",
-      "rank": 142,
+      "rank": 138,
       "name": "Bonk",
-      "price_usd": 2.9e-06,
+      "price_usd": 2.95e-06,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "KITE",
+      "ticker": "KRW-KITE",
+      "rank": 139,
+      "name": "Kite",
+      "price_usd": 0.107765,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "STX",
+      "ticker": "KRW-STX",
+      "rank": 140,
+      "name": "Stacks",
+      "price_usd": 0.13848,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "PENDLE",
+      "ticker": "KRW-PENDLE",
+      "rank": 141,
+      "name": "Pendle",
+      "price_usd": 1.47,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "MON",
+      "ticker": "KRW-MON",
+      "rank": 142,
+      "name": "Monad",
+      "price_usd": 0.02135846,
       "tier_icon": "🥉"
     },
     {
       "symbol": "XTZ",
       "ticker": "KRW-XTZ",
-      "rank": 143,
+      "rank": 145,
       "name": "Tezos",
-      "price_usd": 0.233324,
+      "price_usd": 0.22632,
       "tier_icon": "🥉"
-    },
-    {
-      "symbol": "IMX",
-      "ticker": "KRW-IMX",
-      "rank": 255,
-      "name": "Immutable",
-      "price_usd": 0.125499,
-      "tier_icon": "·"
     },
     {
       "symbol": "KAITO",
       "ticker": "KRW-KAITO",
-      "rank": 145,
+      "rank": 148,
       "name": "KAITO",
-      "price_usd": 1.037,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "SYRUP",
-      "ticker": "KRW-SYRUP",
-      "rank": 160,
-      "name": "Maple Finance",
-      "price_usd": 0.176896,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "2Z",
-      "ticker": "KRW-2Z",
-      "rank": 155,
-      "name": "DoubleZero",
-      "price_usd": 0.061765,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "OP",
-      "ticker": "KRW-OP",
-      "rank": 157,
-      "name": "Optimism",
-      "price_usd": 0.092821,
+      "price_usd": 0.93992,
       "tier_icon": "🥉"
     },
     {
       "symbol": "XPL",
       "ticker": "KRW-XPL",
-      "rank": 159,
+      "rank": 149,
       "name": "Plasma",
-      "price_usd": 0.08102,
+      "price_usd": 0.083204,
       "tier_icon": "🥉"
     },
     {
-      "symbol": "ENS",
-      "ticker": "KRW-ENS",
-      "rank": 175,
-      "name": "Ethereum Name Service",
-      "price_usd": 4.43,
+      "symbol": "2Z",
+      "ticker": "KRW-2Z",
+      "rank": 153,
+      "name": "DoubleZero",
+      "price_usd": 0.062119,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "OP",
+      "ticker": "KRW-OP",
+      "rank": 159,
+      "name": "Optimism",
+      "price_usd": 0.091922,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "SYRUP",
+      "ticker": "KRW-SYRUP",
+      "rank": 164,
+      "name": "Maple Finance",
+      "price_usd": 0.172504,
       "tier_icon": "🥉"
     },
     {
       "symbol": "PIEVERSE",
       "ticker": "KRW-PIEVERSE",
-      "rank": 176,
+      "rank": 174,
       "name": "Pieverse",
-      "price_usd": 0.658842,
+      "price_usd": 0.667765,
       "tier_icon": "🥉"
     },
     {
@@ -590,31 +574,39 @@
       "ticker": "KRW-FF",
       "rank": 177,
       "name": "Falcon Finance",
-      "price_usd": 0.060632,
+      "price_usd": 0.06043,
       "tier_icon": "🥉"
     },
     {
-      "symbol": "COMP",
-      "ticker": "KRW-COMP",
-      "rank": 183,
-      "name": "Compound",
-      "price_usd": 17.51,
-      "tier_icon": "🥉"
-    },
-    {
-      "symbol": "RAY",
-      "ticker": "KRW-RAY",
-      "rank": 180,
-      "name": "Raydium",
-      "price_usd": 0.642453,
+      "symbol": "ENS",
+      "ticker": "KRW-ENS",
+      "rank": 178,
+      "name": "Ethereum Name Service",
+      "price_usd": 4.29,
       "tier_icon": "🥉"
     },
     {
       "symbol": "GRT",
       "ticker": "KRW-GRT",
-      "rank": 181,
+      "rank": 180,
       "name": "The Graph",
-      "price_usd": 0.01589822,
+      "price_usd": 0.01571695,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "RAY",
+      "ticker": "KRW-RAY",
+      "rank": 181,
+      "name": "Raydium",
+      "price_usd": 0.624093,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "COMP",
+      "ticker": "KRW-COMP",
+      "rank": 182,
+      "name": "Compound",
+      "price_usd": 17.17,
       "tier_icon": "🥉"
     },
     {
@@ -622,15 +614,23 @@
       "ticker": "KRW-IOTA",
       "rank": 188,
       "name": "IOTA",
-      "price_usd": 0.03505941,
+      "price_usd": 0.03441995,
       "tier_icon": "🥉"
     },
     {
       "symbol": "AXS",
       "ticker": "KRW-AXS",
-      "rank": 189,
+      "rank": 192,
       "name": "Axie Infinity",
-      "price_usd": 0.899933,
+      "price_usd": 0.885451,
+      "tier_icon": "🥉"
+    },
+    {
+      "symbol": "CHZ",
+      "ticker": "KRW-CHZ",
+      "rank": 196,
+      "name": "Chiliz",
+      "price_usd": 0.01399374,
       "tier_icon": "🥉"
     }
   ]
