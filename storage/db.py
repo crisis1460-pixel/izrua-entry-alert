@@ -319,7 +319,7 @@ def reparse_all(conn) -> int:
 def get_active_levels(conn, direction: Optional[str] = "long") -> list:
     """감시 중(watching/previewed)인 레벨. 기본은 long 만 (하향 터치 알림 대상).
 
-    게시 나이 게이트를 여기 두지 않는 이유: price_check.run_once 가 매 회차
+    나이 게이트를 여기 따로 두지 않는 이유: price_check.run_once 가 매 회차
     이 조회 직전에 expire_old 를 부르므로(2026-07-27 확인) 만료 대상은 이미
     status='expired' 로 빠져 있다. 같은 조건을 두 곳에 두면 규칙 출처가 갈린다."""
     q = "SELECT * FROM levels WHERE status IN ('watching','previewed')"
@@ -734,33 +734,33 @@ def record_ret(conn, level_id: int, field: str, value: float) -> None:
     )
 
 
-# 게시 시각 추정식 — 수집 시각에서 '수집 당시 글 나이'를 빼면 원 게시 시각이 된다.
-# post_age_minutes 가 없는 구세대/파싱실패 행은 0 으로 봐서 예전(수집 기준) 동작을
-# 그대로 유지한다(만료를 앞당겨 조용히 지우는 쪽이 더 위험하다).
-_PUBLISHED_AT_SQL = "(collected_at - COALESCE(post_age_minutes, 0) * 60)"
-
-
 def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
-    """게시 후 max_age_sec 지난 미터치 레벨을 expired 처리. 반환: 만료 건수.
+    """수집 후 max_age_sec 지난 미터치 레벨을 expired 처리. 반환: 만료 건수.
 
-    2026-07-27 수리 — 기준을 collected_at 에서 '게시 시각'으로 옮겼다. 확정 규칙은
-    "게시 7일 만료"인데 수집 시각 기준이면 수명이 게시일이 아니라 '우리가 언제
-    주웠나'에 좌우된다: 6.9일 된 글을 수집하면 거기서 7일을 더 살아 최대 14일까지
-    알림을 낸다(실전: XTZ 가 게시 10.5일 만에 터치 본알림 — 활성 33건 중 5건이
-    이미 7일 초과 상태였다). 수집 게이트(max_post_age_hours=168)와 만료가 같은
-    시간축을 보게 되어 "7일 이내 글만, 게시 7일까지만"이 실제로 성립한다."""
+    ⚠️ 기준은 '수집 시각'이다 — 게시 시각으로 바꾸지 말 것 (2026-07-27 실측 검증).
+    HANDOFF 가 오래 "게시 7일 만료"로 적어와 한 번 게시 기준으로 바꿨다가 되돌렸다.
+    근거:
+      · 실제 터치 67건 중 9건(13.4%)이 게시 후 7일을 넘겨 터치됐고, 그 9건 전부
+        수집 당시 이미 5.4~6.6일 된 글이었다. 즉 '오래 묵은 셋업'이 아니라
+        우리가 늦게 주운 글이고, 수집 시점부터는 0.5~4.0일 만에 터치했다.
+      · 늦은 터치가 성적이 나쁘지도 않다(게시 7일+ 승률 50%·평균 -0.21R vs
+        0~3일 48%·-0.69R). 잘라낼 근거가 없다.
+      · 게시 기준이면 수집이 늦어질수록 감시창이 깎여, 5~7일에 수집된 17.5% 는
+        감시 시간이 하루도 안 남는다. 수집 지연(차단·순환)이 곧 기회 상실이 된다.
+    수집 게이트(max_post_age_hours=168)가 있어 이 기준의 절대 상한은 자동으로
+    게시 후 14일이다 — 실측 최장 터치가 10.5일이라 충분히 여유롭다."""
     now = now or time.time()
     cutoff = now - max_age_sec
     cur = conn.execute(
         "UPDATE levels SET status='expired', expired_at=? "
-        f"WHERE status IN ('watching','previewed') AND {_PUBLISHED_AT_SQL} < ?",
+        "WHERE status IN ('watching','previewed') AND collected_at < ?",
         (now, cutoff),
     )
     # 섀도 터치(재알림 방지용 전이만, 판정·통계 제외)도 수명이 다하면 만료 —
     # 안 하면 영구 잔류하며 stats() 의 touched 집계를 오염 (2026-07-26 감사 minor8)
     cur2 = conn.execute(
         "UPDATE levels SET status='expired', expired_at=? "
-        f"WHERE status='touched' AND touched_at IS NULL AND {_PUBLISHED_AT_SQL} < ?",
+        "WHERE status='touched' AND touched_at IS NULL AND collected_at < ?",
         (now, cutoff),
     )
     return cur.rowcount + cur2.rowcount

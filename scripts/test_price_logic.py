@@ -1428,11 +1428,15 @@ check("OB7 최근 잔량비 조회",
       len(_obrecent) == 1 and _obrecent[0]["coin_symbol"] == "OBX"
       and _obrecent[0]["touch_bid_ask_ratio"] == 2.5)
 
-# ── EX1~EX4: 만료 기준은 '수집 시각'이 아니라 '게시 시각' (2026-07-27 실전 발견) ──
-# 수집 게이트가 "7일 이내 글만"이어도 만료가 수집 기준이면, 6.9일 된 글이 거기서
-# 7일을 더 살아 최대 14일까지 알림을 낸다. 실전 사례: XTZ 가 수집 당시 6.6일 →
-# DB 체류 4.0일 → 게시 10.5일 만에 터치 본알림(활성 33건 중 5건이 7일 초과 상태).
-# 두 게이트가 같은 시간축을 봐야 "7일 이내 글만, 게시 7일까지만"이 성립한다.
+# ── EX1~EX4: 만료 기준은 '수집 시각'이다 (2026-07-27 실측 확정 — 게시 기준 금지) ──
+# HANDOFF 가 오래 "게시 7일 만료"로 적어와 실제로 게시 기준으로 바꿔봤다가 되돌렸다.
+# 실측: 터치 67건 중 9건(13.4%)이 게시 7일을 넘겨 터치됐는데 그 전부가 수집 당시
+# 이미 5.4~6.6일 된 글이었다 — '묵은 셋업'이 아니라 우리가 늦게 주운 글이고,
+# 수집 시점부터는 0.5~4.0일 만에 터치했다. 성적도 나쁘지 않다(게시 7일+ 승률 50%
+# ·평균 -0.21R vs 0~3일 48%·-0.69R). 게시 기준이면 수집이 늦을수록 감시창이 깎여
+# (5~7일에 수집된 17.5% 는 하루도 안 남는다) 수집 지연이 곧 기회 상실이 된다.
+# 절대 상한은 수집 게이트(max_post_age_hours=168)가 자동으로 준다 = 게시 후 14일.
+# 이 테스트는 '버그처럼 보이는 의도된 동작'을 못 박아 같은 재변경을 막는다.
 _EXPIRY = 168 * 3600
 with db.connect(TEST_DB) as conn:
     conn.execute("DELETE FROM levels")
@@ -1445,21 +1449,21 @@ with db.connect(TEST_DB) as conn:
              now - collected_ago_h * 3600, age_min))
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()[0]
 
-    _ex_old = _add_exp("EXOLD", 6.6 * 1440, 4 * 24)     # 게시 10.6일 (구 기준 생존)
-    _ex_fresh = _add_exp("EXFRESH", 0, 4 * 24)          # 게시 4일 (양 기준 생존)
-    _ex_null = _add_exp("EXNULL", None, 4 * 24)         # 구세대 결측 → 수집 기준 폴백
-    _ex_shadow = _add_exp("EXSHADOW", 6.6 * 1440, 4 * 24, status="touched")
+    _ex_late = _add_exp("EXLATE", 6.6 * 1440, 4 * 24)   # 게시 10.6일·수집 4일 → 유지
+    _ex_stale = _add_exp("EXSTALE", 0, 8 * 24)          # 수집 8일 → 만료
+    _ex_null = _add_exp("EXNULL", None, 4 * 24)         # 게시 시각 결측 → 동일 판단
+    _ex_shadow = _add_exp("EXSHADOW", 0, 8 * 24, status="touched")
 
     db.expire_old(conn, _EXPIRY, now)
     _ex_st = {r[0]: r[1] for r in conn.execute(
         "SELECT id, status FROM levels WHERE id IN (?,?,?,?)",
-        (_ex_old, _ex_fresh, _ex_null, _ex_shadow)).fetchall()}
+        (_ex_late, _ex_stale, _ex_null, _ex_shadow)).fetchall()}
 
-check("EX1 게시 7일 초과(수집은 4일 전)는 만료 - 수집 기준이면 생존했을 건",
-      _ex_st[_ex_old] == "expired")
-check("EX2 게시 4일은 생존(과잉 만료 없음)", _ex_st[_ex_fresh] == "watching")
-check("EX3 post_age 결측 구세대는 수집 기준 폴백으로 생존", _ex_st[_ex_null] == "watching")
-check("EX4 섀도 터치도 게시 기준으로 만료", _ex_st[_ex_shadow] == "expired")
+check("EX1 늦게 주운 글(게시 10.6일)도 수집 4일이면 감시 유지 - 게시 기준이면 잘렸을 건",
+      _ex_st[_ex_late] == "watching")
+check("EX2 수집 후 8일 지나면 만료", _ex_st[_ex_stale] == "expired")
+check("EX3 게시 시각 결측이어도 수집 기준으로 동일 판단", _ex_st[_ex_null] == "watching")
+check("EX4 섀도 터치도 수집 기준으로 만료", _ex_st[_ex_shadow] == "expired")
 
 # ── 체인(카드3): 이 파일에서 그동안 resolve_outcome 을 거쳐 쌓인 실제 판정
 #    (T8/T9/T10/T11/T13/T15/BM1~BM8 등, run_once/_judge_outcomes 정상 경로로
