@@ -703,3 +703,24 @@ def render_outcome_chain_alert(mismatch: dict) -> str:
         _SEP,
     ]
     return "\n".join(lines)
+
+
+# ── 가격체크 회차 정지(공백) 경고 (2026-07-27 기획 카드 #2 과제2) ──────────
+# 기존 렌더러와 무관한 별도 함수 - 파일 끝에 추가만(개발자B 작업 경계). 하루 1회
+# 중복방지는 호출부(monitor.price_check) 의 meta 게이트가 담당하고, 여긴 순수
+# 렌더링만 한다. render_collect_stale_alert(수집 단계 정지)와 잡는 대상이 다르다 -
+# 이건 2분 주기 회차(가격체크) 자체가 멈춘 것을 본다.
+
+
+def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float) -> str:
+    """직전 회차와의 공백이 임계를 넘었을 때의 경고. gap_minutes: 감지된 공백(분),
+    threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes)."""
+    lines = [
+        _SEP,
+        "🚨 <b>[가격체크 회차 정지 경고]</b>",
+        f"직전 회차 이후 공백 {gap_minutes:.0f}분 (임계 {threshold_minutes:.0f}분)",
+        "cron-job.org 주 경로와 GitHub schedule 백업이 모두 실패했을 수 있습니다 - "
+        "Actions 실행 이력을 확인하세요.",
+        _SEP,
+    ]
+    return "\n".join(lines)

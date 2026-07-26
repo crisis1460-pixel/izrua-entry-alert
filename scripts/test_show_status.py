@@ -172,6 +172,30 @@ with db.connect(TEST_DB) as conn:
 code, out = capture(days=7)
 check("S7 이상 징후 없음 표시", "이상 징후 없음" in out)
 
+# ── S11: 가격체크 회차 공백 지표 (2026-07-27 기획 카드 #2 과제2) ─────────
+# monitor.price_check._check_price_check_gap 이 기록하는 meta 값을 건강 상태
+# 섹션에 한 줄 노출하는지 확인(값 자체의 계산 로직은 test_resilience.py 담당,
+# 여긴 표시 위치·문구만 검증).
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+    db.set_meta(conn, "last_price_check_gap_min", "3.0")
+    db.set_meta(conn, "max_price_check_gap_min", "45.0")
+code, out = capture(days=7)
+check("S11 가격체크 회차 공백 한 줄 노출(직전/최장 둘 다)",
+      "가격체크 회차 공백" in out and "직전 3분" in out and "역대 최장 45분" in out)
+
+# ── S12: 공백 meta 가 아예 없는 구세대 DB — 줄 자체가 안 나오고(값 없음)
+#         건강 판정에도 영향 없어야 한다(읽기 전용 조회에서 안 깨짐 확인) ──
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+code, out = capture(days=7)
+check("S12 공백 meta 없으면 줄 자체 미출력 + 이상 징후 없음 유지",
+      "가격체크 회차 공백" not in out and "이상 징후 없음" in out)
+
 # ── S8: --report 옵션 — 주간 리포트 텍스트가 함께 출력됨 ────────────
 fresh_db()
 code, out = capture(days=7, report=True)

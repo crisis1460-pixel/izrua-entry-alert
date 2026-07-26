@@ -361,6 +361,30 @@ def print_health(conn, now: float) -> None:
     else:
         warnings.append("⚠️ 가격체크 이력 없음(last_check_at 미기록)")
 
+    # 가격체크 회차 공백 기록 (2026-07-27 기획 카드 #2 과제2) — 회차가 도는 동안엔
+    # 자기 정지를 스스로 감지할 수 없어, 다음 회차가 직전 last_check_at 과의 공백을
+    # 사후 기록한 값(monitor.price_check._check_price_check_gap)을 그대로 노출한다.
+    # 위 last_check 경과(현재 시각 기준)와는 별개 지표 - 이건 "직전 회차가 얼마나
+    # 기다렸다 깨어났는지"의 역대 이력이다.
+    if _has_table(conn, "meta"):
+        last_gap = db.get_meta(conn, "last_price_check_gap_min")
+        max_gap = db.get_meta(conn, "max_price_check_gap_min")
+    else:
+        last_gap = max_gap = None
+    if last_gap or max_gap:
+        def _f(v):
+            try:
+                return float(v) if v else None
+            except (TypeError, ValueError):
+                return None
+        parts = []
+        if _f(last_gap) is not None:
+            parts.append(f"직전 {_f(last_gap):.0f}분")
+        if _f(max_gap) is not None:
+            parts.append(f"역대 최장 {_f(max_gap):.0f}분")
+        threshold = settings.get("price_check_gap_alert_minutes")
+        print(f"  가격체크 회차 공백: {' · '.join(parts)} (경보 임계 {threshold:.0f}분)")
+
     last_collect = db.get_meta(conn, "last_collect_at") if _has_table(conn, "meta") else None
     interval = settings.get("collect_interval_hours") * 3600
     if last_collect:

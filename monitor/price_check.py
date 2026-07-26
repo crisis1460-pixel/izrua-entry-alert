@@ -84,6 +84,54 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
     return False
 
 
+# ── 가격체크 회차 자체 정지(공백) 감시 (2026-07-27 기획 카드 #2 과제2) ────────
+# cron-job.org(주 경로, 2분)와 GH schedule(백업, 30분, price-check.yml)이 둘 다
+# 죽으면 이 파일 자체가 실행되지 않으므로, '회차가 도는 동안' 자기 정지를 스스로
+# 감지할 방법은 없다 - 유일한 관측 지점은 "다음에 살아난 회차가 직전 last_check_at
+# 과 지금의 차이(공백)를 사후에 재구성"하는 것뿐이다. _load_last_check/_save_last_check
+# 가 이미 meta.last_check_at 을 매 회차 갱신해두므로, 그 값을 새 함수를 추가하지 않고
+# 재사용한다(요구사항: storage/db.py 는 get_meta/set_meta 호출만).
+#
+# GH schedule 백업이 있어도 공백이 최대 수십 분까지는 정상 범위다(설정값
+# price_check_gap_alert_minutes 주석 참고) - 임계값을 그 위로 넉넉히 잡아 "백업만으로
+# 도는 정상 상황"을 오탐하지 않는다. 하루 1회만 경보(다른 감시들과 동일 게이트 패턴).
+def _check_price_check_gap(conn, now: float, cfg_get) -> bool:
+    prev = _load_last_check(conn)
+    if prev is None:
+        return False  # 최초 회차(신규 DB) - 비교 대상이 없으니 고장 판정 불가
+    gap_min = (now - prev) / 60.0
+    if gap_min < 0:
+        return False  # 시계 역행/수동 편집 - 신뢰하지 않는다(다른 due 판정과 동일 원칙)
+
+    # 마지막 공백은 매 회차 덮어쓰기, 최장 공백은 역대 최댓값만 갱신 - 둘 다
+    # show_status 건강 상태 섹션에 그대로 노출된다(순수 기록, 알림/필터 무관).
+    db.set_meta(conn, "last_price_check_gap_min", f"{gap_min:.1f}")
+    prev_max_raw = db.get_meta(conn, "max_price_check_gap_min")
+    try:
+        prev_max = float(prev_max_raw) if prev_max_raw else 0.0
+    except (TypeError, ValueError):
+        prev_max = 0.0
+    if gap_min > prev_max:
+        db.set_meta(conn, "max_price_check_gap_min", f"{gap_min:.1f}")
+        db.set_meta(conn, "max_price_check_gap_at", str(now))
+
+    threshold = cfg_get("price_check_gap_alert_minutes")
+    if gap_min < threshold:
+        return False
+
+    day = _day_kst(now)
+    if db.get_meta(conn, "price_check_gap_warned_date") == day:
+        return False  # 오늘 이미 경고 발송함 - 중복 방지(collect_silence 와 동일 패턴)
+
+    text = telegram.render_price_check_gap_alert(gap_min, threshold)
+    if telegram.send(text):
+        db.set_meta(conn, "price_check_gap_warned_date", day)
+        logger.warning("[체크] 가격체크 공백 경고 발송 (직전 공백 %.1f분 > 임계 %.1f분)",
+                       gap_min, threshold)
+        return True
+    return False
+
+
 # ── 적중 DB 해시체인 무결성 검증 (2026-07-27 기획 카드 #3) ────────────────
 # 하루 1회만(meta 날짜 게이트, _check_collect_silence/_check_deletions 와 동일
 # 패턴) storage.db.verify_outcome_chain 을 돌려 사후 행 변조·유실을 자가 감지한다.
@@ -197,6 +245,15 @@ def run_once(now: float = None) -> dict:
     summary = {"checked": 0, "previews": 0, "touches": 0, "suppressed": 0}
 
     with db.connect(db_path) as conn:
+        # 가격체크 회차 자체 정지 감시 (카드 #2 과제2) - 반드시 이 회차가 last_check_at
+        # 을 갱신하기 '전'에 돌아야 직전 값과의 공백을 잴 수 있다. 다른 부가 감시와
+        # 동일하게 통째로 격리 - 이 기능의 버그가 2분 핫패스를 죽이면 안 된다.
+        try:
+            if _check_price_check_gap(conn, now, cfg_get):
+                summary["price_check_gap_alert"] = True
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 가격체크 공백 감시 실패(무시하고 진행): %s", e)
+
         # 수집 급감 감시는 활성 레벨 유무와 무관하게 매 회차 수행(조용한 고장 감지가
         # 목적이라, 아래 "대상 없음" 조기 반환보다 먼저 돌아야 한다)
         if _check_collect_silence(conn, now, cfg_get):

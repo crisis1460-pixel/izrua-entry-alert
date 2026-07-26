@@ -712,9 +712,151 @@ upbit_mod.fetch_prices = _orig_fetch_prices
 telegram.send = _orig_send
 
 
+# ══════════════════════════════════════════════════════════════════
+# 카드2 과제1+3(2026-07-27): price-check.yml 백업 트리거 + 커밋백 재시도 완충
+# — 실제 실행은 CI/운영 몫, 여기선 YAML 구조·텍스트만 검사한다(수리6/7 패턴과 동일).
+# ══════════════════════════════════════════════════════════════════
+_pc_yml_card2 = (_repo_root / ".github" / "workflows" / "price-check.yml").read_text(
+    encoding="utf-8")
+
+try:
+    import yaml as _yaml
+    _pc_parsed_card2 = _yaml.safe_load(_pc_yml_card2)
+    _pc_yaml_ok = True
+except ImportError:
+    # requirements.txt 에 pyyaml 이 없어 CI 에 설치 보장이 안 된다 - 설치를 시도하지
+    # 않고(요구사항) 구조 검증만 건너뛴다. 아래 텍스트 기반 검사들은 yaml 없이도 돈다.
+    _pc_parsed_card2 = None
+    _pc_yaml_ok = False
+
+if _pc_yaml_ok:
+    _pc_on = _pc_parsed_card2.get(True) or _pc_parsed_card2.get("on") or {}
+    check("과제1: price-check.yml 은 여전히 유효한 YAML(파싱 성공)", _pc_parsed_card2 is not None)
+    check("과제1: schedule 트리거 1건 등록됨",
+          "schedule" in _pc_on and len(_pc_on["schedule"]) == 1)
+    _cron_expr = (_pc_on.get("schedule") or [{}])[0].get("cron", "")
+    check("과제1: cron 표현식 */30(GH 최소 5분 하한 위반 아님)",
+          _cron_expr == "*/30 * * * *")
+    check("과제1: workflow_dispatch 입력 2개(force_collect/force_report) 그대로 보존",
+          "force_collect" in _pc_on.get("workflow_dispatch", {}).get("inputs", {})
+          and "force_report" in _pc_on.get("workflow_dispatch", {}).get("inputs", {}))
+else:
+    check("과제1: yaml 모듈 미설치 - 구조 검증 skip(pip install 시도 안 함, 요구사항)", True)
+
+check("과제1: cron-job.org 주 경로 서술이 그대로 남아있음(무변경)",
+      "cron-job.org" in _pc_yml_card2)
+check("과제1: GH schedule 5분 하한/지연 경고 주석이 있어 '더 당기자' 시도를 막음",
+      "5분" in _pc_yml_card2 and ("지연" in _pc_yml_card2 or "밀리" in _pc_yml_card2))
+check("과제1: concurrency(db-writer) 그룹은 무변경(중복 트리거 직렬화 유지)",
+      "group: db-writer" in _pc_yml_card2 and "cancel-in-progress: false" in _pc_yml_card2)
+check("과제1: FORCE_COLLECT/FORCE_REPORT 가 schedule 의 null inputs 를 방어(|| false)",
+      "inputs.force_collect || false" in _pc_yml_card2
+      and "inputs.force_report || false" in _pc_yml_card2)
+
+check("과제3: 커밋백 재시도가 6회로 확대(백오프 5단 3→5→8→13→21초 + 마지막 1회)",
+      "for wait in 3 5 8 13 21; do" in _pc_yml_card2)
+check("과제3: git pull --rebase 가 재시도마다 재실행됨(1회성 stale pull 아님)",
+      _pc_yml_card2.count("git pull --rebase origin main") >= 2)
+check("과제3: 예전 '3회 실패' 문구는 사라지고 '6회 실패'로 갱신됨",
+      "push 3회 실패" not in _pc_yml_card2 and "push 6회 실패" in _pc_yml_card2)
+# 기존 수리7(::error::+exit 1 표면화)이 문구 변경 후에도 깨지지 않았는지 재확인.
+check("과제3(수리7 회귀 확인): ::error:: 로 실패 표면화 유지",
+      "::error::" in _pc_yml_card2)
+_after_error_card2 = _pc_yml_card2.split("::error::")[-1]
+check("과제3(수리7 회귀 확인): ::error:: 직후 exit 1 여전히 존재",
+      "exit 1" in _after_error_card2[:200])
+
+
+# ══════════════════════════════════════════════════════════════════
+# 카드2 과제2(2026-07-27): 가격체크 회차 자체 정지(공백) 감시
+# monitor.price_check._check_price_check_gap — 회차가 도는 동안은 자기 정지를
+# 스스로 감지할 수 없으므로, 다음 회차가 직전 last_check_at 과의 공백을 사후
+# 재구성하는 로직. 네트워크 없이 telegram.send 만 몽키패치해 검증한다.
+# ══════════════════════════════════════════════════════════════════
+TEST_DB_GAP = "cache/_test_resilience_gap.db"
+if os.path.exists(TEST_DB_GAP):
+    os.remove(TEST_DB_GAP)
+db.init_db(TEST_DB_GAP)
+
+_gap_sent = []
+_orig_tg_send_gap = telegram.send
+telegram.send = lambda text, urgency="high": (_gap_sent.append(text), True)[1]
+settings.SETTINGS["price_check_gap_alert_minutes"] = 120
+
+_now_gap = time.time()
+
+# G1: 최초 회차(직전 기록 없음) - 비교 대상이 없으니 경보도 meta 기록도 없다
+with db.connect(TEST_DB_GAP) as conn:
+    r_g1 = pc._check_price_check_gap(conn, _now_gap, settings.get)
+    meta_g1 = db.get_meta(conn, "last_price_check_gap_min")
+check("과제2-G1: 최초 회차(비교 대상 없음) - 경보/기록 없음",
+      r_g1 is False and meta_g1 is None)
+
+# G2: 정상 2분 간격 - 임계(120분) 한참 아래라 경보 없음, 마지막/최장 공백만 기록
+with db.connect(TEST_DB_GAP) as conn:
+    db.set_meta(conn, "last_check_at", str(_now_gap))
+    r_g2 = pc._check_price_check_gap(conn, _now_gap + 120, settings.get)
+    last_gap_g2 = db.get_meta(conn, "last_price_check_gap_min")
+    max_gap_g2 = db.get_meta(conn, "max_price_check_gap_min")
+check("과제2-G2: 정상 2분 간격 - 경보 없음", r_g2 is False and not _gap_sent)
+check("과제2-G2b: 마지막/최장 공백 둘 다 2.0분으로 기록",
+      last_gap_g2 == "2.0" and max_gap_g2 == "2.0")
+
+# G3: 임계(120분) 초과 공백(130분) - 경보 발송 + 최장 공백 갱신 + 하루 게이트 set
+with db.connect(TEST_DB_GAP) as conn:
+    db.set_meta(conn, "last_check_at", str(_now_gap + 120))
+    r_g3 = pc._check_price_check_gap(conn, _now_gap + 120 + 130 * 60, settings.get)
+    max_gap_g3 = db.get_meta(conn, "max_price_check_gap_min")
+    warned_g3 = db.get_meta(conn, "price_check_gap_warned_date")
+check("과제2-G3: 임계 초과 공백 - 경보 발송",
+      r_g3 is True and len(_gap_sent) == 1 and "가격체크 회차 정지" in _gap_sent[0])
+check("과제2-G3b: 최장 공백이 130.0분으로 갱신", max_gap_g3 == "130.0")
+check("과제2-G3c: 하루 경보 게이트 set(중복 방지용)", warned_g3 is not None)
+
+# G4: 같은 날 재차 초과해도 중복 발송 없음(하루 1회, 다른 감시들과 동일 원칙).
+# 공백을 G3(130분)보다 작게(121분, 여전히 임계 120분은 넘음) 잡아 "재발송 억제"와
+# "최장 공백 갱신"을 서로 다른 축으로 깔끔히 분리 검증한다.
+_gap_now_after_g3 = _now_gap + 120 + 130 * 60
+with db.connect(TEST_DB_GAP) as conn:
+    db.set_meta(conn, "last_check_at", str(_gap_now_after_g3))
+    r_g4 = pc._check_price_check_gap(conn, _gap_now_after_g3 + 121 * 60, settings.get)
+    max_gap_g4 = db.get_meta(conn, "max_price_check_gap_min")
+check("과제2-G4: 같은 날 재차 초과해도 중복 억제", r_g4 is False and len(_gap_sent) == 1)
+check("과제2-G4b: 이번 공백(121분)이 직전 최장(130분)보다 작아 최장은 불변",
+      max_gap_g4 == "130.0")
+
+# G5: 최장 공백은 '최댓값만' 갱신 - 이후 더 짧은 공백이 와도 줄어들지 않는다
+_gap_now_after_g4 = _gap_now_after_g3 + 121 * 60
+with db.connect(TEST_DB_GAP) as conn:
+    db.set_meta(conn, "last_check_at", str(_gap_now_after_g4))
+    pc._check_price_check_gap(conn, _gap_now_after_g4 + 60, settings.get)  # 1분짜리 공백
+    max_gap_g5 = db.get_meta(conn, "max_price_check_gap_min")
+    last_gap_g5 = db.get_meta(conn, "last_price_check_gap_min")
+check("과제2-G5: 최장 공백은 역대 최댓값 유지(짧은 공백에 안 밀림)", max_gap_g5 == "130.0")
+check("과제2-G5b: 마지막 공백은 매번 덮어씀(1.0분으로 갱신)", last_gap_g5 == "1.0")
+
+# G6: 시계 역행 방어 - now 가 직전 last_check_at 보다 과거면 무시(음수 공백 계산 안 함)
+with db.connect(TEST_DB_GAP) as conn:
+    db.set_meta(conn, "last_check_at", str(_now_gap + 999999))
+    r_g6 = pc._check_price_check_gap(conn, _now_gap, settings.get)
+    max_gap_g6 = db.get_meta(conn, "max_price_check_gap_min")
+    last_gap_g6 = db.get_meta(conn, "last_price_check_gap_min")
+check("과제2-G6: 시계 역행 - 경보 없이 무시, 최장/마지막 공백 기록도 불변",
+      r_g6 is False and max_gap_g6 == "130.0" and last_gap_g6 == "1.0")
+
+telegram.send = _orig_tg_send_gap
+os.remove(TEST_DB_GAP)
+
+check("과제2-G7: render_price_check_gap_alert 렌더러 신설(파일 끝 추가 원칙)",
+      hasattr(telegram, "render_price_check_gap_alert"))
+_gap_render = telegram.render_price_check_gap_alert(130.0, 120.0)
+check("과제2-G7b: 렌더 본문에 공백·임계 수치 반영",
+      "130" in _gap_render and "120" in _gap_render)
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
 for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY, TEST_DB_CHAIN, TEST_DB_LEGACY,
-           TEST_DB_CHAIN_CYCLE):
+           TEST_DB_CHAIN_CYCLE, TEST_DB_GAP):
     try:
         if os.path.exists(_p):
             os.remove(_p)
