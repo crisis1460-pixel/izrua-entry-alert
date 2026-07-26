@@ -109,6 +109,10 @@ from collector.extractor import judgment_window_hours, parse_timeframe_hours
 TF_CASES = [
     ("🕒 Timeframe: 1H", 1.0), ("Time frame: 4h", 4.0), ("Timeframe:1D", 24.0),
     ("타임프레임: 15m", 0.25), ("daily chart looking good", 24.0), ("no tf here", None),
+    # 2026-07-26 커버리지 추가 (수리 8b): 'weekly chart'/'주봉' 문구는 명시적
+    # "Timeframe: Xw" 라벨이 아니라 _TIMEFRAME_WORD 로 168.0h 로 분기돼야 한다
+    # (daily/일봉은 24.0h 분기와 대비).
+    ("weekly chart looking bullish", 168.0), ("주봉 기준 상승추세", 168.0),
 ]
 for text, exp in TF_CASES:
     got = parse_timeframe_hours(text)
@@ -141,6 +145,18 @@ print(f"    → {r}")
 if guard_ok:
     ok += 1
 TOTAL_EXTRA = 1
+
+# 2026-07-26 커버리지 추가 (수리 8a): current_price=None 이면 엔트리 sanity 는
+# 항상 통과(판단보류)해야 한다는 게 _sanity()의 명시된 의도(현재가를 모르면 판정
+# 불가 → 거르지 않고 그대로 채택) - 회귀로 이 값이 조용히 거부로 바뀌는 걸 막는다.
+r_no_price = parse_setup("Long entry 999999, SL 950000, Target 1200000", current_price=None)
+no_price_ok = r_no_price is not None and r_no_price["entry"] == 999999
+print(("✅" if no_price_ok else "❌"),
+      "current_price=None - sanity 판단보류로 통과(현재가와 무관하게 채택)")
+print(f"    → {r_no_price}")
+if no_price_ok:
+    ok += 1
+TOTAL_EXTRA += 1
 
 TOTAL = len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES) + len(WINDOW_CASES)
 print(f"\n{ok}/{TOTAL} 통과")

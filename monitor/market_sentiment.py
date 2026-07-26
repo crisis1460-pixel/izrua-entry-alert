@@ -3,8 +3,11 @@
 
 - BTC.D: CoinGecko /global 의 비트코인 시총 점유율
 - F&G: alternative.me 공포탐욕지수 (무료, 키 불필요)
-- ALT.S: 워쳐 방식 직접 계산 — top-50 알트 중 90d(실패 시 30d→7d) 기간에 BTC 를
+- ALT.S: 워쳐 방식 직접 계산 — top-50 알트 중 30d(실패 시 7d) 기간에 BTC 를
   outperform 한 비율(%). 75+ 알트시즌 / 25- BTC 시즌.
+  (2026-07-26 수리: CoinGecko /coins/markets 의 price_change_percentage 는 1h/24h/7d/
+  14d/30d/200d/1y 만 지원 - 90d 는 문서에 없는 값이라 매번 조용히 실패하고 30d로
+  폴백해왔다. 실패 왕복 호출만 낭비였으므로 90d 를 period 튜플에서 제거한다.)
 
 호출 비용 관리: 가격체크가 5~10분마다 돌므로 매번 부르면 CoinGecko Demo 한도를
 초과한다 → DB meta 에 1시간 TTL 캐시. 알림을 실제로 보낼 때만 조회(지연 로드)하는
@@ -62,8 +65,9 @@ def _fetch_fresh(timeout: float) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("[sentiment] F&G 조회 실패: %s", e)
 
-    # ALT.S — 워쳐와 동일: 90d 우선, 데이터 부족 시 30d→7d 폴백
-    for period in ("90d", "30d", "7d"):
+    # ALT.S — CoinGecko markets 엔드포인트가 실제 지원하는 기간만 사용(90d 미지원,
+    # 2026-07-26 수리): 30d 우선, 데이터 부족 시 7d 폴백
+    for period in ("30d", "7d"):
         try:
             r = requests.get(
                 "https://api.coingecko.com/api/v3/coins/markets",

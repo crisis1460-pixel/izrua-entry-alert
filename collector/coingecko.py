@@ -8,9 +8,16 @@
 
 CoinGecko Demo 키는 env(COINGECKO_API_KEY)에서 읽는다. 키가 없으면 keyless public
 엔드포인트로 폴백(속도제한 빡세지만 일 1회라 대개 통과).
+
+2026-07-26 수리: fetch_top_coins/fetch_upbit_krw_symbols 가 raise_for_status() 만
+믿고 예외처리가 전혀 없어, 네트워크 오류·레이트리밋 한 번이면 build_universe() 가
+예외를 던지며 수집 회차 전체를 죽였다. 이제 요청 단계 예외는 로그로 남기고 상위
+(build_universe)로 전파해, 신선 캐시가 없어도 만료된 캐시가 있으면 그걸로 폴백한다
+(완전 실패보다 낡은 유니버스가 낫다 - 어차피 다음 회차에 다시 시도됨).
 """
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Optional
@@ -18,6 +25,8 @@ from typing import Optional
 import requests
 
 from config import settings
+
+logger = logging.getLogger("alert.coingecko")
 
 CG_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
 UPBIT_MARKET_URL = "https://api.upbit.com/v1/market/all"
@@ -51,9 +60,13 @@ def fetch_top_coins(top_n: int, timeout: float) -> list:
     if key:
         # Demo 키는 헤더로 전달 (공식 권장). Pro 키와 엔드포인트가 다르지만 Demo 는 이 헤더 사용.
         headers["x-cg-demo-api-key"] = key
-    resp = requests.get(CG_MARKETS_URL, params=params, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = requests.get(CG_MARKETS_URL, params=params, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.warning("[cg] top coins 조회 실패: %s", e)
+        raise
     coins = []
     for c in data[:top_n]:
         rank = c.get("market_cap_rank")
@@ -72,10 +85,15 @@ def fetch_top_coins(top_n: int, timeout: float) -> list:
 
 def fetch_upbit_krw_symbols(timeout: float) -> set:
     """업비트 KRW 마켓의 코인 심볼 집합. 예: {'BTC','ETH','LINK',...} (인증 불필요)."""
-    resp = requests.get(UPBIT_MARKET_URL, params={"isDetails": "false"}, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(UPBIT_MARKET_URL, params={"isDetails": "false"}, timeout=timeout)
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as e:
+        logger.warning("[cg] 업비트 마켓 조회 실패: %s", e)
+        raise
     symbols = set()
-    for m in resp.json():
+    for m in payload:
         market = m.get("market", "")
         if market.startswith("KRW-"):
             symbols.add(market.split("-", 1)[1])
@@ -94,8 +112,20 @@ def build_universe(force: bool = False) -> list:
         if cached is not None:
             return cached
 
-    top = fetch_top_coins(settings.get("universe_top_n"), timeout)
-    krw = fetch_upbit_krw_symbols(timeout)
+    try:
+        top = fetch_top_coins(settings.get("universe_top_n"), timeout)
+        krw = fetch_upbit_krw_symbols(timeout)
+    except requests.RequestException:
+        # 2026-07-26 수리: 신선 캐시가 없어도(24h 지남/force) 완전 실패보다는 낡은
+        # 유니버스가 낫다 - 수집 스킵보다 폐기된 코인 몇 개 섞이는 편이 안전.
+        # 캐시조차 없으면(첫 실행) 원래 예외를 그대로 전파해 호출부가 이번 회차를
+        # 스킵하게 한다(run_collect.py 책임).
+        stale = _load_cache_any_age(cache_path)
+        if stale is not None:
+            logger.warning("[cg] 유니버스 갱신 실패 - 만료된 캐시로 폴백(%d개)", len(stale))
+            return stale
+        raise
+
     universe = []
     for c in top:
         if c["symbol"] in STABLECOINS:
@@ -122,6 +152,19 @@ def _load_cache(path: str, max_age_sec: float) -> Optional[list]:
             payload = json.load(f)
         if time.time() - payload.get("updated_at", 0) > max_age_sec:
             return None
+        return payload.get("universe")
+    except Exception:
+        return None
+
+
+def _load_cache_any_age(path: str) -> Optional[list]:
+    """신선도 무시하고 캐시가 존재하기만 하면 반환 - 실패 시 폴백 전용(2026-07-26)."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            payload = json.load(f)
         return payload.get("universe")
     except Exception:
         return None

@@ -10,6 +10,18 @@
 - 출처는 URL 노출 없이 <a>출처1</a> · <a>출처2</a> 하이퍼링크
 
 발송 원칙: 실패는 삼키고 로그만 (알림 실패가 잡을 막으면 안 됨). 토큰은 env 전용.
+
+2026-07-26 수리 3건:
+- 재시도: 429(레이트리밋)는 응답의 retry_after(상한 10초) 대기 후 1회, 5xx/타임아웃은
+  1~2초 대기 후 재시도. 총 재시도 최대 _RETRY_MAX 회 - 소진 후에만 기존처럼 "삼키고
+  False". 정책 상수는 아래 모듈 상수로 고정.
+- 토큰 마스킹: requests 예외 문자열엔 요청 URL(봇 토큰 포함)이 그대로 실려있을 수
+  있어, 그걸 그대로 logger.error 에 넘기면 공개 레포 Actions 로그에 토큰이 노출된다
+  (collector/tradingview.py 의 '값은 절대 로그에 남기지 않는다' 원칙과 동일 취지) -
+  로그 직전 토큰 문자열을 '***' 로 치환한다.
+- urgency 파라미터(인프라만 신설, 2026-07-26): send(text, urgency="high"|"low").
+  "low" 면 disable_notification=true 로 무음 전송. 기본값 "high" 는 현행(유음)과
+  동일 - 호출부는 아직 수정하지 않는다(활성화는 사용자 확정 후 별도 작업).
 """
 
 import html
@@ -26,6 +38,11 @@ logger = logging.getLogger("alert.telegram")
 _API = "https://api.telegram.org/bot{token}/sendMessage"
 _SEP = "━━━━━━━━━━━━━━━━━━━━"
 
+# ── 재시도 정책 상수 (2026-07-26 수리) ──────────────────────────────
+_RETRY_MAX = 2                  # 총 재시도 최대 횟수(최초 시도 제외)
+_RETRY_429_MAX_WAIT_SEC = 10.0  # 429 retry_after 상한
+_RETRY_BACKOFF_SEC = (1.0, 2.0)  # 5xx/타임아웃 - 재시도 회차별 대기(1회차 1초, 2회차 2초)
+
 _FNG_KR = {
     "Extreme Fear": "극공포",
     "Fear": "공포",
@@ -35,26 +52,82 @@ _FNG_KR = {
 }
 
 
-def send(text: str) -> bool:
-    """HTML 모드 발송. 성공 True. 토큰 미설정/실패 시 False (예외 없음)."""
+def _redact(msg: str, token: str) -> str:
+    """토큰 문자열을 로그에서 지운다(2026-07-26 수리) - requests 예외/응답 문자열엔
+    요청 URL(bot{token}/...)이 그대로 실려있을 수 있어 무심코 로그에 남기면 공개
+    레포 Actions 로그에 봇 토큰이 노출된다."""
+    if not token or not msg:
+        return msg
+    return msg.replace(token, "***")
+
+
+def _retry_after_sec(resp) -> float:
+    """429 응답 바디의 retry_after(초). 파싱 실패/미포함 시 상한값으로 보수적 대체."""
+    try:
+        val = resp.json().get("parameters", {}).get("retry_after")
+        if val is not None:
+            return min(float(val), _RETRY_429_MAX_WAIT_SEC)
+    except Exception:  # noqa: BLE001 - 파싱 실패는 재시도 자체를 막지 않는다
+        pass
+    return _RETRY_429_MAX_WAIT_SEC
+
+
+def send(text: str, urgency: str = "high") -> bool:
+    """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
+
+    urgency: 'high'(기본, 유음) | 'low'(disable_notification=true, 무음). 기본값은
+    기존 동작과 동일 - 활성화는 호출부 수정 후(사용자 확정 대기 중).
+
+    재시도(2026-07-26): 429 는 retry_after(상한 10초) 대기 후, 5xx/타임아웃·연결
+    오류는 1~2초 대기 후 재시도. 총 재시도 최대 _RETRY_MAX 회, 소진하면 기존처럼
+    조용히 False."""
     token = settings.secret("TELEGRAM_BOT_TOKEN")
     chat_id = settings.secret("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         logger.warning("[tg] 토큰/chat_id 미설정 - 발송 생략 (내용 %d자)", len(text))
         return False
-    try:
-        resp = requests.post(
-            _API.format(token=token),
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.error("[tg] 발송 실패 status=%s body=%s", resp.status_code, resp.text[:200])
+
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+               "disable_web_page_preview": True}
+    if urgency == "low":
+        payload["disable_notification"] = True
+
+    retry = 0
+    while True:
+        try:
+            resp = requests.post(_API.format(token=token), json=payload, timeout=10)
+        except requests.RequestException as e:
+            if retry < _RETRY_MAX:
+                wait = _RETRY_BACKOFF_SEC[min(retry, len(_RETRY_BACKOFF_SEC) - 1)]
+                logger.warning("[tg] 발송 실패(%s) - %.0f초 후 재시도(%d/%d)",
+                               type(e).__name__, wait, retry + 1, _RETRY_MAX)
+                time.sleep(wait)
+                retry += 1
+                continue
+            logger.error("[tg] 발송 실패(재시도 소진): %s", _redact(str(e), token))
             return False
-        return True
-    except Exception as e:  # noqa: BLE001 - 알림 실패가 잡을 막으면 안 됨
-        logger.error("[tg] 발송 실패: %s", e)
+
+        if resp.status_code == 200:
+            return True
+
+        if resp.status_code == 429 and retry < _RETRY_MAX:
+            wait = _retry_after_sec(resp)
+            logger.warning("[tg] 429 레이트리밋 - %.1f초 후 재시도(%d/%d)",
+                           wait, retry + 1, _RETRY_MAX)
+            time.sleep(wait)
+            retry += 1
+            continue
+
+        if resp.status_code >= 500 and retry < _RETRY_MAX:
+            wait = _RETRY_BACKOFF_SEC[min(retry, len(_RETRY_BACKOFF_SEC) - 1)]
+            logger.warning("[tg] %s - %.0f초 후 재시도(%d/%d)",
+                           resp.status_code, wait, retry + 1, _RETRY_MAX)
+            time.sleep(wait)
+            retry += 1
+            continue
+
+        logger.error("[tg] 발송 실패 status=%s body=%s", resp.status_code,
+                     _redact(resp.text[:200], token))
         return False
 
 

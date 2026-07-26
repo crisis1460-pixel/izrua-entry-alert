@@ -58,10 +58,12 @@ def _check_deletions(conn, timeout: float) -> int:
         db.set_meta(conn, "last_deletion_check_day", day)
         return 0
     n_deleted = n_checked = 0
+    blocked = False
     for i, cand in enumerate(candidates):
         if tradingview.is_blocked():
             logger.warning("[삭제확인] 차단 쿨다운 감지 - 남은 %d건 다음 회차로 연기",
                            len(candidates) - i)
+            blocked = True
             break
         if i > 0:
             time.sleep(1.0)  # 상세 방문과 동일한 페이싱 원칙(모듈 sleep 계약 준수)
@@ -73,7 +75,12 @@ def _check_deletions(conn, timeout: float) -> int:
         if result:
             n_deleted += 1
             logger.info("[삭제확인] 삭제 확정: id=%s author=%s", cand["id"], cand.get("author"))
-    db.set_meta(conn, "last_deletion_check_day", day)
+    # 2026-07-26 실전 버그 수리: 차단으로 중도 break 했을 때도 게이트를 set 해버려서,
+    # "0건 확인"인데 하루 게이트가 소진되고 후보(그날 26건)가 통째로 다음날로
+    # 밀리는 사고가 있었다. 로그 문구("다음 회차로 연기")대로, 차단 시엔 게이트를
+    # set 하지 않는다 - 정상 순회 완료(또는 애초에 후보 없음)일 때만 하루 게이트 소진.
+    if not blocked:
+        db.set_meta(conn, "last_deletion_check_day", day)
     if n_checked:
         logger.info("[삭제확인] %d건 확인 (삭제 %d건)", n_checked, n_deleted)
     return n_deleted
@@ -138,7 +145,14 @@ def main() -> int:
     db.init_db(db_path)
     tradingview.reset_detail_budget()
 
-    universe = coingecko.build_universe()
+    # 2026-07-26 수리: build_universe() 가 신선 캐시도 없이 네트워크 예외를 던지면
+    # (coingecko 쪽 예외처리 부재였음) 이 회차 전체가 죽는다 - 실패는 로그만 남기고
+    # 이번 회차 수집을 스킵(빈 유니버스), 다음 회차(4h 뒤)에 재시도.
+    try:
+        universe = coingecko.build_universe()
+    except Exception as e:  # noqa: BLE001 - 유니버스 실패가 프로세스를 죽이면 안 됨
+        logger.warning("유니버스 갱신 실패 - 이번 수집 회차 스킵: %s", e)
+        return 0
     logger.info("유니버스 %d개", len(universe))
 
     if args.symbols:
@@ -187,48 +201,56 @@ def main() -> int:
             n_posts += len(ideas)
 
             for idea in ideas:
-                text = f"{idea['title']}\n{idea['description']}"
-                setup = parse_setup(text, current_price=coin.get("price_usd"))
-                if not setup or not setup.get("entry"):
-                    continue
-                n_setup += 1
-                stats_row = author_stats.get(idea.get("author") or "", {})
-                followers = stats_row.get("followers") or idea.get("author_followers")
-                if followers is None and idea.get("author"):
-                    followers = tradingview.fetch_author_followers(idea["author"], timeout)
-                grade, score, rr = calculate_grade(
-                    followers, setup["direction"], setup["entry"],
-                    setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
-                )
-                tf_hours = parse_timeframe_hours(text)
-                level = {
-                    "signal_key": db.make_signal_key(
-                        coin["symbol"], setup["entry"], idea.get("author"), idea.get("url")),
-                    "judgment_window_hours": judgment_window_hours(
-                        tf_hours, setup["entry"], setup.get("tp")),
-                    "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
-                    "coin_symbol": coin["symbol"],
-                    "ticker": coin["ticker"],
-                    "direction": setup["direction"],
-                    "entry_usd": setup["entry"],
-                    "sl_usd": setup.get("sl"),
-                    "tp_usd": setup.get("tp"),
-                    "rr": rr,
-                    "grade": grade,
-                    "score": score,
-                    "author": idea.get("author"),
-                    "author_followers": followers,
-                    "author_hit_rate": stats_row.get("hit_rate"),
-                    "author_hit_count": stats_row.get("hit_count"),
-                    "author_whitelisted": stats_row.get("whitelisted", False),
-                    "mcap_rank": coin.get("rank"),
-                    "mcap_tier_icon": coin.get("tier_icon"),
-                    "post_url": idea.get("url"),
-                    "post_age_minutes": idea.get("age_minutes"),
-                    "collected_at": time.time(),
-                }
-                if db.upsert_level(conn, level):
-                    n_new += 1
+                # 2026-07-26 수리: 글 1건의 파싱/등급/저장 오류가 사이클 전체 커밋을
+                # 굴리지 못하게 격리 - collector/tradingview.py _items_to_ideas 의
+                # 아이템별 격리 원칙을 하류(파싱~저장)까지 확장한다. 실패 건은
+                # 로그만 남기고 다음 아이디어로 계속.
+                try:
+                    text = f"{idea['title']}\n{idea['description']}"
+                    setup = parse_setup(text, current_price=coin.get("price_usd"))
+                    if not setup or not setup.get("entry"):
+                        continue
+                    n_setup += 1
+                    stats_row = author_stats.get(idea.get("author") or "", {})
+                    followers = stats_row.get("followers") or idea.get("author_followers")
+                    if followers is None and idea.get("author"):
+                        followers = tradingview.fetch_author_followers(idea["author"], timeout)
+                    grade, score, rr = calculate_grade(
+                        followers, setup["direction"], setup["entry"],
+                        setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
+                    )
+                    tf_hours = parse_timeframe_hours(text)
+                    level = {
+                        "signal_key": db.make_signal_key(
+                            coin["symbol"], setup["entry"], idea.get("author"), idea.get("url")),
+                        "judgment_window_hours": judgment_window_hours(
+                            tf_hours, setup["entry"], setup.get("tp")),
+                        "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
+                        "coin_symbol": coin["symbol"],
+                        "ticker": coin["ticker"],
+                        "direction": setup["direction"],
+                        "entry_usd": setup["entry"],
+                        "sl_usd": setup.get("sl"),
+                        "tp_usd": setup.get("tp"),
+                        "rr": rr,
+                        "grade": grade,
+                        "score": score,
+                        "author": idea.get("author"),
+                        "author_followers": followers,
+                        "author_hit_rate": stats_row.get("hit_rate"),
+                        "author_hit_count": stats_row.get("hit_count"),
+                        "author_whitelisted": stats_row.get("whitelisted", False),
+                        "mcap_rank": coin.get("rank"),
+                        "mcap_tier_icon": coin.get("tier_icon"),
+                        "post_url": idea.get("url"),
+                        "post_age_minutes": idea.get("age_minutes"),
+                        "collected_at": time.time(),
+                    }
+                    if db.upsert_level(conn, level):
+                        n_new += 1
+                except Exception as e:  # noqa: BLE001 - 글 1건 오류가 사이클 전체를 막으면 안 됨
+                    logger.warning("[%s] 아이디어 1건 처리 실패 - 스킵: %s",
+                                   coin.get("symbol"), e)
 
             if i < len(universe) - 1:
                 time.sleep(sleep_sec)

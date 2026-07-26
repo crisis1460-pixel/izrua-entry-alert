@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"  # 2026-07-26 수리: price-check.yml/weekly-report.yml 과 일치
           cache: pip
       - run: pip install -r requirements.txt
 
@@ -39,14 +39,14 @@ jobs:
       # 덮어쓰기 때문에(특히 db_path) 한 프로세스에 모으면 서로 오염된다 —
       # 2026-07-26 감사에서 "파일별 독립 실행이 전제"임이 확인됐다.
       # 하나가 실패해도 나머지를 마저 돌려 전체 그림을 보고 끝에 종합 판정한다.
-      - name: 테스트 7종
+      - name: 테스트 8종
         env:
           PYTHONIOENCODING: utf-8
         run: |
           set +e
           FAILED=""
           for t in test_extractor test_grading test_price_logic test_ranking \
-                   test_weekly_report test_cycle test_show_status; do
+                   test_weekly_report test_cycle test_show_status test_resilience; do
             echo "::group::$t"
             python "scripts/$t.py"
             code=$?
@@ -60,7 +60,7 @@ jobs:
             echo "실패한 테스트:$FAILED"
             exit 1
           fi
-          echo "테스트 7종 전부 통과"
+          echo "테스트 8종 전부 통과"
 
       - name: 비밀값 스캔
         run: python scripts/check_secrets.py
