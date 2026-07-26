@@ -314,7 +314,16 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
         if lv.get("ret_72h") is None and 72 * 3600 <= elapsed <= 78 * 3600:
             db.record_ret(conn, lv["id"], "ret_72h", ret_pct)
 
-    for lv in db.get_unresolved_touched(conn):
+    # 판정창 만료 임박 순 정렬 — DB 순서(id순) 그대로 돌면 캔들 예산 고갈 시 뒤쪽
+    # 티커가 매 회차 반복적으로 밀릴 수 있다(2026-07-26 재감사 minor10). run_once의
+    # 터치 탐지가 이미 근접순(_proximity)으로 완화한 것과 같은 취지 — 남은 시간이
+    # 적은(곧 타임박스 만료될) 레벨을 먼저 판정해 예산 부족 시의 피해를 최소화한다.
+    # 현재 규모(활성+미종결 ~25개)는 예산 내라 실영향은 없음(감사 기록).
+    def _urgency(lv_):
+        w = (lv_.get("judgment_window_hours") or 0) * 3600 or default_window_sec
+        return w - (now - (lv_["touched_at"] or now))
+
+    for lv in sorted(db.get_unresolved_touched(conn), key=_urgency):
         if lv["touched_at"] > now:
             continue  # 터치 캔들이 아직 진행 중 — 완성 후(다음 회차) 판정
         window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec

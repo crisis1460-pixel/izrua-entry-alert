@@ -102,6 +102,19 @@ def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[lis
             out.append((start, start + unit * 60,
                         float(c["high_price"]), float(c["low_price"])))
         out.sort(key=lambda x: x[0])
+
+        # 2026-07-26 재감사 minor9: "개수" 요청이라 무거래 분은 캔들이 생성되지
+        # 않아, 저유동성 마켓에선 count개가 의도한 minutes 보다 훨씬 긴 과거까지
+        # 덮을 수 있다(실측: 추적 유니버스 81종 중 60종이 45분 요청에 1.5배 이상
+        # 확대, 일부는 20배 이상). 근본 해결(시간 기반 API 재설계)은 별도 과제라
+        # 여기선 판정/필터 로직을 바꾸지 않고 관측만 남긴다.
+        expected_span_min = count * unit
+        actual_span_min = (out[-1][1] - out[0][0]) / 60.0
+        if actual_span_min > expected_span_min * 1.5:
+            logger.warning(
+                "[upbit] %s 소급창 확대: 요청 %d분(캔들 %d개, %d분봉) 무거래로 "
+                "실제 %.0f분 구간 커버 - 의도보다 오래된 가격이 판정/터치 로직에 "
+                "섞일 수 있음", market, minutes, count, unit, actual_span_min)
         return out
     except Exception as e:  # noqa: BLE001
         logger.warning("[upbit] %s 분봉 조회 실패: %s", market, e)

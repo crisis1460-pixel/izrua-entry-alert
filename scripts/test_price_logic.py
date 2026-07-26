@@ -301,6 +301,22 @@ check("T20 수집 전 캔들 차단 + 수집 후 캔들 앵커",
       r20["status"] == "touched" and abs(r20["touched_at"] - (now + 1080)) < 1e-6)
 fake["candles"] = None
 
+# T21: 2026-07-26 재감사 minor10 - 판정 루프가 DB순(id순)이 아니라 창 만료
+#      임박순으로 순회해야, 캔들 예산 고갈 시 특정 티커가 계속 뒤로 밀리지 않는다.
+#      남은시간이 다른 세 티커를 두고 get_range 호출 순서가 임박순(오름차순)인지 확인.
+add_touched("URGB", 10.0, None, None, 1000, "t21b")                  # 기본창(168h) - 여유 큼
+add_touched("URGA", 10.0, None, None, 3500, "t21a", window_h=1.0)    # 1h창 - 곧 만료(가장 급함)
+add_touched("URGC", 10.0, None, None, 1000, "t21c", window_h=2.0)    # 2h창 - 중간
+call_order = []
+def _stub_range(ticker, limit):
+    call_order.append(ticker)
+    return None
+test_prices = {"KRW-URGA": 10.0 * USDT_KRW, "KRW-URGB": 10.0 * USDT_KRW, "KRW-URGC": 10.0 * USDT_KRW}
+with db.connect(TEST_DB) as conn:
+    price_check._judge_outcomes(conn, test_prices, USDT_KRW, _stub_range, now, settings.get)
+order = [t for t in call_order if t in ("KRW-URGA", "KRW-URGB", "KRW-URGC")]
+check("T21 판정 루프 임박순 정렬", order == ["KRW-URGA", "KRW-URGC", "KRW-URGB"])
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
