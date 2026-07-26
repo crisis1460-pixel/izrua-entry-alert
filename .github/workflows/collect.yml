@@ -66,10 +66,16 @@ jobs:
           fi
           git commit -m "data: collect $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
           for i in 1 2 3; do
-            # 바이너리 DB 충돌 시 -X ours = 우리 커밋(방금 수집분) 우선.
-            # 동시 가격체크 커밋과 겹치면 드물게 상대 변경이 밀릴 수 있으나
-            # 다음 회차에 상태가 수렴한다 (수집 기아보다 훨씬 작은 비용)
-            git pull --rebase -X ours origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
+            # 2026-07-26 장애 수정: rebase 에서 ours/theirs 는 직관과 반대다.
+            # 재생(replay)되는 우리 커밋이 'theirs', 이미 올라와 있는 상대(가격체크)
+            # 커밋이 'ours'. 따라서 기존 -X ours 는 "우리 수집분 우선"이 아니라
+            # 정확히 그 반대로 동작해, 가격체크가 2분마다 data/levels.db 를 커밋하기
+            # 시작한 2026-07-23 19:09Z 이후 모든 수집분이 조용히 폐기되었다
+            # (충돌 해소 후 커밋이 비어 rebase 가 drop → push 무변경 → 잡은 success).
+            # -X theirs 로 바꿔 방금 수집한 레벨을 살린다. 대가로 이 잡 실행 시간
+            # (약 5~8분) 동안의 가격체크 결과가 되돌려질 수 있으나, 터치 판정은
+            # 1분봉 소급으로 다음 회차에 재검출된다.
+            git pull --rebase -X theirs origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
             git push origin main && exit 0
             sleep 3
           done
