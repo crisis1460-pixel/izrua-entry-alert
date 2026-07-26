@@ -38,6 +38,18 @@ SETTINGS = {
                                           # 몫이고 페이싱은 차단 빈도 완화용.
     "tv_empty_rest_sec": 30.0,           # 연속 0건 시 휴식
 
+    # 텔레그램 공개채널 소스 (2026-07-27 기획 카드 #14 — 두 번째 입력원)
+    # TradingView 단일 의존이 구조적 위험이라(403 한 번에 회차 수집 0건) t.me/s/{채널}
+    # 공개 미리보기 HTML 을 두 번째 경로로 붙였다. 상세는 collector/telegram_source.py.
+    # ⚠️ 기본 OFF + 빈 화이트리스트가 이 기능의 안전장치다 — 아래 두 값을 건드리기
+    # 전까지 코드가 배포돼도 요청 0건·동작 변화 0 이다. 채널 목록은 사장님 승인 사항.
+    # 켜는 법: enabled 를 True 로, channels 에 채널명(@ 없이)을 넣는다.
+    "telegram_source_enabled": False,
+    "telegram_source_channels": [],      # 예: ["some_public_channel"]
+    "telegram_source_sleep_sec": 5.0,    # 채널당 요청 간격. 비공식 경로라 TradingView
+                                          # 페이싱(5.0)보다 느슨하게 가지 않는다.
+    "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
+
     # 알림 트리거
     "preview_band_pct": 1.0,             # entry 대비 이 % 이내 접근 시 예고
     "cluster_band_pct": 1.0,             # 같은 코인 내 이 % 이내 entry 는 한 클러스터로 병합

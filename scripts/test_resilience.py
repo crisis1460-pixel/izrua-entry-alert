@@ -2,6 +2,7 @@
 # 몽키패치(requests.get/post, 모듈 함수)로 오프라인 검증한다(기존 test_price_logic.py/
 # test_cycle.py 스텁 패턴 참고). 다른 test_*.py 와 동일 원칙 — settings.SETTINGS 를
 # 전역으로 덮어쓰므로 반드시 독립 프로세스로 실행한다(한 프로세스에 모으면 서로 오염).
+import hashlib
 import os
 import sys
 import time
@@ -854,9 +855,372 @@ check("과제2-G7b: 렌더 본문에 공백·임계 수치 반영",
       "130" in _gap_render and "120" in _gap_render)
 
 
+# ══════════════════════════════════════════════════════════════════
+# CTO 지시(2026-07-27): 글 삭제 감지가 구조적으로 영원히 실행되지 않던 기아 수리.
+# 수집 루프 도중 TradingView 차단이 걸리면(실측 26~61번째 심볼) 루프 '뒤'에 있던
+# _check_deletions 는 첫 후보에서 is_blocked()==True 라 즉시 break → 다음 회차도
+# 같은 자리에서 막혀 영원히 0건. 호출을 루프 '앞'으로 옮긴 것을 회귀로 못 박는다.
+# ══════════════════════════════════════════════════════════════════
+TEST_DB_DELORDER = "cache/_test_resilience_delorder.db"
+if os.path.exists(TEST_DB_DELORDER):
+    os.remove(TEST_DB_DELORDER)
+settings.SETTINGS["db_path"] = TEST_DB_DELORDER
+settings.SETTINGS["tv_fetch_sleep_sec"] = 0.0
+settings.SETTINGS["deletion_check_daily_limit"] = 5
+settings.SETTINGS["deletion_recheck_after_days"] = 30
+db.init_db(TEST_DB_DELORDER)
+
+# 종결(touched) 레벨 2건 = 삭제 확인 후보. (3건 이상이면 모듈 페이싱 1초가 누적돼
+# 테스트가 느려진다 - 순서 검증에는 2건이면 충분)
+with db.connect(TEST_DB_DELORDER) as conn:
+    for i in range(2):
+        conn.execute(
+            """INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,
+                 author, post_url, status, collected_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (f"ordkey{i}", "TST", "KRW-TST", "long", 1.0, "Auth",
+             f"https://tv.example/ord{i}", "touched", time.time()))
+
+_ORD_UNIVERSE = [
+    {"symbol": f"O{i}", "ticker": f"KRW-O{i}", "rank": i + 1, "name": f"O{i} Coin",
+     "price_usd": 10.0, "tier_icon": "🥈"} for i in range(5)
+]
+_ord_calls: list = []
+
+
+def _ord_fetch_ideas(symbol, timeout, max_age_hours=None):
+    _ord_calls.append(f"fetch:{symbol}")
+    return []
+
+
+# 실전 재현: 2번째 심볼부터 차단(수집 루프 중간에 403 → 30분 쿨다운)
+def _ord_is_blocked():
+    return sum(1 for c in _ord_calls if c.startswith("fetch:")) >= 2
+
+
+_orig_check_deletions = run_collect._check_deletions
+
+
+def _ord_check_deletions(conn, timeout):
+    _ord_calls.append("delcheck")
+    return _orig_check_deletions(conn, timeout)
+
+
+coingecko.build_universe = lambda force=False: list(_ORD_UNIVERSE)
+tradingview.fetch_ideas = _ord_fetch_ideas
+tradingview.is_blocked = _ord_is_blocked
+tradingview.hard_block_detected = lambda: None
+tradingview.check_post_deleted = lambda url, timeout: False  # 전부 생존(요청은 스텁)
+upbit_mod.fetch_prices = lambda tickers, timeout: {}
+run_collect._check_deletions = _ord_check_deletions
+
+_run_main(["run_collect.py"])
+run_collect._check_deletions = _orig_check_deletions
+
+with db.connect(TEST_DB_DELORDER) as conn:
+    _n_checked_ord = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE deleted_checked_at IS NOT NULL"
+    ).fetchone()["n"]
+    _gate_ord = db.get_meta(conn, "last_deletion_check_day")
+
+check("CTO수리: 삭제확인이 심볼 수집 루프보다 먼저 호출된다(순서 고정)",
+      bool(_ord_calls) and _ord_calls[0] == "delcheck")
+check("CTO수리(핵심): 루프 중간에 차단이 나도 삭제확인은 이미 끝난 뒤 - 후보 2건 확인됨",
+      _n_checked_ord == 2)
+check("CTO수리: 차단은 여전히 수집 루프를 조기 종료시킨다(회귀 아님)",
+      sum(1 for c in _ord_calls if c.startswith("fetch:")) == 2)
+check("CTO수리: 정상 순회 완료된 삭제확인은 하루 게이트를 소진한다", _gate_ord is not None)
+
+# 회차 시작 시점에 이미 쿨다운이 걸려 있으면(직전 회차 30분 쿨다운 미종료) 기존대로
+# break + 게이트 미소진 - 이건 정상 동작이라 바뀌면 안 된다.
+TEST_DB_DELORDER2 = "cache/_test_resilience_delorder2.db"
+if os.path.exists(TEST_DB_DELORDER2):
+    os.remove(TEST_DB_DELORDER2)
+settings.SETTINGS["db_path"] = TEST_DB_DELORDER2
+db.init_db(TEST_DB_DELORDER2)
+with db.connect(TEST_DB_DELORDER2) as conn:
+    conn.execute(
+        """INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,
+             author, post_url, status, collected_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("ord2key", "TST", "KRW-TST", "long", 1.0, "Auth",
+         "https://tv.example/ord2", "touched", time.time()))
+tradingview.is_blocked = lambda: True
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_DELORDER2) as conn:
+    _gate_pre = db.get_meta(conn, "last_deletion_check_day")
+check("CTO수리: 회차 시작부터 쿨다운이면 기존대로 게이트 미소진(다음 회차 재시도)",
+      _gate_pre is None)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 카드14(2026-07-27): 텔레그램 공개채널 소스 — 인프라만, 기본 OFF·빈 화이트리스트.
+# 네트워크 없이 실측 HTML 구조를 재현한 픽스처로 파서를 검증한다
+# (t.me/s/durov · t.me/s/telegram 2026-07-27 실측 구조 — telegram_source 모듈
+#  docstring 참고. 클래스명/속성은 실제 응답에서 그대로 옮겼다).
+# ══════════════════════════════════════════════════════════════════
+from collector import telegram_source as tgs
+from datetime import datetime as _dt, timezone as _tz
+
+# 픽스처 시각은 '실행 시점 기준 과거'로 만든다 - 고정 문자열로 박으면 시간이 지나며
+# 의미가 바뀌고(미래 글 → 음수 age), 연령 필터 검증이 통과/실패를 오간다.
+def _iso_ago(seconds: float) -> str:
+    return _dt.fromtimestamp(time.time() - seconds, tz=_tz.utc).isoformat()
+
+
+_TG_T101 = _iso_ago(7200)   # 2시간 전
+_TG_T102 = _iso_ago(3600)   # 1시간 전 (더 최신 - 정렬 검증용)
+
+_TG_FIXTURE = """
+<main class="tgme_main"><section class="tgme_channel_history js-message_history">
+<div class="tgme_widget_message_wrap js-widget_message_wrap">
+<div class="tgme_widget_message" data-post="testchan/101">
+  <div class="tgme_widget_message_text js-message_text" dir="auto">BTC 진입 60000<br/>TP 70000<br/>목표 도달 &amp; 관찰</div>
+  <div class="tgme_widget_message_footer">
+    <span class="tgme_widget_message_views">3.46M</span><span class="tgme_widget_message_meta">
+    <a class="tgme_widget_message_date" href="https://t.me/testchan/101">
+    <time datetime="__T101__" class="time">10:00</time></a></span>
+  </div>
+</div></div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap">
+<div class="tgme_widget_message" data-post="testchan/102">
+  <div class="tgme_widget_message_text js-message_text" dir="auto">ETH entry 3000 <div>중첩 div 안에 있는 본문</div> 꺼지 target 4000</div>
+  <div class="tgme_widget_message_footer">
+    <a class="tgme_widget_message_date" href="https://t.me/testchan/102">
+    <time datetime="__T102__" class="time">11:30</time></a>
+  </div>
+</div></div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap">
+<div class="tgme_widget_message" data-post="testchan/103">
+  <div class="tgme_widget_message_footer">사진 전용 글(본문 div 없음)</div>
+</div></div>
+</section></main>
+""".replace("__T101__", _TG_T101).replace("__T102__", _TG_T102)
+
+_tg_orig_get = tgs._get
+tgs._MIN_INTERVAL_SEC = 0.0   # 테스트에서 모듈 자체 페이싱 대기 제거
+
+
+def _tg_stub_get(text, blocked=False):
+    return lambda url, timeout, max_retry=2: (text, blocked)
+
+
+# ── T1: HTML 파싱 (실측 구조) ────────────────────────────────────
+tgs._get = _tg_stub_get(_TG_FIXTURE)
+_tg_posts = tgs.fetch_posts("testchan", 5.0)
+_tg_by_url = {p["url"]: p for p in _tg_posts}
+check("카드14-T1: 본문 있는 글만 파싱(미디어 전용 103은 제외)",
+      len(_tg_posts) == 2 and "https://t.me/testchan/103" not in _tg_by_url)
+_p101 = _tg_by_url.get("https://t.me/testchan/101", {})
+check("카드14-T1b: URL 은 data-post 로 조립(https://t.me/{채널}/{번호})", bool(_p101))
+check("카드14-T1c: <br> 이 줄바꿈으로 보존되고 HTML 엔티티는 디코드된다",
+      "60000\nTP 70000" in (_p101.get("description") or "")
+      and "&" in (_p101.get("description") or "")
+      and "&amp;" not in (_p101.get("description") or ""))
+check("카드14-T1d: ISO8601 datetime → epoch 환산(published_at/age_minutes)",
+      isinstance(_p101.get("published_at"), float)
+      and _p101.get("age_minutes") is not None)
+check("카드14-T1e: 작성자는 채널명(기존 작성자 축 통계가 그대로 흡수)",
+      _p101.get("author") == "testchan")
+check("카드14-T1f: 조회수 '3.46M' → 3460000 정수 환산", _p101.get("views") == 3460000)
+check("카드14-T1g: fetch_ideas 계약 키를 전부 갖춘다(하류 무수정 재사용)",
+      set(_p101) >= {"symbol", "title", "description", "author", "author_followers",
+                     "url", "published_at", "age_minutes", "direction",
+                     "likes_count", "comments_count", "ticker"})
+_p102 = _tg_by_url.get("https://t.me/testchan/102", {})
+check("카드14-T1h: 본문 div 안에 중첩 div 가 생겨도 본문이 잘리지 않는다(깊이 계산)",
+      "target 4000" in (_p102.get("description") or ""))
+check("카드14-T1i: 최신 글이 앞에 온다(TradingView 경로와 정렬 일치)",
+      _tg_posts[0]["url"].endswith("/102"))
+
+# 연령 필터: 시각을 못 뽑은 글은 관대 통과, 오래된 글은 제외
+_tg_old = tgs.fetch_posts("testchan", 5.0, max_age_hours=0.001)
+check("카드14-T1j: max_age_hours 초과 글은 제외(수집 단계 연령 게이트)", _tg_old == [])
+
+# ── T2: 채널 상태 구분 (삭제 vs 비공개/미리보기 불가) ─────────────
+_tg_handler = _ListLogHandler()
+tgs.logger.addHandler(_tg_handler)
+tgs.logger.setLevel(logging.DEBUG)
+
+tgs._get = _tg_stub_get(
+    '<div class="tgme_page_wrap"><div class="tgme_page_description">If you have '
+    'Telegram, you can contact @gone right away.</div></div>')
+_tg_gone = tgs.fetch_posts("gonechannel", 5.0)
+_log_gone = "\n".join(_tg_handler.records)
+check("카드14-T2: 삭제/없는 채널은 빈 목록 + '찾을 수 없음' 로그",
+      _tg_gone == [] and "찾을 수 없음" in _log_gone)
+
+_tg_handler.records.clear()
+tgs._get = _tg_stub_get(
+    '<div class="tgme_page_wrap"><div class="tgme_page_extra">98 700 members</div></div>')
+_tg_priv = tgs.fetch_posts("privchannel", 5.0)
+check("카드14-T2b: 존재하나 미리보기 불가(비공개 전환/그룹)는 다른 로그로 구분",
+      _tg_priv == [] and "미리보기 불가" in "\n".join(_tg_handler.records))
+
+_tg_handler.records.clear()
+tgs._get = _tg_stub_get("<html><body>완전히 다른 구조</body></html>")
+check("카드14-T2c: 알 수 없는 구조는 '스키마 변경 의심' 로그 + 빈 목록",
+      tgs.fetch_posts("weird", 5.0) == []
+      and "스키마 변경" in "\n".join(_tg_handler.records))
+tgs.logger.removeHandler(_tg_handler)
+
+# ── T3: 조회 실패/차단 격리 ──────────────────────────────────────
+tgs._get = _tg_stub_get(None, blocked=True)
+check("카드14-T3: 차단 신호면 빈 목록(예외 없음)", tgs.fetch_posts("testchan", 5.0) == [])
+tgs._get = _tg_stub_get(None, blocked=False)
+check("카드14-T3b: 조회 완전 실패도 빈 목록", tgs.fetch_posts("testchan", 5.0) == [])
+
+
+def _tg_get_boom(url, timeout, max_retry=2):
+    raise RuntimeError("예상외 오류(격리 검증용)")
+
+
+tgs._get = _tg_get_boom
+check("카드14-T3c: 예상외 예외도 삼키고 빈 목록(회차 생존 최우선)",
+      tgs.fetch_posts("testchan", 5.0) == [])
+tgs._get = _tg_stub_get(_TG_FIXTURE)
+check("카드14-T3d: 채널명 형식 오류는 요청 자체를 생략",
+      tgs.fetch_posts("https://t.me/s/bad", 5.0) == [] and tgs.fetch_posts("", 5.0) == [])
+
+# ── T4: 심볼 해석 — 모호하면 버린다(엉뚱한 코인에 레벨을 붙이는 사고 방지) ──
+_known = ["BTC", "ETH", "SOL", "XRP"]
+check("카드14-T4: 심볼 1개만 등장하면 채택($/KRW-/USDT 표기 포함)",
+      tgs.match_symbol("BTC 진입 60000", _known) == "BTC"
+      and tgs.match_symbol("$SOL long", _known) == "SOL"
+      and tgs.match_symbol("KRW-XRP 매수", _known) == "XRP"
+      and tgs.match_symbol("ETHUSDT entry", _known) == "ETH")
+check("카드14-T4b: 2개 이상 등장(시황글)은 None - 억지로 하나 고르지 않는다",
+      tgs.match_symbol("BTC 와 ETH 둘 다 좋다", _known) is None)
+check("카드14-T4c: 유니버스 밖/미언급은 None",
+      tgs.match_symbol("오늘 시장은 조용합니다", _known) is None)
+check("카드14-T4d: 소문자 일반단어는 코인으로 오인하지 않는다(sol/one 등)",
+      tgs.match_symbol("solana ecosystem", _known) is None
+      and tgs.match_symbol("BTCUSD", _known) == "BTC")
+
+# ── T5: 기본 OFF·빈 화이트리스트면 아무 일도 일어나지 않는다(핵심 안전장치) ──
+TEST_DB_TG = "cache/_test_resilience_telegram.db"
+if os.path.exists(TEST_DB_TG):
+    os.remove(TEST_DB_TG)
+db.init_db(TEST_DB_TG)
+
+_tg_fetch_calls = []
+
+
+def _tg_fake_fetch(channel, timeout, max_age_hours=None, max_posts=20):
+    _tg_fetch_calls.append(channel)
+    return [{"title": "BTC 진입", "description": "BTC 진입 60000 손절 55000 목표 70000",
+             "author": channel, "url": f"https://t.me/{channel}/1",
+             "age_minutes": 5.0, "author_followers": None}]
+
+
+run_collect.telegram_source.fetch_posts = _tg_fake_fetch
+run_collect.telegram_source.is_blocked = lambda: False
+_TG_UNIVERSE = [{"symbol": "BTC", "ticker": "KRW-BTC", "rank": 1, "name": "Bitcoin",
+                 "price_usd": 60000.0, "tier_icon": "💎"}]
+
+# 소스 코드 기본값 검증 - 이 프로세스는 SETTINGS 를 덮어쓰므로 런타임 값이 아니라
+# 소스 리터럴을 본다(수리9-R6 과 동일 패턴). 배포만으로 동작이 바뀌지 않는 근거.
+_settings_src_tg = (_repo_root / "config" / "settings.py").read_text(encoding="utf-8")
+check("카드14-T5: 설정 기본값이 OFF (배포해도 동작 변화 0)",
+      '"telegram_source_enabled": False' in _settings_src_tg)
+check("카드14-T5b: 화이트리스트 기본값이 빈 리스트",
+      '"telegram_source_channels": []' in _settings_src_tg)
+
+settings.SETTINGS["telegram_source_enabled"] = False
+settings.SETTINGS["telegram_source_channels"] = ["somechannel"]
+settings.SETTINGS["telegram_source_sleep_sec"] = 0.0
+settings.SETTINGS["telegram_source_max_posts"] = 20
+with db.connect(TEST_DB_TG) as conn:
+    _r_off = run_collect._collect_telegram(conn, _TG_UNIVERSE, {}, 5.0, 168)
+check("카드14-T5c: enabled=False 면 채널이 있어도 요청 0건",
+      _r_off == (0, 0, 0) and not _tg_fetch_calls)
+
+settings.SETTINGS["telegram_source_enabled"] = True
+settings.SETTINGS["telegram_source_channels"] = []
+with db.connect(TEST_DB_TG) as conn:
+    _r_empty = run_collect._collect_telegram(conn, _TG_UNIVERSE, {}, 5.0, 168)
+check("카드14-T5d: 화이트리스트가 비면 켜져 있어도 요청 0건",
+      _r_empty == (0, 0, 0) and not _tg_fetch_calls)
+
+# ── T6: 켰을 때 정상 유입 + source 컬럼 + signal_key 충돌 방지 ──────────
+settings.SETTINGS["telegram_source_channels"] = ["somechannel"]
+run_collect.parse_setup = lambda text, current_price=None: {
+    "direction": "long", "entry": 60000.0, "sl": 55000.0, "tp": 70000.0}
+run_collect.calculate_grade = lambda *a, **k: ("B", 60, 2.0)
+run_collect.judgment_window_hours = lambda *a, **k: 168.0
+run_collect.parse_timeframe_hours = lambda text: None
+with db.connect(TEST_DB_TG) as conn:
+    _r_on = run_collect._collect_telegram(conn, _TG_UNIVERSE, {}, 5.0, 168)
+with db.connect(TEST_DB_TG) as conn:
+    _tg_rows = [dict(r) for r in conn.execute(
+        "SELECT author, source, post_url, coin_symbol FROM levels").fetchall()]
+check("카드14-T6: 켜면 채널 글이 정상 유입(글1 → 셋업1 → 신규1)", _r_on == (1, 1, 1))
+check("카드14-T6b: 작성자는 채널명, 코인은 본문에서 해석된 BTC",
+      len(_tg_rows) == 1 and _tg_rows[0]["author"] == "somechannel"
+      and _tg_rows[0]["coin_symbol"] == "BTC")
+check("카드14-T6c: levels.source 에 'telegram' 이 남는다(사후 소스별 분석 근거)",
+      _tg_rows[0]["source"] == "telegram")
+
+# signal_key: 같은 (코인/엔트리/작성자/URL) 이라도 소스가 다르면 다른 키.
+# 그리고 기본값(tradingview)은 접두사를 붙이지 않아 **기존 DB 키가 불변**이어야 한다
+# (붙이면 이미 쌓인 레벨 전부가 '신규'로 재삽입돼 중복 알림이 터진다).
+_k_tv = db.make_signal_key("BTC", 60000.0, "author", "https://x/1")
+_k_tv_explicit = db.make_signal_key("BTC", 60000.0, "author", "https://x/1",
+                                    source="tradingview")
+_k_tg = db.make_signal_key("BTC", 60000.0, "author", "https://x/1", source="telegram")
+check("카드14-T6d: 소스가 다르면 signal_key 도 다르다(중복 저장·오알림 방지)",
+      _k_tv != _k_tg)
+check("카드14-T6e(회귀): 기본값과 명시 'tradingview' 는 같은 키", _k_tv == _k_tv_explicit)
+_expected_tv_key = hashlib.sha1(
+    "BTC|60000.000000|author|https://x/1".encode("utf-8")).hexdigest()[:16]
+check("카드14-T6f(회귀): tradingview 키는 접두사 없는 원문 해시 그대로 "
+      "(기존 DB 수천 건이 '신규'로 재삽입되면 중복 알림 폭발)",
+      _k_tv == _expected_tv_key)
+
+# 두 번째 호출은 같은 키라 신규가 아니다(멱등 - 회차마다 중복 저장되지 않는다)
+with db.connect(TEST_DB_TG) as conn:
+    _r_again = run_collect._collect_telegram(conn, _TG_UNIVERSE, {}, 5.0, 168)
+check("카드14-T6g: 같은 글 재수집은 신규 0건(업서트 멱등)", _r_again == (1, 1, 0))
+
+# ── T7: source 컬럼 마이그레이션 (기존 DB 무중단) ────────────────────
+TEST_DB_TGMIG = "cache/_test_resilience_tg_migrate.db"
+if os.path.exists(TEST_DB_TGMIG):
+    os.remove(TEST_DB_TGMIG)
+# SCHEMA(CREATE TABLE)에는 source 가 없다 - 즉 이 경로가 곧 '구세대 DB' 재현이고,
+# init_db 의 PRAGMA table_info → ALTER 마이그레이션이 실제로 컬럼을 붙여야 한다.
+with db.connect(TEST_DB_TGMIG) as conn:
+    conn.executescript(db.SCHEMA)
+    conn.execute(
+        """INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,
+             author, post_url, status, collected_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("legacy_src", "BTC", "KRW-BTC", "long", 60000.0, "OldAuthor",
+         "https://tv.example/legacy", "watching", time.time()))
+with db.connect(TEST_DB_TGMIG) as conn:
+    _cols_before = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+check("카드14-T7 사전조건: 구세대 스키마엔 source 컬럼이 없다",
+      "source" not in _cols_before)
+
+db.init_db(TEST_DB_TGMIG)
+with db.connect(TEST_DB_TGMIG) as conn:
+    _cols_after = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+    _legacy_src = conn.execute(
+        "SELECT source FROM levels WHERE signal_key='legacy_src'").fetchone()["source"]
+check("카드14-T7b: init_db 가 source 컬럼을 ALTER 로 추가", "source" in _cols_after)
+check("카드14-T7c: 기존 행은 DEFAULT 'tradingview' 로 소급 분류(사후 분석 정확도)",
+      _legacy_src == "tradingview")
+
+# 재실행 멱등 - 이미 있는 컬럼을 다시 ALTER 하지 않는다(예외 없이 통과)
+db.init_db(TEST_DB_TGMIG)
+check("카드14-T7d: init_db 재호출도 예외 없이 통과(마이그레이션 멱등)", True)
+
+tgs._get = _tg_orig_get
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
 for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY, TEST_DB_CHAIN, TEST_DB_LEGACY,
-           TEST_DB_CHAIN_CYCLE, TEST_DB_GAP):
+           TEST_DB_CHAIN_CYCLE, TEST_DB_GAP, TEST_DB_DELORDER, TEST_DB_DELORDER2,
+           TEST_DB_TG, TEST_DB_TGMIG):
     try:
         if os.path.exists(_p):
             os.remove(_p)

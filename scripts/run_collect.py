@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-from collector import coingecko, tradingview, watcher_stats
+from collector import coingecko, telegram_source, tradingview, watcher_stats
 from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
 from collector.grading import calculate_grade
 from config import settings
@@ -136,6 +136,134 @@ def _prune_tv_block_alert_meta(conn, day: str, keep_days: int) -> int:
     return cur.rowcount
 
 
+# ── 글 1건 → 레벨 저장 (입력원 공통 경로) ──────────────────────────────
+def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: float,
+                 source: str = "tradingview", lookup_followers: bool = True):
+    """글 1건을 파싱→등급→저장까지 처리. 반환 (셋업 있었나, 신규 저장인가).
+
+    2026-07-26 수리: 글 1건의 파싱/등급/저장 오류가 사이클 전체 커밋을 굴리지 못하게
+    격리 - collector/tradingview.py _items_to_ideas 의 아이템별 격리 원칙을 하류
+    (파싱~저장)까지 확장한다. 실패 건은 로그만 남기고 다음 아이디어로 계속.
+
+    2026-07-27 카드 #14: 텔레그램 소스가 같은 하류(파서→등급→클러스터→적중DB)를
+    무수정 재사용하도록 이 함수로 뽑았다. 입력원별로 갈리는 건 딱 둘 —
+      · source: levels.source 에 남겨 사후에 "어느 소스가 잘 맞나"를 가른다.
+      · lookup_followers: 팔로워 조회는 TradingView 프로필 페이지 전용이라
+        텔레그램 채널 작성자에 대고 부르면 무의미한 TV 요청(=차단 위험)만 늘어난다.
+    """
+    try:
+        text = f"{idea['title']}\n{idea['description']}"
+        setup = parse_setup(text, current_price=coin.get("price_usd"))
+        if not setup or not setup.get("entry"):
+            return False, False
+        stats_row = author_stats.get(idea.get("author") or "", {})
+        followers = stats_row.get("followers") or idea.get("author_followers")
+        if followers is None and lookup_followers and idea.get("author"):
+            followers = tradingview.fetch_author_followers(idea["author"], timeout)
+        grade, score, rr = calculate_grade(
+            followers, setup["direction"], setup["entry"],
+            setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
+        )
+        tf_hours = parse_timeframe_hours(text)
+        level = {
+            "signal_key": db.make_signal_key(
+                coin["symbol"], setup["entry"], idea.get("author"), idea.get("url"),
+                source=source),
+            "judgment_window_hours": judgment_window_hours(
+                tf_hours, setup["entry"], setup.get("tp")),
+            "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
+            "coin_symbol": coin["symbol"],
+            "ticker": coin["ticker"],
+            "direction": setup["direction"],
+            "entry_usd": setup["entry"],
+            "sl_usd": setup.get("sl"),
+            "tp_usd": setup.get("tp"),
+            "rr": rr,
+            "grade": grade,
+            "score": score,
+            "author": idea.get("author"),
+            "author_followers": followers,
+            "author_hit_rate": stats_row.get("hit_rate"),
+            "author_hit_count": stats_row.get("hit_count"),
+            "author_whitelisted": stats_row.get("whitelisted", False),
+            "mcap_rank": coin.get("rank"),
+            "mcap_tier_icon": coin.get("tier_icon"),
+            "post_url": idea.get("url"),
+            "post_age_minutes": idea.get("age_minutes"),
+            "collected_at": time.time(),
+            "source": source,
+        }
+        return True, bool(db.upsert_level(conn, level))
+    except Exception as e:  # noqa: BLE001 - 글 1건 오류가 사이클 전체를 막으면 안 됨
+        logger.warning("[%s] 아이디어 1건 처리 실패 - 스킵: %s", coin.get("symbol"), e)
+        return False, False
+
+
+# ── 텔레그램 공개채널 수집 (2026-07-27 기획 카드 #14) ──────────────────
+def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
+                      max_age_hours):
+    """공개채널 화이트리스트를 돌며 글을 수집·저장. 반환 (글수, 셋업수, 신규수).
+
+    ⚠️ 기본 OFF·빈 화이트리스트가 이 기능의 안전장치다 — settings 의
+    telegram_source_enabled 가 False 이거나 telegram_source_channels 가 비어 있으면
+    **요청 한 건도 나가지 않고 즉시 0 을 반환한다**. 배포만으로는 동작이 전혀
+    변하지 않아야 한다(채널 목록은 사장님 승인 사항).
+
+    TradingView 수집 루프 '뒤에' 둔다: 주 입력원이 예산·시간을 먼저 쓰고, 보조
+    입력원이 남은 시간에 붙는 구조. 텔레그램 차단은 TradingView 와 완전히 독립이라
+    (다른 호스트) 한쪽 차단이 다른 쪽을 막지 않는다.
+    """
+    if not settings.get("telegram_source_enabled"):
+        return 0, 0, 0
+    channels = [c for c in (settings.get("telegram_source_channels") or []) if c]
+    if not channels:
+        logger.info("[tg] 채널 화이트리스트가 비어 있음 - 수집 생략")
+        return 0, 0, 0
+
+    # 심볼 해석용 인덱스. 채널 글은 어느 코인 얘기인지 본문을 봐야 알기 때문에
+    # 유니버스(= 업비트 KRW 상장 ∩ 시총 상위) 안에서만 찾는다 — 추적 대상이 아닌
+    # 코인의 레벨을 만들어 봐야 가격체크가 조회할 티커가 없다.
+    by_symbol = {u["symbol"]: u for u in universe}
+    known = list(by_symbol)
+
+    sleep_sec = settings.get("telegram_source_sleep_sec")
+    max_posts = settings.get("telegram_source_max_posts")
+    n_posts = n_setup = n_new = n_unmatched = 0
+
+    for i, channel in enumerate(channels):
+        if telegram_source.is_blocked():
+            logger.warning("[tg] 차단 쿨다운 감지 - 남은 %d개 채널 다음 회차로 이월",
+                           len(channels) - i)
+            break
+        if i > 0:
+            time.sleep(sleep_sec)   # 비공식 경로 - 공격적으로 긁지 않는다
+        posts = telegram_source.fetch_posts(
+            channel, timeout, max_age_hours=max_age_hours, max_posts=max_posts)
+        n_posts += len(posts)
+        for post in posts:
+            # 글 1건 격리는 TradingView 루프와 동일 원칙 — 심볼 해석 실패는 예외가
+            # 아니라 '해당 없음'이라 조용히 넘긴다(시황글·잡담이 대부분일 것).
+            try:
+                symbol = telegram_source.match_symbol(
+                    f"{post.get('title') or ''}\n{post.get('description') or ''}", known)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[tg] %s: 심볼 해석 실패 - 스킵: %s", channel, e)
+                continue
+            if not symbol:
+                n_unmatched += 1
+                continue
+            had_setup, is_new = _ingest_idea(
+                conn, by_symbol[symbol], post, author_stats, timeout,
+                source="telegram", lookup_followers=False)
+            n_setup += 1 if had_setup else 0
+            n_new += 1 if is_new else 0
+
+    if n_posts:
+        logger.info("[tg] 채널 %d개: 글 %d건(심볼 미해석 %d) → 셋업 %d건 → 신규 %d건",
+                    len(channels), n_posts, n_unmatched, n_setup, n_new)
+    return n_posts, n_setup, n_new
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", help="콤마구분 심볼 (지정 시 유니버스 대신 사용)")
@@ -195,6 +323,24 @@ def main() -> int:
     max_age_h = settings.get("max_post_age_hours")
 
     with db.connect(db_path) as conn:
+        # ── 글 삭제 감지(과제1) — 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
+        #
+        # ⚠️ 이 호출은 반드시 심볼 수집 루프보다 **앞**에 있어야 한다. 뒤로 옮기면
+        # 기능이 구조적으로 영원히 실행되지 않는다 — 2026-07-27 프로덕션 실증:
+        #   ① 수집 루프 도중 TradingView 가 차단을 건다(실측 26~61번째 심볼에서 403,
+        #      → 모듈 전역 30분 쿨다운).
+        #   ② 루프 뒤에 있던 _check_deletions 는 첫 후보에서 is_blocked()==True 라
+        #      즉시 break → 0건 확인.
+        #   ③ 하루 게이트를 소진하지 않는 수정(2026-07-26) 덕에 다음 회차에 재시도
+        #      하지만, 다음 회차도 똑같이 루프에서 먼저 차단돼 **같은 자리에서 영원히
+        #      기아**. 실제로 deleted_checked_at 이 배포 후 이틀째 0건이었다.
+        # 비용 대비도 명확하다: 삭제 확인은 하루 1회·최대 5요청(deletion_check_daily_limit)
+        # 이라 81심볼 수집에 비하면 무시할 수준이고, 그 5요청 때문에 수집이 조금 일찍
+        # 차단될 위험보다 안티게이밍 기능이 아예 안 도는 손실이 훨씬 크다.
+        # (직전 회차의 쿨다운이 아직 안 끝난 채로 회차가 시작된 경우엔 여기서도 그대로
+        #  break 하고 게이트를 소진하지 않는다 — 그건 정상 동작이다.)
+        n_deleted = _check_deletions(conn, timeout)
+
         # ── 수집 순환 (2026-07-27): 유니버스는 시총 내림차순 '고정'이라, 차단으로
         # 중도 이탈하면 매번 앞쪽 대형주만 수집되고 꼬리는 영원히 조회되지 않는
         # 기아가 생긴다(실측: 쿠키 등록 후에도 61번째에서 403 → 하위 21개 0회 조회
@@ -228,56 +374,9 @@ def main() -> int:
             n_posts += len(ideas)
 
             for idea in ideas:
-                # 2026-07-26 수리: 글 1건의 파싱/등급/저장 오류가 사이클 전체 커밋을
-                # 굴리지 못하게 격리 - collector/tradingview.py _items_to_ideas 의
-                # 아이템별 격리 원칙을 하류(파싱~저장)까지 확장한다. 실패 건은
-                # 로그만 남기고 다음 아이디어로 계속.
-                try:
-                    text = f"{idea['title']}\n{idea['description']}"
-                    setup = parse_setup(text, current_price=coin.get("price_usd"))
-                    if not setup or not setup.get("entry"):
-                        continue
-                    n_setup += 1
-                    stats_row = author_stats.get(idea.get("author") or "", {})
-                    followers = stats_row.get("followers") or idea.get("author_followers")
-                    if followers is None and idea.get("author"):
-                        followers = tradingview.fetch_author_followers(idea["author"], timeout)
-                    grade, score, rr = calculate_grade(
-                        followers, setup["direction"], setup["entry"],
-                        setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
-                    )
-                    tf_hours = parse_timeframe_hours(text)
-                    level = {
-                        "signal_key": db.make_signal_key(
-                            coin["symbol"], setup["entry"], idea.get("author"), idea.get("url")),
-                        "judgment_window_hours": judgment_window_hours(
-                            tf_hours, setup["entry"], setup.get("tp")),
-                        "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
-                        "coin_symbol": coin["symbol"],
-                        "ticker": coin["ticker"],
-                        "direction": setup["direction"],
-                        "entry_usd": setup["entry"],
-                        "sl_usd": setup.get("sl"),
-                        "tp_usd": setup.get("tp"),
-                        "rr": rr,
-                        "grade": grade,
-                        "score": score,
-                        "author": idea.get("author"),
-                        "author_followers": followers,
-                        "author_hit_rate": stats_row.get("hit_rate"),
-                        "author_hit_count": stats_row.get("hit_count"),
-                        "author_whitelisted": stats_row.get("whitelisted", False),
-                        "mcap_rank": coin.get("rank"),
-                        "mcap_tier_icon": coin.get("tier_icon"),
-                        "post_url": idea.get("url"),
-                        "post_age_minutes": idea.get("age_minutes"),
-                        "collected_at": time.time(),
-                    }
-                    if db.upsert_level(conn, level):
-                        n_new += 1
-                except Exception as e:  # noqa: BLE001 - 글 1건 오류가 사이클 전체를 막으면 안 됨
-                    logger.warning("[%s] 아이디어 1건 처리 실패 - 스킵: %s",
-                                   coin.get("symbol"), e)
+                had_setup, is_new = _ingest_idea(conn, coin, idea, author_stats, timeout)
+                n_setup += 1 if had_setup else 0
+                n_new += 1 if is_new else 0
 
             if i < len(universe) - 1:
                 time.sleep(sleep_sec)
@@ -290,6 +389,15 @@ def main() -> int:
             else:
                 db.set_meta(conn, _UNIVERSE_OFFSET_META,
                             str((offset + stopped_at) % len(universe)))
+
+        # ── 두 번째 입력원: 텔레그램 공개채널 (2026-07-27 카드 #14) ─────────
+        # TradingView 루프 뒤에 붙인다. 기본 OFF·빈 화이트리스트라 사장님이 채널을
+        # 넣기 전까지는 이 호출이 요청 없이 즉시 0 을 반환한다(동작 변화 0).
+        tg_posts, tg_setup, tg_new = _collect_telegram(
+            conn, universe, author_stats, timeout, max_age_h)
+        n_posts += tg_posts
+        n_setup += tg_setup
+        n_new += tg_new
 
         # 파서 개선 자동 전파: 원문 있는 기존 레벨을 현재 파서로 재파싱해 오염값 치유
         reparsed = db.reparse_all(conn)
@@ -306,10 +414,8 @@ def main() -> int:
         _prune_tv_block_alert_meta(conn, _day_kst(now_block),
                                    settings.get("tv_block_alert_meta_keep_days"))
 
-        # 글 삭제 감지(과제1) - 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
-        # 차단 쿨다운 중이면 요청 자체가 즉시 생략되므로(circuit breaker) 이 호출도
-        # 안전하다 - 밴 확산을 만들지 않는다.
-        n_deleted = _check_deletions(conn, timeout)
+        # (글 삭제 감지 _check_deletions 는 이 자리에 있었다 → 2026-07-27 수집 루프
+        #  '앞'으로 이동. 이유는 위 호출부 주석 참고 — 되돌리면 다시 기아가 된다.)
 
     logger.info(
         "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 재파싱치유 %d건 / 만료 %d건 / "

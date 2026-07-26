@@ -129,11 +129,19 @@ CREATE TABLE IF NOT EXISTS daily_stats (
 """
 
 
-def make_signal_key(coin_symbol: str, entry_usd, author: str, post_url: str) -> str:
+def make_signal_key(coin_symbol: str, entry_usd, author: str, post_url: str,
+                    source: str = "tradingview") -> str:
     """같은 글의 같은 엔트리를 한 레벨로 식별. 엔트리는 소수 6자리로 라운딩해
-    부동소수 미세차로 중복 생성되는 걸 막는다."""
+    부동소수 미세차로 중복 생성되는 걸 막는다.
+
+    source (2026-07-27 카드 #14): 입력원이 둘 이상이 되면서 서로 다른 소스의 글이
+    같은 키로 뭉개지지 않도록 접두사를 넣는다. 기본값 'tradingview' 는 **접두사를
+    붙이지 않는다** — 이미 DB 에 쌓인 수천 건의 키가 그대로 유지돼야 하기 때문이다
+    (접두사를 무조건 붙이면 기존 레벨 전부가 '신규'로 재삽입돼 중복 알림이 터진다)."""
     entry_str = f"{float(entry_usd):.6f}" if entry_usd is not None else "none"
     raw = f"{coin_symbol}|{entry_str}|{author or ''}|{post_url or ''}"
+    if source and source != "tradingview":
+        raw = f"{source}|{raw}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -187,6 +195,18 @@ _OUTCOME_COLUMNS = {
     "outcome_hash": "TEXT",
 }
 
+# 판정과 무관한 일반 확장 컬럼 — 같은 ALTER 마이그레이션 경로를 쓰되, _OUTCOME_COLUMNS
+# (적중 판정 필드)와 성격이 달라 분리해 둔다.
+_EXTRA_COLUMNS = {
+    # 입력원 (2026-07-27 카드 #14). 'tradingview' | 'telegram'.
+    # 왜 남기나: 소스가 둘이 되면 "어느 소스가 더 잘 맞나"가 곧 운영 판단(채널 유지/
+    # 퇴출, 비중)의 근거가 된다. 사후에 소스별로 outcome/E_LB 를 가르려면 유입 시점에
+    # 찍어두는 수밖에 없다(post_url 로 역추정하는 건 URL 형식이 바뀌면 깨진다).
+    # **표시 전용 아님 — 분석 전용**: 알림 양식·필터·등급 어디에도 넣지 않는다.
+    # 기존 행은 DEFAULT 로 자동 'tradingview' 가 되어 소급 분류가 정확하다.
+    "source": "TEXT DEFAULT 'tradingview'",
+}
+
 
 def _migrate(conn) -> None:
     """기존 DB에 없는 컬럼만 ALTER 로 추가 (레포 커밋백 DB는 스키마가 과거일 수 있음).
@@ -195,7 +215,7 @@ def _migrate(conn) -> None:
     새 컬럼을 붙여주지 않아서, 운영 DB에 테이블이 생긴 뒤 컬럼을 추가하면 조용히
     누락된다(2026-07-26 ambiguous_* 추가 때 발견). 카운터라 기본값 0 으로 채운다."""
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
-    for col, decl in _OUTCOME_COLUMNS.items():
+    for col, decl in list(_OUTCOME_COLUMNS.items()) + list(_EXTRA_COLUMNS.items()):
         if col not in existing:
             conn.execute(f"ALTER TABLE levels ADD COLUMN {col} {decl}")
 
@@ -252,8 +272,8 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -265,6 +285,8 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("post_url"), level.get("post_age_minutes"),
                 "watching", level.get("collected_at", time.time()),
                 level.get("judgment_window_hours"), level.get("raw_text"),
+                # 소스 미지정이면 tradingview (기존 호출부 무수정 호환)
+                level.get("source") or "tradingview",
             ),
         )
         return True
