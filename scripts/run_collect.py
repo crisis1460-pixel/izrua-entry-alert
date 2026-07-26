@@ -15,6 +15,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,10 +29,76 @@ from collector import coingecko, tradingview, watcher_stats
 from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
 from collector.grading import calculate_grade
 from config import settings
+from notify import telegram
 from storage import db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("alert.collect")
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _day_kst(now: float) -> str:
+    return datetime.fromtimestamp(now, tz=_KST).strftime("%Y-%m-%d")
+
+
+# ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
+def _check_deletions(conn, timeout: float) -> int:
+    """종결된 레벨의 post_url 생존을 하루 상한만큼 확인. 반환: 삭제 확정 건수.
+    하루 1회만 수행(수집이 4시간마다 도는 것과 별개로 - meta 로 날짜 게이트),
+    확인 건수는 settings.deletion_check_daily_limit 로 제한한다(비용 방어)."""
+    now = time.time()
+    day = _day_kst(now)
+    if db.get_meta(conn, "last_deletion_check_day") == day:
+        return 0
+    limit = settings.get("deletion_check_daily_limit")
+    recheck_sec = settings.get("deletion_recheck_after_days") * 86400
+    candidates = db.get_deletion_check_candidates(conn, limit, recheck_sec)
+    if not candidates:
+        db.set_meta(conn, "last_deletion_check_day", day)
+        return 0
+    n_deleted = n_checked = 0
+    for i, cand in enumerate(candidates):
+        if tradingview.is_blocked():
+            logger.warning("[삭제확인] 차단 쿨다운 감지 - 남은 %d건 다음 회차로 연기",
+                           len(candidates) - i)
+            break
+        if i > 0:
+            time.sleep(1.0)  # 상세 방문과 동일한 페이싱 원칙(모듈 sleep 계약 준수)
+        result = tradingview.check_post_deleted(cand["post_url"], timeout)
+        if result is None:
+            continue  # 판정 보류 - deleted_checked_at 갱신 안 함, 다음 순번에 재확인
+        db.mark_deletion_checked(conn, cand["id"], result, now)
+        n_checked += 1
+        if result:
+            n_deleted += 1
+            logger.info("[삭제확인] 삭제 확정: id=%s author=%s", cand["id"], cand.get("author"))
+    db.set_meta(conn, "last_deletion_check_day", day)
+    if n_checked:
+        logger.info("[삭제확인] %d건 확인 (삭제 %d건)", n_checked, n_deleted)
+    return n_deleted
+
+
+# ── TradingView 확정 차단 즉시 알림 (2026-07-26 과제2) ─────────────────
+def _maybe_alert_block(conn, now: float) -> None:
+    """이번 수집 주기 중 확정 차단(403/429/캡차/1020)이 감지됐으면 하루 상한 내에서
+    즉시 경고. 수집 급감 경고(24시간 뒤에야 울림)보다 빠른 신호 - 단 사용자가
+    알림 과다를 싫어하므로 하루 1회(tv_block_alert_daily_limit=1)로 강하게 억제."""
+    reason = tradingview.hard_block_detected()
+    if reason is None:
+        return
+    day = _day_kst(now)
+    limit = settings.get("tv_block_alert_daily_limit")
+    if limit <= 0:
+        return
+    sent_today = int(db.get_meta(conn, "tv_block_alert_count_" + day, "0") or "0")
+    if sent_today >= limit:
+        return
+    text = telegram.render_tv_block_alert(reason)
+    if telegram.send(text):
+        db.set_meta(conn, "tv_block_alert_count_" + day, str(sent_today + 1))
+        logger.warning("[차단경보] 확정 차단(%s) 감지 - 경고 발송(오늘 %d/%d회)",
+                       reason, sent_today + 1, limit)
 
 
 def main() -> int:
@@ -146,9 +213,19 @@ def main() -> int:
         expired = db.expire_old(conn, settings.get("level_expiry_hours") * 3600)
         st = db.stats(conn)
 
+        # 확정 차단 감지 시 즉시 경보(과제2) - 위 심볼 루프 도중 차단으로 조기 종료
+        # 됐어도 hard_block_detected() 는 주기 내내 유지되므로 여기서 잡힌다.
+        _maybe_alert_block(conn, time.time())
+
+        # 글 삭제 감지(과제1) - 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
+        # 차단 쿨다운 중이면 요청 자체가 즉시 생략되므로(circuit breaker) 이 호출도
+        # 안전하다 - 밴 확산을 만들지 않는다.
+        n_deleted = _check_deletions(conn, timeout)
+
     logger.info(
-        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 재파싱치유 %d건 / 만료 %d건 / DB %s",
-        time.time() - t0, n_posts, n_setup, n_new, reparsed, expired, st,
+        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 재파싱치유 %d건 / 만료 %d건 / "
+        "삭제감지 %d건 / DB %s",
+        time.time() - t0, n_posts, n_setup, n_new, reparsed, expired, n_deleted, st,
     )
     return 0
 

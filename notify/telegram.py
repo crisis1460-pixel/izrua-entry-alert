@@ -315,6 +315,22 @@ def render_collect_silence_alert(window_hours: float, baseline_avg_per_day: floa
     return "\n".join(lines)
 
 
+def render_tv_block_alert(reason) -> str:
+    """TradingView 확정 차단(403/429/캡차/1020) 감지 즉시 경고 (2026-07-26 과제2).
+    수집 급감 경고(24시간 0건 지속)보다 먼저 울리는 빠른 신호 - render_alert 와
+    무관한 별도 렌더러. 하루 1회 상한은 호출부(scripts/run_collect.py)의 meta
+    중복방지가 담당한다(이 함수는 순수 렌더링만)."""
+    reason_kr = "캡차/챌린지" if reason == "captcha" else f"HTTP {reason}"
+    lines = [
+        _SEP,
+        "🚫 <b>[TradingView 차단 감지]</b>",
+        f"신호: {reason_kr}",
+        "봇이 30분 쿨다운 후 자동 재시도합니다. 반복되면 TV_COOKIE 등록을 검토하세요.",
+        _SEP,
+    ]
+    return "\n".join(lines)
+
+
 # ── 주간 성적 리포트 (ACCURACY_DB_PLAN 2단계 후속, 2026-07-26) ────────────
 #
 # 랭킹 수학은 analytics.ranking 그대로 사용(재설계 금지) — 여기선 톤을 맞춘 렌더링만.

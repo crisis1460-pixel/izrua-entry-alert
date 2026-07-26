@@ -4,6 +4,11 @@
 
 한도: 시세 REST 초당 10회(IP). 배치 ticker 는 1콜, 캔들은 마켓당 1콜이라
 candle 호출만 페이싱(0.12s)한다.
+
+2026-07-26 실측: 레이트리밋 그룹은 엔드포인트별로 분리돼 있다
+(`Remaining-Req` 헤더: ticker=`group=ticker`, 캔들=`group=candles`,
+체결내역=`group=crix-trades`, 각각 min=600; sec=10). 즉 아래 fetch_trades_window 는
+캔들/시세 예산을 전혀 갉아먹지 않는다.
 """
 
 import logging
@@ -141,3 +146,81 @@ def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[lis
     if not out:
         return None
     return sorted(out.values())
+
+
+# ── 체결내역(trades) — 동시터치 재검사(Bar Magnifier) 전용 ─────────────────
+# 업비트 공개 API의 최소 캔들 단위가 1분이라 "1분봉을 더 쪼갠 봉"은 존재하지 않는다.
+# 대신 개별 체결 틱(/v1/trades/ticks)이 그 1분 안의 실제 시간순서를 담고 있어,
+# 이것이 사실상의 최하위 타임프레임 역할을 한다.
+#
+# 2026-07-26 실측으로 확인한 제약:
+#   - count 최대 500 (501 요청해도 500으로 절삭)
+#   - 과거 조회는 `to`(HH:MM:SS, UTC) + `daysAgo`(1~7). daysAgo=8 은 400 에러 →
+#     **조회 가능 과거는 최대 7일**. 우리 재검사는 터치 직후(수 분 내) 돌므로 무관.
+#   - 페이지네이션은 `cursor`(직전 페이지 최고(最古) sequential_id)로 이어붙는다.
+#     daysAgo 와 함께 넘기면 과거 구간에서도 정상 동작(실측 확인).
+#     `to` 를 당겨가며 페이징하는 방식은 초 단위라 같은 초의 체결이 유실되므로 쓰지 않는다.
+_TRADES_URL = _BASE + "/trades/ticks"
+_TRADES_PAGE = 500          # API 상한
+_TRADES_MAX_DAYS_AGO = 7    # API 상한 (실측: 8 은 400)
+_TRADE_PACE_SEC = 0.12      # 초당 ~8콜 (한도 10의 80%) — 캔들과 별도 그룹
+
+
+def fetch_trades_window(market: str, start_ts: float, end_ts: float,
+                        timeout: float, max_pages: int = 4) -> Optional[list]:
+    """[start_ts, end_ts) 구간의 개별 체결을 시간 오름차순 [(epoch, price), ...] 로.
+
+    **구간 전체를 덮지 못하면 None** — 부분 데이터로 도달 '순서'를 단정하면
+    보수적 판정보다 나쁜(틀린) 결론이 나올 수 있기 때문이다. 호출부는 None 을
+    "판별 불가 → 기존 보수적 처리 유지"로 다뤄야 한다.
+
+    같은 밀리초 timestamp 가 흔하므로 정렬 키에 sequential_id 를 병기한다
+    (거래소가 부여하는 단조 증가 체결 일련번호 = 진짜 체결 순서)."""
+    if end_ts <= start_ts:
+        return None
+    # `to` 는 해당 '초' 직전까지를 뜻하는 것으로 관측된다(경계초 유실 방지를 위해
+    # 1초 더 넉넉히 요청하고, 실제 구간 필터는 아래 timestamp 비교로 건다).
+    to_dt = datetime.fromtimestamp(end_ts + 1, tz=timezone.utc)
+    days_ago = (datetime.now(timezone.utc).date() - to_dt.date()).days
+    if days_ago < 0 or days_ago > _TRADES_MAX_DAYS_AGO:
+        logger.info("[upbit] %s 체결내역 조회 범위 밖(%d일 전) - 재검사 불가", market, days_ago)
+        return None
+
+    base = {"market": market, "count": _TRADES_PAGE}
+    if days_ago > 0:
+        base["daysAgo"] = days_ago
+    params = dict(base, to=to_dt.strftime("%H:%M:%S"))
+
+    seen: dict = {}     # sequential_id → (ts, sid, price) — 페이지 경계 중복 제거
+    covered = False
+    for _ in range(max(1, max_pages)):
+        try:
+            resp = requests.get(_TRADES_URL, params=params, timeout=timeout)
+            resp.raise_for_status()
+            raw = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[upbit] %s 체결내역 조회 실패: %s", market, e)
+            time.sleep(_TRADE_PACE_SEC)
+            return None
+        time.sleep(_TRADE_PACE_SEC)
+        if not raw:
+            break
+
+        oldest_ts = None
+        for t in raw:
+            ts = float(t["timestamp"]) / 1000.0
+            oldest_ts = ts if oldest_ts is None else min(oldest_ts, ts)
+            if start_ts <= ts < end_ts:
+                sid = t["sequential_id"]
+                seen[sid] = (ts, sid, float(t["trade_price"]))
+        if oldest_ts is not None and oldest_ts <= start_ts:
+            covered = True      # 구간 시작보다 더 과거까지 닿음 - 완전 커버
+            break
+        if len(raw) < _TRADES_PAGE:
+            covered = True      # 더 오래된 체결이 없음(저유동성) - 있는 건 다 받음
+            break
+        params = dict(base, cursor=raw[-1]["sequential_id"])
+
+    if not covered or not seen:
+        return None
+    return [(ts, price) for ts, _sid, price in sorted(seen.values())]

@@ -16,9 +16,11 @@ except Exception:
 import logging
 logging.basicConfig(level=logging.CRITICAL)
 
+from collector import tradingview
 from config import settings
+from notify import telegram
 from storage import db
-from scripts import run_cycle
+from scripts import run_cycle, run_collect
 
 TEST_DB = "cache/_test_cycle.db"
 settings.SETTINGS["db_path"] = TEST_DB
@@ -272,5 +274,214 @@ check("R14c 스위치 ON 이면 정기 발송 재개",
       _r14c["weekly_report"] == "ok" and _sent_flag["n"] == 1)
 settings.SETTINGS["weekly_report_auto_send"] = False
 
+
+# ── D1~D5: 글 삭제 감지 - storage.db 계층 (2026-07-26 과제1) ───────────
+TEST_DB2 = "cache/_test_collect_extra.db"
+if os.path.exists(TEST_DB2):
+    os.remove(TEST_DB2)
+db.init_db(TEST_DB2)
+
+_sk_counter = [0]
+
+
+def _insert_level(conn, status="touched", post_url="https://tv.example/x",
+                  author="Author1", deleted=None, deleted_checked_at=None,
+                  collected_at=None):
+    _sk_counter[0] += 1
+    key = f"testkey{_sk_counter[0]}"
+    conn.execute(
+        """INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,
+             author, post_url, status, collected_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (key, "TST", "KRW-TST", "long", 1.0, author, post_url, status,
+         collected_at if collected_at is not None else time.time()),
+    )
+    lid = conn.execute("SELECT id FROM levels WHERE signal_key=?", (key,)).fetchone()["id"]
+    if deleted is not None or deleted_checked_at is not None:
+        conn.execute("UPDATE levels SET deleted=?, deleted_checked_at=? WHERE id=?",
+                     (1 if deleted else 0, deleted_checked_at, lid))
+    return lid
+
+
+with db.connect(TEST_DB2) as conn:
+    lid_touched = _insert_level(conn, status="touched")
+    lid_expired = _insert_level(conn, status="expired")
+    lid_watching = _insert_level(conn, status="watching")
+    cand_ids = {c["id"] for c in db.get_deletion_check_candidates(conn, 10, 999999)}
+check("D1 삭제확인 후보는 종결(touched/expired) 레벨만",
+      cand_ids == {lid_touched, lid_expired} and lid_watching not in cand_ids)
+
+with db.connect(TEST_DB2) as conn:
+    lid_del = _insert_level(conn, status="touched", deleted=True, deleted_checked_at=time.time())
+    cand_ids2 = {c["id"] for c in db.get_deletion_check_candidates(conn, 50, 999999)}
+check("D2 이미 삭제 확정된 레벨은 후보에서 제외", lid_del not in cand_ids2)
+
+with db.connect(TEST_DB2) as conn:
+    lid_recent = _insert_level(conn, status="touched", deleted=False,
+                               deleted_checked_at=time.time())
+    ids_soon = {c["id"] for c in db.get_deletion_check_candidates(conn, 50, 999999)}
+check("D3 최근 생존확인된 레벨은 재확인 창 내에서 제외", lid_recent not in ids_soon)
+with db.connect(TEST_DB2) as conn:
+    conn.execute("UPDATE levels SET deleted_checked_at=? WHERE id=?",
+                 (time.time() - 999999, lid_recent))
+    ids_late = {c["id"] for c in db.get_deletion_check_candidates(conn, 50, 1000)}
+check("D3b 재확인 창을 넘기면 다시 후보에 포함", lid_recent in ids_late)
+
+with db.connect(TEST_DB2) as conn:
+    lid4 = _insert_level(conn, status="expired")
+    db.mark_deletion_checked(conn, lid4, True, now=1000.0)
+    row = conn.execute("SELECT deleted, deleted_checked_at FROM levels WHERE id=?",
+                       (lid4,)).fetchone()
+check("D4 mark_deletion_checked 이 삭제 플래그·확인시각을 기록",
+      row["deleted"] == 1 and row["deleted_checked_at"] == 1000.0)
+
+with db.connect(TEST_DB2) as conn:
+    a = "AuthorD5"
+    _insert_level(conn, status="touched", author=a, deleted=True, deleted_checked_at=time.time())
+    _insert_level(conn, status="touched", author=a, deleted=False, deleted_checked_at=time.time())
+    _insert_level(conn, status="touched", author=a)  # 미확인 - 분모(checked) 제외돼야 함
+    stats5 = db.get_author_deletion_stats(conn, a)
+check("D5 작성자 삭제 통계(확인 2건 중 삭제 1건, 미확인은 분모 제외)",
+      stats5 == {"checked": 2, "deleted": 1})
+
+os.remove(TEST_DB2)
+
+# ── D6~D10: collector.tradingview.check_post_deleted (네트워크 모킹) ───
+_orig_tv_get = tradingview._get
+
+
+def _mock_get(result):
+    return lambda url, timeout, max_retry=3: result
+
+
+tradingview._get = _mock_get((None, True, False))  # 차단 쿨다운 중
+check("D6 차단 중이면 판정 보류(None)", tradingview.check_post_deleted("https://x", 5.0) is None)
+
+tradingview._get = _mock_get((None, False, True))  # 404
+check("D7 404 확인 시 삭제 확정(True)", tradingview.check_post_deleted("https://x", 5.0) is True)
+
+_good_html = ('<script type="application/prs.init-data+json">'
+             '{"a":{"ssrIdeaData":{"name":"x"}}}</script>')
+tradingview._get = _mock_get((_good_html, False, False))
+check("D8 200+정상 아이디어 구조는 생존(False)",
+      tradingview.check_post_deleted("https://x", 5.0) is False)
+
+tradingview._get = _mock_get(("<html>알 수 없는 페이지</html>", False, False))
+check("D9 200 이지만 구조 미인식은 판정보류(None) - 거짓양성 방지",
+      tradingview.check_post_deleted("https://x", 5.0) is None)
+
+check("D10 빈 URL 은 즉시 None(요청 없음)", tradingview.check_post_deleted("", 5.0) is None)
+
+tradingview._get = _orig_tv_get
+
+# ── D11~D13: 확정 차단 감지 - hard_block_detected (2026-07-26 과제2) ───
+_orig_get_session = tradingview._get_session
+_orig_blocked_until = tradingview._blocked_until
+_orig_consec_fail = tradingview._consec_fail
+
+tradingview.reset_detail_budget()
+check("D11 리셋 직후엔 확정 차단 없음", tradingview.hard_block_detected() is None)
+
+
+class _FakeResp:
+    def __init__(self, status):
+        self.status_code = status
+        self.text = ""
+
+
+class _FakeCookies:
+    def set(self, *a, **k):
+        pass
+
+
+class _FakeSession:
+    def __init__(self, status):
+        self._status = status
+        self.cookies = _FakeCookies()
+
+    def get(self, url, headers=None, timeout=None):
+        return _FakeResp(self._status)
+
+
+tradingview._get_session = lambda: _FakeSession(403)
+tradingview._blocked_until = 0.0
+tradingview._get("https://tv.example/probe", 5.0, max_retry=1)
+check("D12 403 응답 감지 시 hard_block_detected 가 상태코드를 반환",
+      tradingview.hard_block_detected() == 403)
+
+tradingview.reset_detail_budget()
+check("D13 reset_detail_budget() 이 확정 차단 플래그도 함께 리셋", tradingview.hard_block_detected() is None)
+
+tradingview._get_session = _orig_get_session
+tradingview._blocked_until = _orig_blocked_until
+tradingview._consec_fail = _orig_consec_fail
+
+# ── D14~D18: scripts.run_collect 의 삭제확인/차단경보 게이팅 ───────────
+TEST_DB3 = "cache/_test_collect_gate.db"
+if os.path.exists(TEST_DB3):
+    os.remove(TEST_DB3)
+db.init_db(TEST_DB3)
+
+with db.connect(TEST_DB3) as conn:
+    for _ in range(3):
+        _insert_level(conn, status="touched")
+
+_orig_check_post_deleted = tradingview.check_post_deleted
+_calls = {"n": 0}
+
+
+def _fake_check(url, timeout):
+    _calls["n"] += 1
+    return False  # 전부 생존
+
+
+tradingview.check_post_deleted = _fake_check
+_orig_limit = settings.SETTINGS["deletion_check_daily_limit"]
+settings.SETTINGS["deletion_check_daily_limit"] = 2
+
+with db.connect(TEST_DB3) as conn:
+    n_del = run_collect._check_deletions(conn, timeout=5.0)
+check("D14 하루 상한(2건)만큼만 확인", _calls["n"] == 2 and n_del == 0)
+
+_calls["n"] = 0
+with db.connect(TEST_DB3) as conn:
+    run_collect._check_deletions(conn, timeout=5.0)
+check("D15 같은 날 재호출은 생략(day-gate, 비용 방어)", _calls["n"] == 0)
+
+tradingview.check_post_deleted = _orig_check_post_deleted
+settings.SETTINGS["deletion_check_daily_limit"] = _orig_limit
+os.remove(TEST_DB3)
+
+TEST_DB4 = "cache/_test_block_alert.db"
+if os.path.exists(TEST_DB4):
+    os.remove(TEST_DB4)
+db.init_db(TEST_DB4)
+
+_orig_send = telegram.send
+_sent = {"n": 0}
+telegram.send = lambda text: (_sent.__setitem__("n", _sent["n"] + 1) or True)
+_orig_hard_block = tradingview.hard_block_detected
+tradingview.hard_block_detected = lambda: 403
+_orig_alert_limit = settings.SETTINGS["tv_block_alert_daily_limit"]
+settings.SETTINGS["tv_block_alert_daily_limit"] = 1
+
+_now_b = time.time()
+with db.connect(TEST_DB4) as conn:
+    run_collect._maybe_alert_block(conn, _now_b)
+check("D16 확정 차단 감지 시 즉시 경보 발송", _sent["n"] == 1)
+
+with db.connect(TEST_DB4) as conn:
+    run_collect._maybe_alert_block(conn, _now_b)
+check("D17 하루 상한(1회) 도달 후 추가 발송 억제(알림 과다 방지)", _sent["n"] == 1)
+
+tradingview.hard_block_detected = lambda: None
+with db.connect(TEST_DB4) as conn:
+    run_collect._maybe_alert_block(conn, _now_b)
+check("D18 차단 신호 없으면 발송 안 함", _sent["n"] == 1)
+
+telegram.send = _orig_send
+tradingview.hard_block_detected = _orig_hard_block
+settings.SETTINGS["tv_block_alert_daily_limit"] = _orig_alert_limit
+os.remove(TEST_DB4)
 
 sys.exit(0 if ok else 1)

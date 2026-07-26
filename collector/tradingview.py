@@ -92,6 +92,14 @@ _SOFT_FAIL_LIMIT = 3
 _SOFT_FAIL_COOLDOWN_SEC = 600.0  # 10분 (진짜 차단 30분보다 짧게)
 _consec_fail = 0
 
+# 확정 차단 신호(403/429/캡차/1020) 감지 여부 - 소프트 실패(5xx/타임아웃 누적)와는
+# 별개로 추적한다(2026-07-26 과제2: 사용자에게 "진짜 차단"만 즉시 알리기 위해 -
+# 소프트 실패까지 섞으면 일시적 장애에도 알림이 울려 알림 과다로 이어진다).
+# 호출부(scripts/run_collect.py)가 reset_detail_budget() 로 주기 시작 시 리셋하고,
+# 주기 종료 후 hard_block_detected() 로 이번 주기 중 발생 여부를 확인한다.
+_hard_block_seen = False
+_hard_block_status = None  # 마지막 확정 차단 신호(int 상태코드 또는 "captcha")
+
 # TV_COOKIE 는 헤더가 아니라 세션 쿠키 jar 로 주입한다(2026-07-22 리뷰 [3]:
 # 헤더 방식은 requests 폴백에서 두 번째 요청부터 서버 Set-Cookie 가 채운 jar 가
 # Cookie 헤더를 통째로 덮어써 침묵 소실). 마지막으로 주입한 원문을 기억해 중복 주입 방지.
@@ -176,7 +184,7 @@ def _get(url: str, timeout: float, max_retry: int = 3) -> Tuple[Optional[str], b
     - 404: 페어 없음 → 재시도 없이 (None, False, True)
       ('재시도 소진 실패'(None, False, False)와 구분 — 호출부는 같은 ticker 추가 경로 생략)
     - 그 외 오류/네트워크 예외: 지수 백오프 재시도"""
-    global _blocked_until, _consec_fail
+    global _blocked_until, _consec_fail, _hard_block_seen, _hard_block_status
     now = time.time()
     if now < _blocked_until:
         logger.warning("[tv] 차단 쿨다운 중(%.0f초 남음) - 요청 생략: %s",
@@ -195,6 +203,10 @@ def _get(url: str, timeout: float, max_retry: int = 3) -> Tuple[Optional[str], b
                 return text, False, False
             if _looks_blocked(status, text):
                 _blocked_until = time.time() + _BLOCK_COOLDOWN_SEC
+                # 확정 차단 신호 기록(소프트 실패와 분리 - 과제2: 사용자 알림용).
+                # status 가 403/429/503 이 아니면 캡차/1020 텍스트 신호로 걸린 것.
+                _hard_block_seen = True
+                _hard_block_status = status if status in (403, 429, 503) else "captcha"
                 logger.warning("[tv] 차단/캡차 신호(status=%s) - 즉시 포기 + %.0f분 쿨다운: %s",
                                status, _BLOCK_COOLDOWN_SEC / 60.0, url)
                 return None, True, False
@@ -590,10 +602,22 @@ def is_blocked() -> bool:
 
 def reset_detail_budget() -> None:
     """주기 전역 예산(상세 방문 + 프로필 조회) 리셋 — 수집 주기 시작 시 호출.
-    (이름은 호환성 유지 — 프로필 예산도 함께 리셋한다, 리뷰 [4])"""
-    global _cycle_detail_used, _cycle_profile_used
+    (이름은 호환성 유지 — 프로필 예산도 함께 리셋한다, 리뷰 [4])
+    2026-07-26: 확정 차단 감지 플래그도 함께 리셋 - hard_block_detected() 는
+    "이번 주기 중 발생"을 의미하므로 주기 경계에서 지워야 한다."""
+    global _cycle_detail_used, _cycle_profile_used, _hard_block_seen, _hard_block_status
     _cycle_detail_used = 0
     _cycle_profile_used = 0
+    _hard_block_seen = False
+    _hard_block_status = None
+
+
+def hard_block_detected():
+    """이번 수집 주기(reset_detail_budget() 이후) 중 확정 차단(403/429/캡차/1020)이
+    한 번이라도 감지됐으면 그 신호(int 상태코드 또는 "captcha")를 반환, 없으면 None.
+    5xx/타임아웃 같은 '소프트 실패'(장애 가능성)는 여기 포함되지 않는다 — 호출부는
+    이 신호만으로 사용자에게 "차단 감지" 알림을 보낼지 판단할 것(과제2)."""
+    return _hard_block_status if _hard_block_seen else None
 
 
 def fetch_ideas(symbol: str, timeout: float, max_age_hours: Optional[float] = None,
@@ -760,3 +784,36 @@ def fetch_author_followers(username: str, timeout: float) -> Optional[int]:
         logger.warning("[tv] 팔로워 조회 실패(%s): %s", username, e)
         _followers_cache[username] = (time.time(), None)
         return None
+
+
+# ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
+#
+# 실측(2026-07-26, 정찰): 존재하지 않는 chart URL(post_url 과 동일 형식,
+# https://www.tradingview.com/chart/{TICKER}/{slug}-{title}/)을 직접 GET 하면
+# 캡차·리다이렉트 없이 순수 404 를 반환한다(_get() 의 not_found 경로 그대로 탄다).
+# 실제 '작성자가 지운' 글의 응답이 신규 슬러그 404 와 100% 동일하다는 보장은 없으나
+# (TradingView 가 소프트 삭제로 200 + "removed" 안내 페이지를 줄 가능성은 배제 못함),
+# 오탐 방지를 우선한다: 이 함수는 **확정 404 만** deleted=True 로 보고하고, 200 이지만
+# 기대한 아이디어 구조(_INIT_DATA_RE 블롭)를 못 찾는 경우는 "삭제됐다"고 단정하지
+# 않고 None(판정 보류 - 다음 순번에 재확인)을 반환한다. 신뢰도 신호로 쓰일 데이터라
+# 거짓 양성이 거짓 음성보다 해롭다는 판단(안티게이밍 취지 훼손 방지).
+def check_post_deleted(url: str, timeout: float) -> Optional[bool]:
+    """게시글 생존 여부 1회 확인. 반환: True(삭제 확정, 404) / False(생존 확인,
+    200+정상 구조) / None(판정 보류 - 차단/네트워크 실패/200이지만 구조 인식 실패).
+    비용 방어는 호출부 책임(주기당 확인 건수 상한) - 여기선 재시도를 1회로 줄여
+    (max_retry=1) 삭제 확인 자체가 요청량을 늘리지 않게 한다."""
+    if not url:
+        return None
+    text, blocked, not_found = _get(url, timeout, max_retry=1)
+    if blocked:
+        return None
+    if not_found:
+        return True
+    if not text:
+        return None  # 완전 실패(네트워크 등) - 판정 보류
+    for blob in _init_data_blobs(text):
+        if _find_key_dict(blob, "ssrIdeaData") is not None:
+            return False  # 정상 아이디어 페이지 구조 확인 - 생존
+    # 200 이지만 기대 구조를 못 찾음 - 소프트 삭제/페이지 개편 가능성, 단정 안 함
+    logger.info("[tv] 삭제확인: 200 이지만 아이디어 구조 미인식 - 판정 보류: %s", url)
+    return None

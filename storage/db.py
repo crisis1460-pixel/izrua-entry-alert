@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- 이 값을 포함한 채로 그대로 유지(둘 다 봐야 "감점 때문에 억제 vs 원래도 미달"이
     -- 갈린다).
     suppressed_grade_tp_penalty_only INTEGER NOT NULL DEFAULT 0,
+    -- 동시터치(같은 1분봉 TP·SL 동시 도달) 재검사 결과 — 판정 신뢰도 지표.
+    -- magnified: 체결내역으로 실제 순서를 복원해 hit/miss 확정 / unresolved: 판별 실패로
+    -- 보수적 miss+ambiguous 유지. 둘 다 드물게만 증가한다(2026-07-26 Bar Magnifier).
+    ambiguous_magnified   INTEGER NOT NULL DEFAULT 0,
+    ambiguous_unresolved  INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 """
@@ -130,15 +135,30 @@ _OUTCOME_COLUMNS = {
     # 글 원문(제목+본문). 파서 개선 시 재수집 없이 재파싱해 오염값 자동 치유
     # (2026-07-23 SEI/SOL 서수오인 재발 후 추가 — reparse_all 참고)
     "raw_text": "TEXT",
+    # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
+    # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
+    "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
+    "deleted_checked_at": "REAL",         # 마지막 생존 확인 시각 (없으면 미확인)
 }
 
 
 def _migrate(conn) -> None:
-    """기존 DB에 없는 컬럼만 ALTER 로 추가 (레포 커밋백 DB는 스키마가 과거일 수 있음)."""
+    """기존 DB에 없는 컬럼만 ALTER 로 추가 (레포 커밋백 DB는 스키마가 과거일 수 있음).
+
+    daily_stats 도 함께 본다 — CREATE TABLE IF NOT EXISTS 는 '테이블이 이미 있으면'
+    새 컬럼을 붙여주지 않아서, 운영 DB에 테이블이 생긴 뒤 컬럼을 추가하면 조용히
+    누락된다(2026-07-26 ambiguous_* 추가 때 발견). 카운터라 기본값 0 으로 채운다."""
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
     for col, decl in _OUTCOME_COLUMNS.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE levels ADD COLUMN {col} {decl}")
+
+    ds_cols = {r["name"] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
+    if ds_cols:  # 테이블이 아직 없으면 SCHEMA 가 최신 정의로 만들어준다
+        for col in _DAILY_STATS_COLS:
+            if col not in ds_cols:
+                conn.execute(
+                    f"ALTER TABLE daily_stats ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
 
 
 def init_db(db_path: str) -> None:
@@ -409,6 +429,54 @@ def get_author_self_stats(conn, author: str) -> dict:
             "touched": row["t"] or 0, "untouched_expired": row["e"] or 0}
 
 
+# ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
+# 비용 방어 원칙: 레벨 수십~수백 개를 매번 전수 확인하면 TradingView 부담·차단
+# 위험이 커진다 - 호출부(scripts/run_collect.py)가 하루 상한(deletion_check_daily_limit)
+# 을 두고 순환 확인한다. 대상은 '종결된' 레벨만(watching/previewed 는 아직 결론이
+# 나지 않은 글이라 삭제 여부가 신뢰도 신호로서 의미가 약하고, 확인 비용도 아깝다).
+
+
+def get_deletion_check_candidates(conn, limit: int, recheck_after_sec: float) -> list:
+    """삭제 확인 대상 - 종결(touched/expired) + post_url 보유 + 아직 삭제 미확정
+    + (미확인이거나 확인한 지 오래됨) 레벨. 미확인 우선, 그다음 오래전에 수집된
+    순(오래된 글일수록 삭제 위험이 누적돼 있을 가능성이 높음)."""
+    return [dict(r) for r in conn.execute(
+        """SELECT id, post_url, author FROM levels
+           WHERE status IN ('touched','expired') AND post_url IS NOT NULL
+             AND (deleted IS NULL OR deleted = 0)
+             AND (deleted_checked_at IS NULL OR deleted_checked_at < ?)
+           ORDER BY (deleted_checked_at IS NOT NULL), collected_at ASC
+           LIMIT ?""",
+        (time.time() - recheck_after_sec, limit),
+    ).fetchall()]
+
+
+def mark_deletion_checked(conn, level_id: int, deleted: bool, now: Optional[float] = None) -> None:
+    """확인 결과 반영. deleted=False 여도 deleted_checked_at 은 갱신해(생존 확인도
+    '확인함'으로 기록) 다음 순번이 같은 글을 바로 다시 뽑지 않게 한다."""
+    conn.execute(
+        "UPDATE levels SET deleted=?, deleted_checked_at=? WHERE id=?",
+        (1 if deleted else 0, now or time.time(), level_id),
+    )
+
+
+def get_author_deletion_stats(conn, author: Optional[str]) -> dict:
+    """작성자별 삭제 건수 - 나중에 신뢰도 지표로 쓰기 위한 조회 전용 함수
+    (ACCURACY_DB_PLAN: '삭제 건수 자체를 신뢰도 신호로'). 분모는 '확인 시도한'
+    글 수(checked) - 아직 한 번도 확인 안 된 글은 분모에서 제외해 표본을 왜곡하지
+    않는다."""
+    if not author:
+        return {"checked": 0, "deleted": 0}
+    row = conn.execute(
+        """SELECT
+             SUM(CASE WHEN deleted_checked_at IS NOT NULL THEN 1 ELSE 0 END) AS checked,
+             SUM(CASE WHEN deleted = 1 THEN 1 ELSE 0 END) AS deleted
+           FROM levels WHERE author=?""",
+        (author,),
+    ).fetchone()
+    return {"checked": row["checked"] or 0, "deleted": row["deleted"] or 0}
+
+
 def record_ret(conn, level_id: int, field: str, value: float) -> None:
     """터치 후 24h/72h 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지)."""
     assert field in ("ret_24h", "ret_72h")
@@ -485,7 +553,12 @@ def stats(conn) -> dict:
 
 _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "suppressed_cap", "suppressed_dup", "suppressed_send_fail",
-                     "suppressed_grade_tp_penalty_only")
+                     "suppressed_grade_tp_penalty_only",
+                     # 동시터치(같은 1분봉에 TP·SL 동시 도달) 재검사 결과.
+                     # magnified = 체결내역으로 실제 순서를 복원해 확정한 건,
+                     # unresolved = 재검사에도 판별 못 해 보수적 miss 로 남은 건.
+                     # 둘의 비율이 곧 판정 신뢰도 지표다(2026-07-26 Bar Magnifier 도입).
+                     "ambiguous_magnified", "ambiguous_unresolved")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:

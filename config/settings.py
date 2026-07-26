@@ -77,12 +77,30 @@ SETTINGS = {
     "r_clip_low": -1.0,              # R-멀티플 윈저라이즈 하한
     "r_clip_high": 5.0,              # 상한
 
+    # 동시터치 재검사 (Bar Magnifier, 2026-07-26) — 한 캔들 안에서 TP·SL 이 둘 다
+    # 닿아 순서를 모를 때, 그 구간의 체결내역(trades)으로 실제 도달 순서를 복원한다.
+    # 종결 '이전'에만 돌아 판정 자체를 정확하게 만든다(이미 쓴 판정을 뒤집지 않음 —
+    # 불변 스냅샷/안티게이밍 원칙 유지). 판별 실패 시 기존대로 miss+ambiguous.
+    "bar_magnifier_enabled": True,
+    "bar_magnifier_max_span_sec": 900,   # 재검사할 캔들 길이 상한(15분봉 폴백까지 허용)
+    "bar_magnifier_max_pages": 4,        # 구간당 체결 조회 페이지 상한(500건×4=2000건)
+    "bar_magnifier_max_per_cycle": 5,    # 회차당 재검사 상한 — 2분 핫패스 보호
+
     # 수집 급감(조용한 고장) 감지 (2026-07-26: cron/Actions 초록불인데 신규수집
     # 0건이 3일 지속된 사고 재발 방지 - price_check 잡에서 collected_at 집계로 감시)
     "collect_silence_window_hours": 24,     # 이 시간 동안 신규 수집 0건이면 경고 후보
     "collect_silence_baseline_days": 7,     # 비교 기준(직전 N일) 평균 수집량
     "collect_silence_min_baseline_avg": 0.5,  # 직전 평균 일일 수집이 이 미만이면 원래 조용한
                                                # 기간으로 보고 오탐 처리(경고 생략)
+
+    # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 - 백로그 구현)
+    "deletion_check_daily_limit": 5,        # 하루 1회(수집 주기 중 1번)만 순환 확인,
+                                             # 이 건수만큼만 - TradingView 부담/차단 위험 억제
+    "deletion_recheck_after_days": 30,      # 한 번 "생존" 확인한 글도 이 기간 후 재확인
+                                             # (뒤늦게 지워지는 글도 잡기 위함)
+
+    # TradingView 차단 감지 즉시 알림 (2026-07-26 과제2 - 수집 급감 24h 경보보다 빠른 신호)
+    "tv_block_alert_daily_limit": 1,        # 하루 최대 1회만 - 사용자는 알림 과다를 싫어함
 
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",

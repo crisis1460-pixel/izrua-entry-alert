@@ -17,6 +17,7 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
 from config import settings
@@ -113,6 +114,39 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def magnify_order(ticker: str, scan_from: float, c_end: float,
+                  tp_krw: float, sl_krw: float, cfg_get) -> Optional[str]:
+    """동시터치 캔들을 체결내역으로 '확대'해 TP·SL 도달 순서를 판별 (Bar Magnifier).
+
+    반환 'hit' | 'miss' | None(판별 불가 → 호출부는 기존 보수적 처리를 유지).
+
+    왜 체결내역인가: 업비트 공개 API의 최소 캔들 단위가 1분이라 '하위 봉'이 없다.
+    개별 체결 틱이 사실상 최하위 타임프레임이고, 그 안에는 밀리초 시각과 체결
+    일련번호가 있어 같은 1분 안의 실제 순서를 그대로 복원할 수 있다.
+
+    비용: ambiguous 가 발생한 순간에만(정상 회차엔 0콜) 최대 max_pages 콜.
+    체결내역은 캔들과 레이트리밋 그룹이 분리돼 있어 판정용 캔들 예산과 무관하다.
+
+    scan_from 은 max(캔들 시작, 터치 시각) — 터치 이전 체결이 순서 판정에 섞이지
+    않게 한다(캔들 스캔부의 '터치 이후만' 원칙과 동일, 2026-07-26 감사 major2 취지).
+    """
+    if c_end - scan_from > cfg_get("bar_magnifier_max_span_sec"):
+        return None
+    trades = upbit.fetch_trades_window(
+        ticker, scan_from, c_end, cfg_get("http_timeout_sec"),
+        max_pages=cfg_get("bar_magnifier_max_pages"))
+    if not trades:
+        return None
+    for _ts, price in trades:            # 시간 오름차순 — 먼저 닿은 쪽이 승부를 결정
+        if tp_krw > 0 and price >= tp_krw:
+            return "hit"
+        if sl_krw > 0 and price <= sl_krw:
+            return "miss"
+    # 구간은 덮었는데 어느 쪽에도 안 닿았다 = 캔들 고저와 불일치(경계/데이터 이상).
+    # 억지로 결론 내지 않고 보수적 처리로 되돌린다.
+    return None
+
+
 def run_once(now: float = None) -> dict:
     """1회 체크. 반환 요약 dict (테스트/로그용)."""
     now = now or time.time()
@@ -171,7 +205,8 @@ def run_once(now: float = None) -> dict:
         # 억제돼도 여기엔 반드시 잡힌다(방금 들어간 TP 근접도 감점의 효과 측정 등).
         obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
                "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
-               "suppressed_grade_tp_penalty_only": 0}
+               "suppressed_grade_tp_penalty_only": 0,
+               "ambiguous_magnified": 0, "ambiguous_unresolved": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
 
@@ -356,7 +391,7 @@ def run_once(now: float = None) -> dict:
 
         # ── 적중 판정 (ACCURACY_DB_PLAN 1단계 — 조용한 누적, 표시·필터 무관) ──
         summary["resolved"] = _judge_outcomes(
-            conn, prices, usdt_krw, _get_range, now, cfg_get)
+            conn, prices, usdt_krw, _get_range, now, cfg_get, obs=obs)
 
         # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
         db.bump_daily_stats(conn, day, **obs)
@@ -369,22 +404,31 @@ def run_once(now: float = None) -> dict:
 
 
 
-def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
+def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -> int:
     """터치됐지만 미종결인 레벨들의 hit/miss 판정 + 24h/72h 수익률 기록.
 
     확정 규칙(2026-07-23 질문카드 + 2026-07-24 감사 반영):
     - 캔들을 시간순으로 스캔하되 '터치 이후' 캔들만 본다 (터치 이전 가격이 섞여
       급락 관통 시 가짜 hit 이 나던 감사 1번 수정)
-    - TP1 도달=hit / SL 도달=miss / '같은 캔들' 안에서 둘 다=보수적 miss+ambiguous
-      (여러 캔들에 걸쳐 순서가 확정되면 그 순서대로 — 감사 2번 수정)
+    - TP1 도달=hit / SL 도달=miss / '같은 캔들' 안에서 둘 다=체결내역 재검사
+      (Bar Magnifier, 2026-07-26) → 순서가 복원되면 그대로, 복원 실패 시에만
+      보수적 miss+ambiguous (여러 캔들에 걸친 순서 확정은 감사 2번 수정)
     - TP 없으면 타임박스(창 만료 시 수익률 부호), SL 터치는 즉시 miss
     - 창 만료 강제 종결 시에도 judgment_mode 는 원래 모드 유지 (정보 보존)
     - 타임박스/수익률 기준가는 터치 시점 환율로 보정 (장기 창의 환율 드리프트 제거)
     - 시세 조회가 계속 불가한 티커(상폐 등)는 창+14일 후 판정불능 제외
     """
+    # obs 미주입(테스트에서 단독 호출) 시에도 안전하게 — 집계만 버려진다
+    obs = {} if obs is None else obs
+    obs.setdefault("ambiguous_magnified", 0)
+    obs.setdefault("ambiguous_unresolved", 0)
     resolved = 0
     default_window_sec = cfg_get("outcome_window_hours") * 3600
     r_lo, r_hi = cfg_get("r_clip_low"), cfg_get("r_clip_high")
+    # 동시터치 재검사 예산 — 회차당 상한. 시장 전체 급변으로 ambiguous 가 한꺼번에
+    # 쏟아져도 2분 주기 핫패스가 늘어지지 않게 한다(초과분은 기존 보수적 처리).
+    magnify_budget = {"left": cfg_get("bar_magnifier_max_per_cycle")
+                      if cfg_get("bar_magnifier_enabled") else 0}
 
     # ── 24h/72h 수익률 — 종결 여부 무관 + 도과 6시간 허용오차 안에서만 기록
     #    (다운타임 뒤 70시간짜리 값이 '24h'로 오라벨되느니 NULL 이 낫다 — 감사 수정)
@@ -463,7 +507,26 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
             tp_hit = tp_krw > 0 and c_high >= tp_krw
             sl_hit = sl_krw > 0 and c_low <= sl_krw
             if tp_hit and sl_hit:
-                outcome, resolve_price, ambiguous = "miss", sl_krw, True
+                # 같은 캔들 안에서 TP·SL 동시 — 체결내역으로 실제 순서를 복원해 본다.
+                # 종결 '이전' 단계라 이미 확정된 판정을 뒤집는 게 아니다(안티게이밍
+                # 불변 스냅샷 원칙과 무충돌 — 판정은 여전히 단 한 번만 쓰인다).
+                refined = None
+                if magnify_budget["left"] > 0:
+                    magnify_budget["left"] -= 1
+                    refined = magnify_order(
+                        ticker, max(c_start, lv["touched_at"]), c_end,
+                        tp_krw, sl_krw, cfg_get)
+                    logger.info("[적중판정] %s 동시터치 재검사 결과: %s",
+                                ticker, refined or "판별불가(보수적 miss 유지)")
+                if refined == "hit":
+                    outcome, resolve_price = "hit", tp_krw
+                    obs["ambiguous_magnified"] += 1
+                elif refined == "miss":
+                    outcome, resolve_price = "miss", sl_krw
+                    obs["ambiguous_magnified"] += 1
+                else:
+                    outcome, resolve_price, ambiguous = "miss", sl_krw, True
+                    obs["ambiguous_unresolved"] += 1
             elif tp_hit:
                 outcome, resolve_price = "hit", tp_krw
             elif sl_hit:

@@ -58,6 +58,12 @@ def _fake_range(m, mins, t):
     return [(now - 120, now - 60,
              fake["high"] or fake["price"], fake["low"] or fake["price"])]
 upbit.fetch_range_since = _fake_range
+_real_fetch_trades_window = upbit.fetch_trades_window  # BM-U1~ 에서 실물 로직 검증용
+
+# 동시터치 재검사(Bar Magnifier)용 체결내역 — 기본값 None = "판별 불가"라
+# 기존 T10(보수적 miss+ambiguous) 동작이 그대로 유지된다. BM 테스트가 값을 바꾼다.
+fake_trades = {"list": None}
+upbit.fetch_trades_window = lambda m, s, e, t, max_pages=4: fake_trades["list"]
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
 from monitor import binance
@@ -775,6 +781,174 @@ check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
       and price_check._tp_distance_penalty("long", 100.0, None) == 0)
 check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
       - _actual_penalty32(100.0, 101.5)) < 1e-9)  # 숏 -1.5% == 롱 +1.5% 와 감점 대칭
+
+# ── BM: 동시터치 하위 타임프레임 재검사 (Bar Magnifier, 2026-07-26) ──────────
+# 한 캔들 안에서 TP·SL 이 둘 다 닿으면 예전엔 무조건 보수적 miss+ambiguous 였다.
+# 이제 그 구간의 체결내역(틱)으로 실제 도달 순서를 복원한다. 복원 실패 시에만
+# 예전 동작(miss+ambiguous)으로 되돌아간다 = 안전한 실패(fail-safe).
+_BM_C = (now - 600, now - 540)   # 동시터치가 일어난 캔들 구간
+_bm_candles = [(_BM_C[0], _BM_C[1], 12.2 * USDT_KRW, 8.9 * USDT_KRW)]  # TP·SL 둘 다 관통
+
+
+def _bm_run(key, trades, offset):
+    """entry 10 / SL 9 / TP 12 짜리 터치 레벨 1건을 주어진 체결내역으로 판정."""
+    lid = add_touched("LINK", 10.0, 9.0, 12.0, 7200, key)
+    fake["price"] = 10.0 * USDT_KRW
+    fake["candles"] = _bm_candles
+    fake_trades["list"] = trades
+    price_check.run_once(now + offset)
+    fake["candles"] = None
+    fake_trades["list"] = None
+    return outcome_of(lid)
+
+
+_TP_K, _SL_K = 12.0 * USDT_KRW, 9.0 * USDT_KRW
+_mid = _BM_C[0] + 10
+
+# BM1: 체결 순서상 TP 가 먼저 → hit 으로 정정되고 ambiguous 플래그도 안 선다
+o_bm1 = _bm_run("bm1", [(_mid, 10.0 * USDT_KRW), (_mid + 5, _TP_K + 1),
+                        (_mid + 20, _SL_K - 1)], 5000)
+check("BM1 체결 재검사 - TP 선도달은 hit", o_bm1["outcome"] == "hit" and o_bm1["ambiguous"] == 0)
+check("BM1b hit 정정 시 R-멀티플도 TP 기준(+2)",
+      o_bm1["r_multiple"] is not None and abs(o_bm1["r_multiple"] - 2.0) < 0.01)
+
+# BM2: SL 이 먼저 → 결론은 예전과 같은 miss 지만 '확정된' miss 라 ambiguous=0
+o_bm2 = _bm_run("bm2", [(_mid, 10.0 * USDT_KRW), (_mid + 5, _SL_K - 1),
+                        (_mid + 20, _TP_K + 1)], 5060)
+check("BM2 체결 재검사 - SL 선도달은 확정 miss(ambiguous 해제)",
+      o_bm2["outcome"] == "miss" and o_bm2["ambiguous"] == 0)
+
+# BM3: 체결내역을 못 받으면(범위 밖·조회 실패·부분커버) 예전 보수적 처리 그대로
+o_bm3 = _bm_run("bm3", None, 5120)
+check("BM3 판별 불가 시 fail-safe - miss+ambiguous 유지",
+      o_bm3["outcome"] == "miss" and o_bm3["ambiguous"] == 1)
+
+# BM3b: 구간은 받았는데 TP·SL 어디에도 안 닿는 체결뿐이면(캔들 고저와 불일치)
+#       억지로 결론 내지 않는다
+o_bm3b = _bm_run("bm3b", [(_mid, 10.0 * USDT_KRW), (_mid + 5, 10.1 * USDT_KRW)], 5180)
+check("BM3b 캔들 고저와 불일치하면 결론 보류(ambiguous 유지)",
+      o_bm3b["outcome"] == "miss" and o_bm3b["ambiguous"] == 1)
+
+# BM4: 회차당 재검사 예산 — 2분 핫패스 보호. 예산 0이면 재검사 자체를 안 한다.
+_bm_saved_budget = settings.SETTINGS["bar_magnifier_max_per_cycle"]
+settings.SETTINGS["bar_magnifier_max_per_cycle"] = 0
+o_bm4 = _bm_run("bm4", [(_mid + 5, _TP_K + 1)], 5240)
+settings.SETTINGS["bar_magnifier_max_per_cycle"] = _bm_saved_budget
+check("BM4 회차 예산 소진 시 재검사 생략(보수적 처리)",
+      o_bm4["outcome"] == "miss" and o_bm4["ambiguous"] == 1)
+
+# BM5: 스위치 OFF 면 기능 전체가 비활성 (되돌리기 경로 보장)
+settings.SETTINGS["bar_magnifier_enabled"] = False
+o_bm5 = _bm_run("bm5", [(_mid + 5, _TP_K + 1)], 5300)
+settings.SETTINGS["bar_magnifier_enabled"] = True
+check("BM5 스위치 OFF - 예전 동작으로 완전 복귀",
+      o_bm5["outcome"] == "miss" and o_bm5["ambiguous"] == 1)
+
+# BM6: 캔들이 너무 길면(15분봉 폴백 상한 초과) 재검사하지 않는다 — 체결량 폭주 방어
+check("BM6 구간 길이 상한 초과 시 재검사 생략",
+      price_check.magnify_order("KRW-LINK", now - 3600, now, _TP_K, _SL_K,
+                                settings.get) is None)
+
+# BM7: 터치 이전 체결은 순서 판정에서 제외 (캔들 스캔부의 '터치 이후만' 원칙과 동일).
+#      magnify_order 에 넘기는 scan_from 이 max(캔들시작, 터치시각) 인지 직접 검증.
+_bm7_args = {}
+_saved_ftw = upbit.fetch_trades_window
+def _bm7_ftw(m, s, e, t, max_pages=4):
+    _bm7_args.update(market=m, start=s, end=e)
+    return [(s + 1, _TP_K + 1)]
+upbit.fetch_trades_window = _bm7_ftw
+_bm7_touch = _BM_C[0] + 30   # 터치가 캔들 '중간'에 일어난 경우
+_bm7_res = price_check.magnify_order("KRW-LINK", max(_BM_C[0], _bm7_touch), _BM_C[1],
+                                     _TP_K, _SL_K, settings.get)
+upbit.fetch_trades_window = _saved_ftw
+check("BM7 스캔 시작점 = max(캔들시작, 터치시각)",
+      _bm7_res == "hit" and abs(_bm7_args["start"] - _bm7_touch) < 1e-6)
+
+# ── BM-U: upbit.fetch_trades_window 실물 로직 (가짜 requests.get, HTTP 없음) ──
+# 2026-07-26 실측 기반: count 상한 500, `to`=HH:MM:SS(UTC)+`daysAgo`(최대 7),
+# 페이지 이어붙이기는 `cursor`(직전 페이지 최고(最古) sequential_id).
+upbit._TRADE_PACE_SEC = 0.0  # 테스트 속도 - 페이싱은 검증 대상 아님
+
+
+def _tick(ts, price, sid):
+    return {"timestamp": int(ts * 1000), "trade_price": price, "sequential_id": sid}
+
+
+_bmu_now = time.time()
+_bmu_win = (_bmu_now - 300, _bmu_now - 240)   # 5분 전의 1분 구간
+
+# BM-U1: 1페이지가 구간 시작보다 과거까지 닿으면 그대로 커버 완료.
+#        구간 밖 체결은 걸러지고, 결과는 시간 오름차순이어야 한다.
+_bmu1_calls = []
+def _bmu1_get(url, params=None, timeout=None):
+    _bmu1_calls.append(params)
+    return _FakeResp([
+        _tick(_bmu_win[1] + 0.5, 999.0, 105),      # 구간 밖(뒤) - 제외돼야
+        _tick(_bmu_win[0] + 40, 300.0, 104),
+        _tick(_bmu_win[0] + 10, 100.0, 102),
+        _tick(_bmu_win[0] + 10, 200.0, 103),       # 같은 시각 - sequential_id 로 순서
+        _tick(_bmu_win[0] - 30, 50.0, 101),        # 구간 밖(앞) = 커버 증거
+    ])
+_requests_mod.get = _bmu1_get
+_bmu1 = _real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
+_requests_mod.get = _orig_requests_get
+check("BM-U1 구간 필터 + 시간 오름차순 + 동시각 일련번호 순",
+      _bmu1 is not None and [p for _t, p in _bmu1] == [100.0, 200.0, 300.0])
+check("BM-U1b 1페이지로 끝 + count 상한 500", len(_bmu1_calls) == 1
+      and _bmu1_calls[0]["count"] == 500 and "to" in _bmu1_calls[0])
+
+# BM-U2: 500건 꽉 찬 페이지가 계속 구간을 못 덮으면 → 페이지 상한까지만 시도 후 None
+#        (부분 데이터로 순서를 단정하지 않는다 = 이 함수의 핵심 안전장치)
+_bmu2_calls = []
+def _bmu2_get(url, params=None, timeout=None):
+    _bmu2_calls.append(params)
+    base = _bmu_win[1] - 0.001 * len(_bmu2_calls) * 500
+    return _FakeResp([_tick(base - i * 0.001, 100.0, 900000 - len(_bmu2_calls) * 500 - i)
+                      for i in range(500)])
+_requests_mod.get = _bmu2_get
+_bmu2 = _real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0, max_pages=3)
+_requests_mod.get = _orig_requests_get
+check("BM-U2 구간 미커버 시 None(부분데이터로 단정 금지)", _bmu2 is None)
+check("BM-U2b 페이지 상한 준수 + 2페이지부터 cursor 사용", len(_bmu2_calls) == 3
+      and "cursor" in _bmu2_calls[1] and "to" not in _bmu2_calls[1])
+
+# BM-U3: 저유동성 — 페이지가 500건 미만이면 더 오래된 체결이 없다는 뜻이라 커버 완료
+_requests_mod.get = lambda url, params=None, timeout=None: _FakeResp(
+    [_tick(_bmu_win[0] + 5, 111.0, 7)])
+_bmu3 = _real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
+_requests_mod.get = _orig_requests_get
+check("BM-U3 저유동성(짧은 페이지)은 커버 완료로 인정",
+      _bmu3 is not None and len(_bmu3) == 1 and _bmu3[0][1] == 111.0
+      and abs(_bmu3[0][0] - (_bmu_win[0] + 5)) < 0.01)  # ms 정밀도 왕복 오차 허용
+
+# BM-U4: 조회 가능 범위(7일) 밖이면 HTTP 를 아예 쏘지 않고 None
+_bmu4_calls = []
+_requests_mod.get = lambda url, params=None, timeout=None: (
+    _bmu4_calls.append(params), _FakeResp([]))[1]
+_bmu4 = _real_fetch_trades_window("KRW-T", _bmu_now - 9 * 86400,
+                                  _bmu_now - 9 * 86400 + 60, 5.0)
+_requests_mod.get = _orig_requests_get
+check("BM-U4 7일 초과 과거는 호출 없이 None", _bmu4 is None and not _bmu4_calls)
+
+# BM-U5: 어제 구간은 daysAgo 파라미터가 붙는다(당일 구간엔 안 붙음)
+_bmu5_calls = []
+def _bmu5_get(url, params=None, timeout=None):
+    _bmu5_calls.append(params)
+    return _FakeResp([])
+_requests_mod.get = _bmu5_get
+_real_fetch_trades_window("KRW-T", _bmu_now - 86400, _bmu_now - 86400 + 60, 5.0)
+_real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
+_requests_mod.get = _orig_requests_get
+check("BM-U5 과거일엔 daysAgo, 당일엔 미부착",
+      _bmu5_calls[0].get("daysAgo") == 1 and "daysAgo" not in _bmu5_calls[1])
+
+# BM-U6: 네트워크 실패는 예외 전파 없이 None (핫패스가 죽으면 안 됨)
+def _bmu6_get(url, params=None, timeout=None):
+    raise RuntimeError("boom")
+_requests_mod.get = _bmu6_get
+_bmu6 = _real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
+_requests_mod.get = _orig_requests_get
+check("BM-U6 조회 실패는 예외 없이 None", _bmu6 is None)
 
 print()
 print("── 본알림 실제 렌더링 ──")
