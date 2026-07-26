@@ -1,7 +1,7 @@
 # 인수인계 — izrua-entry-alert 고도화 세션용 컨텍스트
 
 > 새 세션 시작: "C:\Users\User\Desktop\izrua_entry_alert\HANDOFF.md 읽고 시작해" 한 줄.
-> (최종 갱신: 2026-07-26 심야 — 스프린트 8 완료 후. 이전판은 스프린트 1~7 기준)
+> (최종 갱신: 2026-07-26 심야 — 철야 사이클 완료 후)
 
 ## 1. 프로젝트 정체
 
@@ -45,7 +45,9 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
   차단 감지 `hard_block_detected` + 글 삭제 확인 `check_post_deleted`), extractor(파싱),
   **grading**(등급 — `TP_DISTANCE_BANDS` 단일 배점표, `regrade_current` 재채점), watcher_stats
 - `monitor/` — **price_check**(핵심: 감시·알림·적중판정·관찰집계·`magnify_order`),
-  upbit(시세·캔들·`fetch_trades_window`), binance(김프), market_sentiment
+  upbit(시세·캔들·`fetch_trades_window`·호가), binance(김프), market_sentiment,
+  **announcements**(업비트 유의종목·거래지원종료 공지 폴링 → 즉시경보 + 레벨 만료.
+  비문서화 API라 방어적 파싱, 발송 실패는 meta 대기 큐로 재시도)
 - `analytics/` — **ranking**(E_LB·베이지안 수축·최신성 가중), **clustering**(클러스터 규칙
   정본 + 합의 CR + 베이스라인). 둘 다 "프로젝트 모듈 import 0" 순수 함수
 - `notify/telegram.py` — render_alert(양식 확정) / render_weekly_report /
@@ -149,7 +151,9 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
 
 ### 사용자 액션 대기
 - 업비트 구 API 키 폐기 확인 / upbit_bot 폴더 삭제 승인
-- TV_COOKIE 등록(선택 — 차단 반복 시)
+- ~~TV_COOKIE 등록~~ ✅ 2026-07-26 밤 등록 완료(봇 전용 계정).
+  **효과 판정 미완** — 차단 경보가 하루 1회 상한이라 당일 판정 불가.
+  07-27 이후 `tv_block_alert_count_2026-07-27` meta 키 유무로 판정할 것
 
 ## 9. 운영 체제 — 3인 개발사
 
