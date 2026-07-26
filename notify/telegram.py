@@ -18,6 +18,7 @@ import time
 
 import requests
 
+from analytics import ranking
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -293,4 +294,105 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         source_line += f" · 외 {len(srcs) - 5}건"
     lines.append(source_line)
 
+    return "\n".join(lines)
+
+
+# ── 주간 성적 리포트 (ACCURACY_DB_PLAN 2단계 후속, 2026-07-26) ────────────
+#
+# 랭킹 수학은 analytics.ranking 그대로 사용(재설계 금지) — 여기선 톤을 맞춘 렌더링만.
+# analytics.ranking.py 는 "프로젝트 모듈 import 0" 원칙(순환 import 차단 + DB 없는
+# 손계산 단위테스트)이라, DB 연동이 필요한 텍스트 조립은 이미 db 를 참조하는
+# notify 쪽에 둔다 (기존 render_alert 도 rep dict 를 받아 조립하는 동일 위치).
+
+
+def _weekly_rank_line(rank: int, author: str, met: dict) -> tuple:
+    """랭킹 한 줄 + 역신호 후보 여부(E_LB<=0, 게이트는 통과) 반환."""
+    is_anti = met["e_lb"] is not None and met["e_lb"] <= 0
+    mark = " 🔻" if is_anti else ""
+    pct = f", 승률{met['p_hat'] * 100:.0f}%" if met.get("p_hat") is not None else ""
+    line = (f"  {rank}. @{html.escape(author)}{mark}  "
+            f"E_LB {met['e_lb_display']:+.2f} (n_eff {met['neff_r']:.1f}{pct})")
+    return line, is_anti
+
+
+def render_weekly_report(rows_by_author: dict, now: float = None,
+                         half_life_days: float = None, z: float = None,
+                         prior_m: int = None, min_neff: float = None) -> str:
+    """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
+    → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
+
+    3부 구성(2026-07-26 카드): ① E_LB 게이트(n_eff≥min) 통과 작성자 순위,
+    ② R NULL(전부 tp_only 등) 이면서 승률 게이트만 통과한 작성자 별도(2트랙 확정,
+    랭킹엔 미등재), ③ 표본부족 안내 + 역신호 후보(①에서 게이트는 통과했지만
+    E_LB≤0) 안내. 표본이 전혀 없으면 그 상태도 우아하게 표시."""
+    now = time.time() if now is None else now
+    half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
+    z = settings.get("rank_z") if z is None else z
+    prior_m = settings.get("rank_prior_m") if prior_m is None else prior_m
+    min_neff = settings.get("rank_min_neff") if min_neff is None else min_neff
+    rank_kw = dict(half_life_days=half_life_days, z=z, m=prior_m)
+
+    lines = [_SEP, "📈 <b>주간 성적 리포트</b>"]
+
+    rows_by_author = rows_by_author or {}
+    total_rows = sum(len(rows) for rows in rows_by_author.values())
+    if not rows_by_author or total_rows == 0:
+        lines.append(_SEP)
+        lines.append("아직 표본 부족합니다 — 터치 후 종결된 레벨이 쌓이면 다음 리포트부터 "
+                      "순위가 표시됩니다.")
+        lines.append(_SEP)
+        return "\n".join(lines)
+
+    lines.append(f"✍️ 작성자 {len(rows_by_author)}명 · 종결 표본 {total_rows}건")
+    lines.append(_SEP)
+
+    ranked = ranking.rank_authors(rows_by_author, now, min_neff=min_neff, **rank_kw)
+    ranked_authors = {author for author, _ in ranked}
+
+    # ① E_LB 게이트 통과 랭킹
+    lines.append(f"🏆 E_LB 랭킹 (R 트랙, n_eff≥{min_neff:g})")
+    n_anti = 0
+    if ranked:
+        for i, (author, met) in enumerate(ranked, 1):
+            line, is_anti = _weekly_rank_line(i, author, met)
+            lines.append(line)
+            n_anti += is_anti
+    else:
+        lines.append("  게이트 통과 작성자 없음 (계속 관찰 중)")
+
+    # ② R NULL(2트랙) — 랭킹엔 미등재, 승률축만 게이트 통과
+    win_only = []
+    under_sample = []
+    for author, rows in rows_by_author.items():
+        if author in ranked_authors:
+            continue
+        met = ranking.author_metrics(rows, now, **rank_kw)
+        if met["neff_r"] == 0.0 and met["neff_win"] >= min_neff:
+            wins = sum(1 for r in rows if r.get("outcome") in ranking.WIN_OUTCOMES)
+            losses = sum(1 for r in rows if r.get("outcome") in ranking.LOSS_OUTCOMES)
+            win_only.append((author, met, wins, losses))
+        else:
+            under_sample.append((author, len(rows)))
+
+    if win_only:
+        win_only.sort(key=lambda x: x[1]["p_hat"] or 0.0, reverse=True)
+        lines.append(_SEP)
+        lines.append("🎯 승률만 확정 (R 미보유 표본, 2트랙 — 랭킹 미등재)")
+        for author, met, wins, losses in win_only:
+            lines.append(f"  @{html.escape(author)}  승률{met['p_hat'] * 100:.0f}% "
+                         f"({wins}승{losses}패, n_eff {met['neff_win']:.1f})")
+
+    # ③ 안내: 표본부족 + 역신호 후보
+    if under_sample or n_anti:
+        lines.append(_SEP)
+    if under_sample:
+        under_sample.sort(key=lambda x: x[1], reverse=True)
+        names = " · ".join(f"@{html.escape(a)}({n}건)" for a, n in under_sample[:10])
+        more = f" · 외 {len(under_sample) - 10}명" if len(under_sample) > 10 else ""
+        lines.append(f"📋 표본 부족(n_eff<{min_neff:g}, 계속 관찰 중): {names}{more}")
+    if n_anti:
+        lines.append(f"⚠️ 역신호 후보 {n_anti}명 — 게이트는 통과했지만 E_LB≤0 (🔻 표시, "
+                     f"자동 필터·태깅 아님, 관찰 참고용)")
+
+    lines.append(_SEP)
     return "\n".join(lines)

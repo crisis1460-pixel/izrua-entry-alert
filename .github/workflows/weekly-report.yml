@@ -1,0 +1,36 @@
+# 주간 성적 리포트 잡 — cron-job.org 이 workflow_dispatch 로 트리거 (collect/price-check 와
+# 동일한 프로젝트 컨벤션: 네이티브 GitHub schedule cron 미사용, 외부 크론이 항상 트리거).
+#
+# ⚠️ 이 워크플로 파일만으로는 자동 발송되지 않는다. cron-job.org 대시보드에 별도로
+#    "주 1회" 스케줄 잡(예: 매주 월요일 09:00 KST) 을 사용자가 직접 등록해야 한다
+#    (다른 두 잡의 cron-job.org 등록과 동일한 방식 — repository_dispatch 아님, 이 저장소의
+#    workflow_dispatch 엔드포인트를 호출하도록 설정).
+#
+# 읽기 전용 잡: data/levels.db 를 조회만 하고 쓰지 않으므로 collect.yml/price-check.yml 과
+# 달리 상태 커밋 백 단계가 없다 (data/ 는 그 두 잡이 매 실행 커밋백하므로 checkout 시점에
+# 이미 최신 상태 — 구버전 아티팩트 마이그레이션도 읽기 전용 리포트엔 불필요).
+name: weekly-report
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 주간 리포트 생성·발송
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/run_weekly_report.py

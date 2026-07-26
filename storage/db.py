@@ -305,6 +305,16 @@ def get_author_outcome_rows(conn, author: Optional[str]) -> list:
         (author,)).fetchall()]
 
 
+def list_authors_with_outcomes(conn) -> list:
+    """종결 표본(outcome 확정 + 실제 도달 터치)이 있는 작성자 목록 — 주간 리포트가
+    analytics.ranking.rank_authors() 에 넘길 {author: rows} 를 만들 때 순회 대상 확보용.
+    섀도 터치(touched_at NULL)는 get_author_outcome_rows 와 동일 기준으로 제외."""
+    return [r["author"] for r in conn.execute(
+        "SELECT DISTINCT author FROM levels "
+        "WHERE author IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL"
+    ).fetchall()]
+
+
 def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
                     judgment_mode: str, r_multiple: Optional[float] = None,
                     ambiguous: bool = False, best_tp_hit: Optional[int] = None,
