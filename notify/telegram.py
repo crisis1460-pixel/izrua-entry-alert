@@ -229,6 +229,20 @@ def _author_block(rep: dict) -> list:
             lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
     if self_line:
         lines.append(self_line)
+
+    # 역신호 경고 (2026-07-27 사용자 지시) — 워쳐 적중률·⭐⭐ 화이트리스트가 "믿을 만한
+    # 작성자"로 읽히는데 자체 표본은 정반대인 경우가 실제로 나왔다(@mastercrypto2020:
+    # 워쳐 66%/64건 · ⭐⭐ 인데 자체 승률 25%(2승6패), E_LB 음수로 이미 역신호 후보 태깅).
+    # 두 숫자는 측정 기준이 달라(워쳐=글 시점, 자체=터치 시점) 어느 쪽도 틀리진 않지만,
+    # 사용자는 위쪽 큰 숫자만 보고 신뢰하기 쉽다. show_status·주간 리포트에만 있던
+    # 역신호 판정을 정작 판단이 필요한 알림 시점에 노출한다 — 판정식은 재구현하지 않고
+    # 같은 게이트(neff_r >= rank_min_neff, E_LB <= 0)를 쓴다. 억제가 아니라 표기다.
+    e_lb = rep.get("author_self_e_lb")
+    neff_r = rep.get("author_self_neff_r") or 0.0
+    min_neff = rep.get("author_rank_min_neff")
+    if (e_lb is not None and e_lb <= 0 and min_neff is not None
+            and neff_r >= min_neff):
+        lines.append(f"🔻 역신호 후보 — 자체 기대손익 {e_lb:+.2f}R (표본 {neff_r:.0f})")
     return lines
 
 

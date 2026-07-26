@@ -346,6 +346,33 @@ msg_b = tg.render_alert("touch", "LINK", [dict(
     8.35 * USDT_KRW, USDT_KRW)
 check("T14b 자체만 (워쳐없음)", "🏹 승률67% (4승2패)" in msg_b and "기록없음" not in msg_b)
 
+# T14c~T14e: 역신호 경고 줄 (2026-07-27) — 워쳐 적중률·⭐⭐ 가 "믿을 만한 작성자"로
+# 읽히는데 자체 표본은 정반대인 실제 사례(@mastercrypto2020) 대응. 억제가 아니라 표기.
+_anti = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
+             grade="B", score=62, author="AntiSignal", author_followers=None,
+             author_hit_rate=0.66, author_hit_count=64, author_whitelisted=True,
+             mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/c",
+             post_age_minutes=60, collected_at=now,
+             author_self_wins=2, author_self_losses=6, author_self_neff=8.0,
+             author_self_neff_r=8.0, author_rank_min_neff=5.0)
+msg_c = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=-0.92)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14c 역신호 후보 - E_LB 음수·표본 충족 시 경고 줄",
+      "🔻 역신호 후보 — 자체 기대손익 -0.92R (표본 8)" in msg_c
+      and "📊 평균 적중률: 66% (워쳐 64건)" in msg_c)   # 확정 양식은 그대로 유지
+
+msg_d = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=0.85)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14d E_LB 양수면 경고 없음", "역신호" not in msg_d)
+
+msg_e = tg.render_alert("touch", "LINK",
+                        [dict(_anti, author_self_e_lb=-1.5, author_self_neff_r=2.0)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14e 표본 미달(neff_r<게이트)이면 경고 없음", "역신호" not in msg_e)
+
+# T14f: 주입 미포함(렌더러 단독 호출·구버전 경로)이면 조용히 생략 — 기존 출력 불변
+check("T14f 역신호 지표 미주입 시 기존 출력 그대로", "역신호" not in msg_a)
+
 # ── 2026-07-24 감사 수정 검증 ──────────────────────────────────
 # T15: 여러 캔들에 걸쳐 TP 먼저 → SL 나중이면 순서대로 hit (뭉개면 가짜 ambiguous였음)
 lid15 = add_touched("LINK", 10.0, 9.0, 11.0, 7200, "t15")

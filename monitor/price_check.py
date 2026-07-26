@@ -396,10 +396,18 @@ def run_once(now: float = None) -> dict:
                         lv["author_untouched_expired"] = st["untouched_expired"]
                         # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →
                         # n_eff≥5. 최신성 가중 유효표본 — 데이터가 젊은 동안은 raw 동일)
+                        # + 역신호 경고용 E_LB (2026-07-27). 주간 리포트·show_status 가
+                        # 쓰는 것과 같은 analytics.ranking.author_metrics 를 그대로 부른다
+                        # — 지표를 알림에서 따로 재구현하면 두 화면이 갈린다.
+                        # get_author_outcome_rows 의 필터(outcome·touched_at NOT NULL)가
+                        # author_metrics 내부 outc 필터와 동일해 neff_win 은 종전 값과 같다.
                         hl = cfg_get("rank_half_life_days")
-                        lv["author_self_neff"] = ranking.effective_n([
-                            ranking.recency_weight(now, r["touched_at"], hl)
-                            for r in db.get_author_outcome_rows(conn, lv.get("author"))])
+                        _met = ranking.author_metrics(
+                            db.get_author_outcome_rows(conn, lv.get("author")), now, hl)
+                        lv["author_self_neff"] = _met["neff_win"]
+                        lv["author_self_neff_r"] = _met["neff_r"]
+                        lv["author_self_e_lb"] = _met["e_lb"]
+                        lv["author_rank_min_neff"] = cfg_get("rank_min_neff")
                     # 52주 고저 + 김프는 발송 확정건에만 조회 (회당 업비트 1콜 + 바이낸스 1콜)
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
