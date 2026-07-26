@@ -32,7 +32,8 @@ with db.connect(TEST_DB) as conn:
                   grade="B", score=62, author=author, author_followers=5000,
                   author_hit_rate=0.67, author_hit_count=12, author_whitelisted=(author == "AuthA"),
                   mcap_rank=19, mcap_tier_icon="🥇",
-                  post_url=f"https://tv.com/{url}", post_age_minutes=2000, collected_at=now)
+                  post_url=f"https://tv.com/{url}", post_age_minutes=2000,
+                  collected_at=now - 600)  # 수집은 캔들(now-120~) 이전 — major3 클립과 정합
         lv["signal_key"] = db.make_signal_key("LINK", entry, author, url)
         db.upsert_level(conn, lv)
 
@@ -276,6 +277,28 @@ with db.connect(TEST_DB) as conn:
                        (lv19["signal_key"],)).fetchone()
 check("T19 터치캔들 고가 미오염 + 종료시각 앵커",
       r19["outcome"] is None and abs(r19["touched_at"] - (now + 800)) < 1e-6)
+fake["candles"] = None
+
+# T20: 수집 전 캔들 차단 - 수집 이전 저가(9.0)로는 터치 안 되고, 수집 이후 캔들(9.4)로
+#      터치되며 앵커도 그 캔들 종료시각 (감사 major3: 레벨 존재 전 가격 판정 차단)
+with db.connect(TEST_DB) as conn:
+    lv20 = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=9.5,
+                sl_usd=8.5, tp_usd=12.0, rr=2.5, grade="B", score=60, author="A_t20",
+                author_followers=1, author_hit_rate=None, author_hit_count=None,
+                author_whitelisted=False, mcap_rank=50, mcap_tier_icon="🥇",
+                post_url="https://tv.com/t20", post_age_minutes=10,
+                collected_at=now + 1000)
+    lv20["signal_key"] = db.make_signal_key("LINK", 9.5, "A_t20", lv20["post_url"])
+    db.upsert_level(conn, lv20)
+fake["price"] = 9.8 * USDT_KRW
+fake["candles"] = [(now + 840, now + 900, 9.6 * USDT_KRW, 9.0 * USDT_KRW),
+                   (now + 1020, now + 1080, 9.6 * USDT_KRW, 9.4 * USDT_KRW)]
+price_check.run_once(now + 1100)
+with db.connect(TEST_DB) as conn:
+    r20 = conn.execute("SELECT status, touched_at FROM levels WHERE signal_key=?",
+                       (lv20["signal_key"],)).fetchone()
+check("T20 수집 전 캔들 차단 + 수집 후 캔들 앵커",
+      r20["status"] == "touched" and abs(r20["touched_at"] - (now + 1080)) < 1e-6)
 fake["candles"] = None
 
 print()

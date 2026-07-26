@@ -174,12 +174,18 @@ def run_once(now: float = None) -> dict:
                 lv["entry_usd"] * usdt_krw >= current * 0.95 for lv in tlevels if lv.get("entry_usd")
             )
             candles = _get_range(ticker, 30) if need_low else None
-            low = min((c[3] for c in candles), default=None) if candles else None
-            eff_low = min(current, low) if low else current
+
+            def _eff_low(lv_):
+                """레벨별 유효 저가 — 수집(collected_at) 이후 시작한 캔들만 인정.
+                (2026-07-26 감사 major3: 레벨이 존재하기 전 가격으로 터치·종결되던
+                문제 — 다운타임 15분봉 폴백(최대 50h 소급) 직후 수집 시 재발 구조)"""
+                col = lv_.get("collected_at") or 0
+                lows = [c[3] for c in (candles or []) if c[0] >= col]
+                return min([current] + lows)
 
             for cluster in _build_clusters(tlevels, cluster_band):
                 top_krw = cluster[0]["entry_usd"] * usdt_krw
-                touched = eff_low <= top_krw
+                touched = _eff_low(cluster[0]) <= top_krw
                 previewing = (not touched) and current <= top_krw * (1 + preview_band)
                 if not (touched or previewing):
                     continue
@@ -235,7 +241,7 @@ def run_once(now: float = None) -> dict:
                     touches = []
                     for lv in cluster:
                         e_krw = lv["entry_usd"] * usdt_krw if lv.get("entry_usd") else None
-                        reached = e_krw is not None and eff_low <= e_krw
+                        reached = e_krw is not None and _eff_low(lv) <= e_krw
                         # 터치 앵커 = 실제 도달한 첫 캔들의 종료 시각 (2026-07-26 감사
                         # major2: 감지 시각 앵커면 터치 캔들의 터치 이전 고가가 다음
                         # 회차 판정에 섞이고, 소급 터치 구간이 영구 미판정이었다).
@@ -244,7 +250,7 @@ def run_once(now: float = None) -> dict:
                         t_anchor = now
                         if reached:
                             for c in candles or []:
-                                if c[3] <= e_krw:
+                                if c[0] >= (lv.get("collected_at") or 0) and c[3] <= e_krw:
                                     t_anchor = c[1]
                                     break
                         touches.append((lv["id"], e_krw if reached else None, t_anchor))
