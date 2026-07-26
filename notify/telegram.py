@@ -18,7 +18,7 @@ import time
 
 import requests
 
-from analytics import ranking
+from analytics import clustering, ranking
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -333,21 +333,83 @@ def _weekly_rank_line(rank: int, author: str, met: dict) -> tuple:
     return line, is_anti
 
 
+def _confluence_line(confluence: dict, author: str, min_clusters: int) -> str:
+    """'🤝 합의 참여 X/Y회(Z%)' — 표시 전용(정렬·E_LB 미반영). 클러스터 수가
+    min_clusters 미만이면 None(1회짜리 0% / 100% 는 정보가 아니라 잡음)."""
+    if not confluence:
+        return None
+    s = confluence.get(author)
+    if not s or s.get("total", 0) < min_clusters:
+        return None
+    return (f"     🤝 합의 참여 {s['multi']}/{s['total']}회"
+            f"({s['cr'] * 100:.0f}%)")
+
+
+def _baseline_section(rows_by_author: dict, order: list, baseline: dict,
+                      raw_records: dict, min_n: int) -> list:
+    """🎲 초과 적중률 섹션. pooled 표본 미달이면 빈 목록(그 주 통째로 생략).
+
+    비교 대상은 '원시' 승률이다 — 베이스라인(ret_24h 양수 비율)이 가중 없는 단순
+    비율이라 축을 맞춘다. 랭킹의 수축·가중 승률(p_hat)과는 다른 숫자이며, 이 섹션은
+    랭킹과 무관한 별도 축이다."""
+    if not baseline or baseline.get("rate") is None:
+        return []
+    if baseline.get("n", 0) < min_n:
+        return []  # 표본 미달 — 기준선 자체가 흔들려 비교가 무의미
+    rate = baseline["rate"]
+    lines = [_SEP,
+             f"🎲 초과 적중률 (베이스라인: 터치 후 24h 보유 시 수익권 "
+             f"{rate * 100:.0f}%, n={baseline['n']})"]
+    shown = 0
+    for author in order:
+        rec = (raw_records or {}).get(author)
+        if rec is None:  # 호출부 미주입 — rows 에서 직접 센다(렌더러 단독 테스트 호환)
+            rows = rows_by_author.get(author) or []
+            rec = {
+                "wins": sum(1 for r in rows if r.get("outcome") in ranking.WIN_OUTCOMES),
+                "losses": sum(1 for r in rows if r.get("outcome") in ranking.LOSS_OUTCOMES),
+            }
+        ex = clustering.excess_hit_rate(rec["wins"], rec["losses"], rate)
+        if ex["excess"] is None:
+            continue
+        lines.append(f"  @{html.escape(author)}  원시승률 {ex['raw'] * 100:.0f}%"
+                     f" → 베이스라인 대비 {ex['excess'] * 100:+.0f}%p")
+        shown += 1
+    if not shown:
+        return []
+    lines.append("⚠️ 판정 기준이 서로 다릅니다(작성자=TP 도달 / 기준선=단순 수익 여부). "
+                 "하락장 구간에선 기준선이 낮아져 초과치가 과장돼 보입니다 — 방향 참고용.")
+    return lines
+
+
 def render_weekly_report(rows_by_author: dict, now: float = None,
                          half_life_days: float = None, z: float = None,
-                         prior_m: int = None, min_neff: float = None) -> str:
+                         prior_m: int = None, min_neff: float = None,
+                         confluence: dict = None, baseline: dict = None,
+                         raw_records: dict = None, baseline_min_n: int = None,
+                         confluence_min_clusters: int = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
     3부 구성(2026-07-26 카드): ① E_LB 게이트(n_eff≥min) 통과 작성자 순위,
     ② R NULL(전부 tp_only 등) 이면서 승률 게이트만 통과한 작성자 별도(2트랙 확정,
     랭킹엔 미등재), ③ 표본부족 안내 + 역신호 후보(①에서 게이트는 통과했지만
-    E_LB≤0) 안내. 표본이 전혀 없으면 그 상태도 우아하게 표시."""
+    E_LB≤0) 안내. 표본이 전혀 없으면 그 상태도 우아하게 표시.
+
+    2026-07-26 신규 2건(둘 다 **표시 전용** — 랭킹 수식·정렬 키는 불변):
+    - confluence: {author: {multi, total, cr}} (analytics.clustering.confluence_by_author)
+      → 랭킹/승률 행 아래 '🤝 합의 참여 X/Y회'. 미주입이면 그 줄만 빠진다.
+    - baseline: {n, positive, rate} (analytics.clustering.baseline_positive_rate)
+      + raw_records: {author: {wins, losses}} → '🎲 초과 적중률' 섹션.
+      pooled n 이 baseline_min_n 미만이면 섹션 자체를 생략한다."""
     now = time.time() if now is None else now
     half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
     z = settings.get("rank_z") if z is None else z
     prior_m = settings.get("rank_prior_m") if prior_m is None else prior_m
     min_neff = settings.get("rank_min_neff") if min_neff is None else min_neff
+    baseline_min_n = settings.get("baseline_min_n") if baseline_min_n is None else baseline_min_n
+    if confluence_min_clusters is None:
+        confluence_min_clusters = settings.get("confluence_min_clusters")
     rank_kw = dict(half_life_days=half_life_days, z=z, m=prior_m)
 
     lines = [_SEP, "📈 <b>주간 성적 리포트</b>"]
@@ -374,6 +436,9 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         for i, (author, met) in enumerate(ranked, 1):
             line, is_anti = _weekly_rank_line(i, author, met)
             lines.append(line)
+            conf = _confluence_line(confluence, author, confluence_min_clusters)
+            if conf:
+                lines.append(conf)
             n_anti += is_anti
     else:
         lines.append("  게이트 통과 작성자 없음 (계속 관찰 중)")
@@ -399,15 +464,25 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         for author, met, wins, losses in win_only:
             lines.append(f"  @{html.escape(author)}  승률{met['p_hat'] * 100:.0f}% "
                          f"({wins}승{losses}패, n_eff {met['neff_win']:.1f})")
+            conf = _confluence_line(confluence, author, confluence_min_clusters)
+            if conf:
+                lines.append(conf)
 
-    # ③ 안내: 표본부족 + 역신호 후보
+    # ③ 초과 적중률 베이스라인 (표시 대상 = 위 두 섹션에 노출된 작성자)
+    baseline_order = [a for a, _ in ranked] + [a for a, _, _, _ in win_only]
+    lines.extend(_baseline_section(rows_by_author, baseline_order, baseline,
+                                   raw_records, baseline_min_n))
+
+    # ④ 안내: 표본부족 + 역신호 후보
     if under_sample or n_anti:
         lines.append(_SEP)
     if under_sample:
         under_sample.sort(key=lambda x: x[1], reverse=True)
         names = " · ".join(f"@{html.escape(a)}({n}건)" for a, n in under_sample[:10])
         more = f" · 외 {len(under_sample) - 10}명" if len(under_sample) > 10 else ""
-        lines.append(f"📋 표본 부족(n_eff<{min_neff:g}, 계속 관찰 중): {names}{more}")
+        # '<' 는 반드시 &lt; 로 (parse_mode=HTML 이라 날 '<' 가 태그 시작으로 파싱돼
+        # 400 Can't parse entities 로 발송 자체가 실패한다 — 2026-07-26 첫 발송 실패 원인)
+        lines.append(f"📋 표본 부족(n_eff&lt;{min_neff:g}, 계속 관찰 중): {names}{more}")
     if n_anti:
         lines.append(f"⚠️ 역신호 후보 {n_anti}명 — 게이트는 통과했지만 E_LB≤0 (🔻 표시, "
                      f"자동 필터·태깅 아님, 관찰 참고용)")

@@ -315,6 +315,43 @@ def list_authors_with_outcomes(conn) -> list:
     ).fetchall()]
 
 
+def get_ret24_values(conn) -> list:
+    """터치 후 24h 수익률(%) 실측값 목록 — 주간 리포트의 초과 적중률 베이스라인용
+    (analytics.clustering.baseline_positive_rate 가 양수 비율로 환산).
+
+    표본 정의를 랭킹 쪽과 맞춘다: 실제 도달 터치(touched_at NOT NULL)만.
+    종결 여부는 묻지 않는다 — ret_24h 는 조기 종결건에도 계속 기록되므로
+    (get_ret_pending 주석 참고) 종결로 거르면 도리어 생존편향이 들어간다."""
+    return [r["ret_24h"] for r in conn.execute(
+        "SELECT ret_24h FROM levels WHERE touched_at IS NOT NULL AND ret_24h IS NOT NULL"
+    ).fetchall()]
+
+
+def get_touched_levels_for_clusters(conn) -> list:
+    """터치 이력 전체(실제 도달분) — 주간 리포트가 합의(confluence) 클러스터를
+    재구성할 때 쓰는 원천 행. 섀도 터치(touched_at NULL)는 제외한다: 만료되면
+    상태상 미터치 레벨과 구분이 불가능해져 리포트마다 집계가 흔들리기 때문
+    (재현 가능한 기준을 우선). 필요한 컬럼만 얇게 조회."""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, coin_symbol, entry_usd, author, touched_at FROM levels "
+        "WHERE touched_at IS NOT NULL AND entry_usd IS NOT NULL AND author IS NOT NULL"
+    ).fetchall()]
+
+
+def get_author_raw_record(conn) -> dict:
+    """작성자별 원시 승/패 (종결 표본, 최신성 가중 없음) — 초과 적중률 비교용.
+    베이스라인(ret_24h 양수 비율)이 가중 없는 단순 비율이라 비교 대상도 원시값으로
+    맞춘다(가중 승률과 섞으면 두 축이 어긋난다)."""
+    rows = conn.execute(
+        """SELECT author,
+             SUM(CASE WHEN outcome IN ('hit','timeboxed_win') THEN 1 ELSE 0 END) AS w,
+             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l
+           FROM levels WHERE author IS NOT NULL AND outcome IS NOT NULL
+             AND touched_at IS NOT NULL GROUP BY author"""
+    ).fetchall()
+    return {r["author"]: {"wins": r["w"] or 0, "losses": r["l"] or 0} for r in rows}
+
+
 def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
                     judgment_mode: str, r_multiple: Optional[float] = None,
                     ambiguous: bool = False, best_tp_hit: Optional[int] = None,

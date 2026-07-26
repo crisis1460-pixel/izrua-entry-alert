@@ -82,6 +82,21 @@ def calculate_grade(
         elif diff_pct <= -10:
             score += 15
 
+    # 목표 거리 감점 (2026-07-26 사용자 결정 — A안 '약하게').
+    # 배경: 목표가를 진입가 +1~2%로 아주 촘촘히 잡는 글이 다수 발견됐다. 이런 글은
+    # 승률이 쉽게 100%로 쌓이지만(CryptoAnalystSignal 8승0패 실측) 업비트 왕복
+    # 수수료(0.1%)와 슬리피지를 빼면 스윙 관점에서 실익이 거의 없다 — 승률 착시의 원인.
+    # 실측 시뮬레이션: 이 감점으로 알림 후보 23건 → 17건, 차단 6건 중 5건이 해당 패턴.
+    # 감점만 하고 배제는 하지 않는다(R:R·근접도가 충분히 높으면 여전히 통과 가능).
+    if entry and target and entry > 0:
+        tp_pct = ((target - entry) if direction == "long" else (entry - target)) / entry * 100
+        if tp_pct < 2:
+            score -= 6
+        elif tp_pct < 3:
+            score -= 4
+        elif tp_pct < 5:
+            score -= 2
+
     has_entry = entry is not None and entry > 0
     has_stop = stop_loss is not None and stop_loss > 0
     has_target = target is not None and target > 0

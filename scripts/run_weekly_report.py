@@ -25,6 +25,7 @@ try:
 except Exception:
     pass
 
+from analytics import clustering
 from config import settings
 from notify import telegram
 from storage import db
@@ -46,15 +47,30 @@ def send_report(db_path: str = None, now: float = None) -> bool:
     with db.connect(db_path) as conn:
         authors = db.list_authors_with_outcomes(conn)
         rows_by_author = {a: db.get_author_outcome_rows(conn, a) for a in authors}
+        # 초과 적중률 베이스라인 (2026-07-26 카드 B안): 이미 기록 중인 ret_24h 재사용
+        # — 추가 API 호출 0. 표본 미달이면 렌더러가 섹션을 통째로 생략한다.
+        baseline = clustering.baseline_positive_rate(db.get_ret24_values(conn))
+        raw_records = db.get_author_raw_record(conn)
+        # 합의(confluence): 터치 이력 전체에 price_check 와 동일한 병합 규칙을 재적용.
+        # 표시 전용 — E_LB·정렬 키에는 들어가지 않는다.
+        confluence = clustering.confluence_by_author(
+            db.get_touched_levels_for_clusters(conn),
+            settings.get("cluster_band_pct"),
+            window_sec=settings.get("confluence_window_hours") * 3600,
+        )
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
-    text = telegram.render_weekly_report(rows_by_author, now=now)
+    text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
+                                         raw_records=raw_records, confluence=confluence)
     ok = telegram.send(text)
 
     logger.info(
-        "주간 리포트 %s: 작성자 %d명 / 종결 표본 %d건",
+        "주간 리포트 %s: 작성자 %d명 / 종결 표본 %d건 / 베이스라인 %s / 합의 작성자 %d명",
         "발송 완료" if ok else "발송 실패(백오프 후 재시도)",
         len(rows_by_author), total_rows,
+        f"{baseline['rate'] * 100:.0f}%(n={baseline['n']})" if baseline["rate"] is not None
+        else "표본없음",
+        len(confluence),
     )
     return bool(ok)
 

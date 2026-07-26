@@ -73,6 +73,9 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
         return None
 
 
+_RANGE_MAX_PAGES = 3  # 안전판 — 정상 유동성 마켓은 1페이지(1콜)로 끝난다
+
+
 def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[list]:
     """최근 minutes 분간의 분봉 목록 [(시작epoch, 종료epoch, high, low), ...] 시간 오름차순.
 
@@ -81,42 +84,60 @@ def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[lis
     경우까지 전부 '동시터치 miss'로 떨어졌다(승률 하향 편향). 캔들 목록을 그대로
     반환해 호출부가 시간순으로 판정하게 한다.
 
+    2026-07-26 재감사 #9 근본 수정: 예전엔 "개수"(count) 기반 요청이라, 무거래 분에는
+    캔들이 생성되지 않는 업비트 API 특성상 저유동성 마켓에서 count개가 의도한 minutes
+    보다 훨씬 긴 과거까지 덮었다(실측: 추적 유니버스 81종 중 60종이 45분 요청에 1.5배
+    이상 확대, SUN 31시간·SYRUP 24시간 등). 이제는 목표 시각(target_start = 요청 시각
+    - minutes분) 이후 캔들만 남기는 시간창 필터를 건다.
+
+    count = ceil(minutes/unit) 는 1분봉 하나가 최대 1분을 담당하므로 '목표 구간 안에
+    존재할 수 있는 실제 캔들 개수의 이론적 상한'이다 — 즉 유동성이 얼마나 낮든, 목표
+    구간 안의 캔들은 전부 이 count 안에 들어온다(더 오래된 캔들이 그 자리를 대신
+    차지할 뿐). 그래서 정상적으로는 추가 페이지 없이 1콜 + 시간 필터만으로 끝난다.
+    극단적으로 count 가 부족한 경우(이론상 거의 불가능하지만 방어적으로)에만
+    scripts/repair_rejudge_20260726.py 의 fetch_candles() 와 같은 방식으로 'to' 를
+    당겨가며 최대 _RANGE_MAX_PAGES 까지만 추가 조회한다.
+
     소급 창이 200분을 넘으면(봇 다운타임) 15분봉으로 폴백해 최대 50시간까지 커버."""
     unit = 1 if minutes <= 200 else 15
     count = max(1, min(200, (minutes + unit - 1) // unit))
-    try:
-        resp = requests.get(
-            f"{_BASE}/candles/minutes/{unit}",
-            params={"market": market, "count": count},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    target_start = now_ts - minutes * 60
+
+    out: dict = {}
+    to_param = None
+    for _ in range(_RANGE_MAX_PAGES):
+        params = {"market": market, "count": count}
+        if to_param:
+            params["to"] = to_param
+        try:
+            resp = requests.get(
+                f"{_BASE}/candles/minutes/{unit}", params=params, timeout=timeout,
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[upbit] %s 분봉 조회 실패: %s", market, e)
+            time.sleep(_CANDLE_PACE_SEC)
+            break
         time.sleep(_CANDLE_PACE_SEC)
         if not raw:
-            return None
-        out = []
-        for c in raw:  # 업비트는 최신순 반환 → 오름차순으로 뒤집는다
+            break
+
+        oldest_start = None
+        for c in raw:
             start = datetime.fromisoformat(c["candle_date_time_utc"]).replace(
                 tzinfo=timezone.utc).timestamp()
-            out.append((start, start + unit * 60,
-                        float(c["high_price"]), float(c["low_price"])))
-        out.sort(key=lambda x: x[0])
+            oldest_start = start if oldest_start is None else min(oldest_start, start)
+            if start >= target_start:
+                out[start] = (start, start + unit * 60,
+                              float(c["high_price"]), float(c["low_price"]))
 
-        # 2026-07-26 재감사 minor9: "개수" 요청이라 무거래 분은 캔들이 생성되지
-        # 않아, 저유동성 마켓에선 count개가 의도한 minutes 보다 훨씬 긴 과거까지
-        # 덮을 수 있다(실측: 추적 유니버스 81종 중 60종이 45분 요청에 1.5배 이상
-        # 확대, 일부는 20배 이상). 근본 해결(시간 기반 API 재설계)은 별도 과제라
-        # 여기선 판정/필터 로직을 바꾸지 않고 관측만 남긴다.
-        expected_span_min = count * unit
-        actual_span_min = (out[-1][1] - out[0][0]) / 60.0
-        if actual_span_min > expected_span_min * 1.5:
-            logger.warning(
-                "[upbit] %s 소급창 확대: 요청 %d분(캔들 %d개, %d분봉) 무거래로 "
-                "실제 %.0f분 구간 커버 - 의도보다 오래된 가격이 판정/터치 로직에 "
-                "섞일 수 있음", market, minutes, count, unit, actual_span_min)
-        return out
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[upbit] %s 분봉 조회 실패: %s", market, e)
-        time.sleep(_CANDLE_PACE_SEC)
+        if oldest_start is None or oldest_start <= target_start:
+            break  # 이번 페이지가 이미 목표 시각까지 닿았다 - 추가 페이지 불필요
+        to_param = datetime.fromtimestamp(oldest_start, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+
+    if not out:
         return None
+    return sorted(out.values())

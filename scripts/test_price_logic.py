@@ -15,6 +15,11 @@ from storage import db
 from monitor import price_check, upbit
 from notify import telegram
 
+_real_fetch_range_since = upbit.fetch_range_since  # 아래에서 price_check 테스트용으로
+                                                    # upbit.fetch_range_since 를 몽키패치
+                                                    # 하기 전에 실물 함수를 보관해둔다
+                                                    # (U1~U4 는 실물 로직을 검증한다)
+
 TEST_DB = "cache/_test_price.db"
 settings.SETTINGS["db_path"] = TEST_DB
 if os.path.exists(TEST_DB):
@@ -69,6 +74,109 @@ def check(name, cond):
     global ok
     print(("✅" if cond else "❌"), name)
     ok = ok and cond
+
+# ── U1~U4: fetch_range_since 시간 기반 재설계 회귀 테스트 (2026-07-26 감사 #9) ──
+# 업비트 캔들 API를 흉내 낸 가짜 requests.get 으로, HTTP 호출 없이 검증한다.
+import requests as _requests_mod
+from datetime import datetime as _dt, timezone as _tz
+
+_orig_requests_get = _requests_mod.get
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def _iso(ts):
+    return _dt.fromtimestamp(ts, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _candle(ts, unit, high, low):
+    return {"candle_date_time_utc": _iso(ts), "high_price": high, "low_price": low}
+
+
+upbit._CANDLE_PACE_SEC = 0.0  # 테스트 속도 - 실제 페이싱 로직 검증과 무관
+
+# U1: 정상 유동성(매 분마다 거래) - count 만큼 1콜에 다 들어오고, 요청 구간을
+#     벗어나지 않는다.
+_u1_calls = []
+def _u1_get(url, params=None, timeout=None):
+    _u1_calls.append(params)
+    now_ts = time.time()
+    unit = 1
+    n = params["count"]
+    to_ts = now_ts if "to" not in params else \
+        _dt.strptime(params["to"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
+    payload = [_candle(to_ts - (i + 1) * 60, unit, 100.0, 90.0) for i in range(n)]
+    return _FakeResp(payload)
+
+_requests_mod.get = _u1_get
+rng_u1 = _real_fetch_range_since("KRW-TEST", 45, 5.0)
+check("U1 정상유동성 - 1콜로 종결", len(_u1_calls) == 1)
+check("U1 정상유동성 - 캔들 반환됨", bool(rng_u1) and len(rng_u1) >= 40)
+if rng_u1:
+    span_min = (rng_u1[-1][1] - rng_u1[0][0]) / 60.0
+    check("U1 정상유동성 - 의도한 45분 구간 이내", span_min <= 46)
+
+# U2: 저유동성(45분 요청인데 실제 거래는 드문드문 - count개가 훨씬 먼 과거까지
+#     뭉쳐서 온다) - 시간 필터로 target_start 이전 캔들은 전부 제거되어야 한다
+#     (예전 버그: 이 필터가 없어 SUN 31시간 확대 같은 사례가 나왔다).
+_u2_calls = []
+def _u2_get(url, params=None, timeout=None):
+    _u2_calls.append(params)
+    now_ts = time.time()
+    n = params["count"]
+    # 실제 거래가 45분에 1번씩만 있었다고 가정 -> count(45)개면 총 45*45분 과거까지 확대
+    payload = [_candle(now_ts - (i + 1) * 45 * 60, 1, 100.0, 90.0) for i in range(n)]
+    return _FakeResp(payload)
+
+_requests_mod.get = _u2_get
+rng_u2 = _real_fetch_range_since("KRW-SPARSE", 45, 5.0)
+target_start_u2 = time.time() - 45 * 60
+check("U2 저유동성 - 목표 시각 이전 캔들 없음",
+      all(c[0] >= target_start_u2 - 1 for c in (rng_u2 or [])))
+check("U2 저유동성 - 여전히 1콜(추가페이지 불필요, count 자체가 이론상 상한)",
+      len(_u2_calls) == 1)
+
+# U3: count 가 부족한 극단 상황(방어적 안전판) - 1페이지가 목표 시각까지 못 닿으면
+#     'to' 를 당겨 추가 페이지를 조회하되, 최종 결과는 여전히 목표 시각을 넘지 않는다.
+_u3_calls = []
+def _u3_get(url, params=None, timeout=None):
+    _u3_calls.append(dict(params))
+    now_ts = time.time()
+    n = params["count"]
+    if "to" not in params:
+        # 1페이지: 목표 시각(45분 전)에 훨씬 못 미치는 최근 5분치만 반환
+        payload = [_candle(now_ts - (i + 1) * 60, 1, 100.0, 90.0) for i in range(min(n, 5))]
+    else:
+        to_ts = _dt.strptime(params["to"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
+        payload = [_candle(to_ts - (i + 1) * 60, 1, 100.0, 90.0) for i in range(n)]
+    return _FakeResp(payload)
+
+_requests_mod.get = _u3_get
+rng_u3 = _real_fetch_range_since("KRW-THIN", 45, 5.0)
+target_start_u3 = time.time() - 45 * 60
+check("U3 방어적 페이지네이션 - 여러 페이지 조회됨", len(_u3_calls) > 1)
+check("U3 방어적 페이지네이션 - 최대 페이지 상한 준수", len(_u3_calls) <= upbit._RANGE_MAX_PAGES)
+check("U3 방어적 페이지네이션 - 그래도 목표 시각 이내",
+      all(c[0] >= target_start_u3 - 1 for c in (rng_u3 or [])))
+
+# U4: 조회 실패는 예전과 동일하게 None
+def _u4_get(url, params=None, timeout=None):
+    raise Exception("network down")
+
+_requests_mod.get = _u4_get
+rng_u4 = _real_fetch_range_since("KRW-FAIL", 45, 5.0)
+check("U4 조회 실패 - None 반환(기존과 동일)", rng_u4 is None)
+
+_requests_mod.get = _orig_requests_get
 
 # T1: 가격이 멀면(엔트리 +10%) 아무 알림 없음
 fake["price"] = 8.30 * USDT_KRW * 1.10
@@ -385,6 +493,37 @@ sent_messages.clear()
 with db.connect(TEST_DB) as conn:
     s23d = price_check._check_collect_silence(conn, now, settings.get)
 check("T23d 최근 24h 내 수집 있음 - 정상(무경고)", s23d is False and not sent_messages)
+
+# T24: 목표 거리 감점 (2026-07-26 A안) — 초근접 TP 는 감점돼 알림에서 빠진다
+from collector.grading import calculate_grade as _cg  # noqa: E402
+_g_close, _s_close, _ = _cg(500, "long", 100.0, None, 101.5, 100.0)   # TP +1.5%
+_g_far, _s_far, _ = _cg(500, "long", 100.0, None, 110.0, 100.0)       # TP +10%
+check("T24 초근접 TP 감점 (-6점)", abs((_s_far - _s_close) - 6) < 1e-9)
+check("T24b 감점으로 등급 하락", _g_close == "D" and _g_far == "C")
+# 중간 구간(2~3%: -4 / 3~5%: -2)과 5%↑ 무감점
+_, _s_25, _ = _cg(500, "long", 100.0, None, 102.5, 100.0)
+_, _s_40, _ = _cg(500, "long", 100.0, None, 104.0, 100.0)
+check("T24c 구간별 감점", abs((_s_far - _s_25) - 4) < 1e-9 and abs((_s_far - _s_40) - 2) < 1e-9)
+# 숏 방향도 대칭 적용 (long 전용 버그 방지)
+_, _s_short_close, _ = _cg(500, "short", 100.0, None, 98.5, 100.0)
+_, _s_short_far, _ = _cg(500, "short", 100.0, None, 90.0, 100.0)
+check("T24d 숏 대칭", abs((_s_short_far - _s_short_close) - 6) < 1e-9)
+# T25: 텔레그램 HTML 안전성 — 렌더 결과에 이스케이프 안 된 '<' 가 있으면
+#      parse_mode=HTML 발송이 400 으로 실패한다(2026-07-26 주간리포트 첫 발송 실패 원인)
+import re as _re  # noqa: E402
+def _unescaped_lt(text):
+    """허용 태그(<b> </b> <a href=...> </a>)를 제거한 뒤 남은 '<' 를 찾는다."""
+    stripped = _re.sub(r'</?(?:b|i|u|s|code|pre|a)(?:\s[^<>]*)?>', '', text)
+    return '<' in stripped
+_rep25 = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=10.0,
+              sl_usd=9.0, tp_usd=12.0, grade="B", score=60, author="A<script>",
+              author_followers=10, author_hit_rate=0.7, author_hit_count=9,
+              author_whitelisted=0, mcap_rank=19, mcap_tier_icon="🥇",
+              post_url="https://tv.com/x", post_age_minutes=100)
+check("T25 알림 렌더 HTML 안전",
+      not _unescaped_lt(telegram.render_alert("touch", "LINK", [_rep25], 14000.0, 1400)))
+check("T25b 급감경고 HTML 안전",
+      not _unescaped_lt(telegram.render_collect_silence_alert(24, 9.0)))
 
 print()
 print("── 본알림 실제 렌더링 ──")

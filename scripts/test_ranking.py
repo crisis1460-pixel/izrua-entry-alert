@@ -112,7 +112,97 @@ msg_b = telegram.render_alert("touch", "LINK", [dict(rep, author_self_neff=5.0)]
 check("I2a n_eff 4.9 → 🏹 미표시", "🏹" not in msg_a)
 check("I2b n_eff 5.0 → 🏹 표시", "🏹" in msg_b and "4승2패" in msg_b)
 
+# ── C: 합의(confluence) 클러스터 — analytics/clustering.py (2026-07-26 신규) ──
+from analytics import clustering  # noqa: E402
+
+H = 3600.0
+
+
+def lv(i, coin, entry, author, t=0.0):
+    return dict(id=i, coin_symbol=coin, entry_usd=entry, author=author, touched_at=now + t)
+
+
+# C1: price_check._build_clusters 와 병합 결과 동일 (규칙 정본 일치 — 분기 방지 가드)
+from monitor.price_check import _build_clusters  # noqa: E402  (읽기 전용 참조)
+
+_same = [lv(1, "SOL", 100.0, "A"), lv(2, "SOL", 99.5, "B"), lv(3, "SOL", 98.0, "A"),
+         lv(4, "SOL", 97.9, "A"), lv(5, "SOL", None, "D")]
+check("C1 price_check 와 병합 결과 동일",
+      [[l["id"] for l in c] for c in _build_clusters(_same, 1.0)]
+      == [[l["id"] for l in c] for c in clustering.build_clusters(_same, 1.0)]
+      == [[1, 2], [3, 4]])
+
+# C2: CR — SOL 클러스터1(A,B 다자) / 클러스터2(A,A 단독) → A 1/2, B 1/1
+conf = clustering.confluence_by_author(_same, 1.0)
+check("C2 CR 계산", conf["A"] == {"multi": 1, "total": 2, "cr": 0.5}
+      and conf["B"]["cr"] == 1.0 and "D" not in conf)
+
+# C3: 같은 작성자 중복 게시로 '다자' 부풀리기 불가 (A 2건뿐인 클러스터는 단독)
+c3 = clustering.confluence_by_author(
+    [lv(1, "ETH", 100.0, "A"), lv(2, "ETH", 99.6, "A"), lv(3, "ETH", 99.7, "A")], 1.0)
+check("C3 자기 중복 게시는 다자 아님", c3["A"] == {"multi": 0, "total": 1, "cr": 0.0})
+
+# C4: 코인 분리 — 값이 같아도 다른 코인이면 절대 병합 안 됨
+c4 = clustering.confluence_by_author(
+    [lv(1, "SOL", 100.0, "A"), lv(2, "LINK", 100.0, "B")], 1.0)
+check("C4 코인 경계", c4["A"]["multi"] == 0 and c4["B"]["multi"] == 0)
+
+# C5: 시간창 — 200시간 떨어진 두 터치는 같은 가격대여도 합의 아님(우연 병합 차단)
+far = [lv(1, "SOL", 100.0, "A"), lv(2, "SOL", 99.6, "B", t=200 * H)]
+check("C5 시간창 밖 미병합",
+      clustering.confluence_by_author(far, 1.0, window_sec=168 * H)["A"]["multi"] == 0
+      and clustering.confluence_by_author(far, 1.0)["A"]["multi"] == 1)
+
+# ── B: 초과 적중률 베이스라인 (ret_24h 양수 비율) ──────────────────────
+# B1: 실측 시나리오 — 29건 중 3건 양수 → 10.3%
+b1 = clustering.baseline_positive_rate([1.0, 2.0, 0.5] + [-1.0] * 26)
+check("B1 베이스라인 비율", b1["n"] == 29 and b1["positive"] == 3 and close(b1["rate"], 3 / 29))
+
+# B2: NULL 제외 · 0%는 양수 아님(경계)
+b2 = clustering.baseline_positive_rate([None, 0.0, 1.0, None])
+check("B2 NULL 제외/0 경계", b2["n"] == 2 and b2["positive"] == 1)
+
+# B3: 표본 전무 → rate None (렌더러가 섹션 생략)
+check("B3 표본 없음", clustering.baseline_positive_rate([None])["rate"] is None)
+
+# B4: 초과분 — 2승5패(28.6%) vs 기준선 10.3% → +18.2%p
+b4 = clustering.excess_hit_rate(2, 5, 3 / 29)
+check("B4 초과분", close(b4["raw"], 2 / 7) and close(b4["excess"], 2 / 7 - 3 / 29))
+check("B5 표본 0 / 기준선 없음 방어",
+      clustering.excess_hit_rate(0, 0, 0.1)["excess"] is None
+      and clustering.excess_hit_rate(2, 5, None)["excess"] is None)
+
+# ── D: DB 조회 함수 (임시 DB, 프로덕션 DB 미접근) ──────────────────────
+TEST_DB2 = "cache/_test_confluence.db"
+if os.path.exists(TEST_DB2):
+    os.remove(TEST_DB2)
+db.init_db(TEST_DB2)
+with db.connect(TEST_DB2) as conn:
+    rows_in = [
+        # (key, coin, entry, author, outcome, touched_at, ret_24h)
+        ("d1", "SOL", 100.0, "A", "hit", now, 1.5),
+        ("d2", "SOL", 99.5, "B", "miss", now, -2.0),
+        ("d3", "SOL", 98.0, "A", "miss", now, -1.0),
+        ("d4", "SOL", 97.0, "A", None, now, None),        # 미종결 — 승패엔 미집계
+        ("d5", "SOL", 96.0, "C", "hit", None, 9.0),       # 섀도 터치 — 전부 제외
+    ]
+    for k, coin, entry, author, outcome, t, ret in rows_in:
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+            "collected_at, author, entry_usd, outcome, touched_at, ret_24h) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (k, coin, f"KRW-{coin}", "long", "touched", now - D, author, entry,
+             outcome, t, ret))
+    rets = db.get_ret24_values(conn)
+    check("D1 ret24 조회는 섀도터치 제외·미종결 포함", sorted(rets) == [-2.0, -1.0, 1.5])
+    cl_rows = db.get_touched_levels_for_clusters(conn)
+    check("D2 클러스터 원천행 4건(섀도 제외)", len(cl_rows) == 4)
+    rec = db.get_author_raw_record(conn)
+    check("D3 원시 승패 집계", rec["A"] == {"wins": 1, "losses": 1}
+          and rec["B"]["losses"] == 1 and "C" not in rec)
+os.remove(TEST_DB2)
+
 print()
-n_checks = 15
+n_checks = 28
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

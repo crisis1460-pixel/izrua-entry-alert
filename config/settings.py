@@ -55,6 +55,14 @@ SETTINGS = {
     "weekly_report_kst_hour_from": 9,      # 이 시각 이후에만 발송 (새벽 발송 방지)
     "weekly_report_kst_hour_to": 22,       # 이 시각 전까지만 발송
 
+    # 초과 적중률 베이스라인 (2026-07-26 카드 B안: ret_24h 양수 비율 재사용, 비용 0)
+    "baseline_min_n": 20,                  # pooled 표본이 이 미만이면 그 주 섹션 생략
+
+    # 합의(confluence) — 표시 전용, E_LB/정렬 키 미반영 (Phase 1)
+    "confluence_window_hours": 168,        # 클러스터 재구성 시 두 터치의 최대 시간 간격
+                                           # (= level_expiry_hours, 동시 생존 가능 상한)
+    "confluence_min_clusters": 2,          # 작성자 클러스터 수가 이 미만이면 표시 생략
+
     # 네트워크
     "http_timeout_sec": 10.0,
 
