@@ -128,12 +128,41 @@ with db.connect(TEST_DB) as conn:
     db.set_meta(conn, "last_check_at", str(NOW - 3600))       # 60분 전 -> 정체 경고
     db.set_meta(conn, "last_collect_at", str(NOW - 20 * 3600))  # 20시간 전(주기 4h*3=12h 초과)
     db.bump_daily_stats(conn, "2026-07-26", ambiguous_unresolved=2, ambiguous_magnified=1,
-                        suppressed_send_fail=3)
+                        ambiguous_skipped=4, suppressed_send_fail=3)
 code, out = capture(days=7)
 check("S6 가격체크 정체 경고", "가격체크가" in out and "멈춰" in out)
 check("S6 수집 정체 경고", "수집이 조용히 멈췄을 수 있습니다" in out)
 check("S6 동시터치 판별불가 경고", "동시터치" in out and "판별불가" in out)
 check("S6 발송실패 경고", "텔레그램 발송 실패 3건" in out)
+# 2026-07-26 감사 minor: '판별불가'(체결내역을 보고도 못 가름)와 '미시도'(예산/OFF/
+# 구간초과로 못 봄)를 갈라 표시한다 — 처방이 다르므로 한 숫자로 뭉치면 못 읽는다.
+# 분모는 셋의 합(2+4+1=7) = 그 기간 발생한 동시터치 전체.
+check("S6b 판별불가/미시도 분리 표시 + 분모는 동시터치 전체",
+      "판별불가 2건" in out and "미시도 4건" in out and "/7건" in out)
+
+# ── S6c: 미시도만 있어도 경고 — 예산/스위치 탓에 재검사를 못 한 것도 신뢰도 신호 ──
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+    db.bump_daily_stats(conn, "2026-07-26", ambiguous_skipped=2)
+code, out = capture(days=7)
+check("S6c 미시도만 발생해도 경고(판별불가 0건이어도 침묵하지 않음)",
+      "미시도 2건" in out and "판별불가 0건" in out and "이상 징후 없음" not in out)
+
+# ── S6d: 새 컬럼이 아직 없는 구세대 DB — show_status 는 읽기 전용이라 스스로
+# 마이그레이션할 수 없다(ALTER 불가). 값이 없으면 0으로 접히고 깨지지 않아야 한다.
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    conn.execute("DROP TABLE daily_stats")
+    conn.execute("CREATE TABLE daily_stats (day_kst TEXT PRIMARY KEY, "
+                 "touches_total INTEGER NOT NULL DEFAULT 0, "
+                 "ambiguous_unresolved INTEGER NOT NULL DEFAULT 0, updated_at REAL)")
+    conn.execute("INSERT INTO daily_stats (day_kst, touches_total, ambiguous_unresolved) "
+                 "VALUES ('2026-07-26', 3, 1)")
+code, out = capture(days=7)
+check("S6d 구세대 DB(새 컬럼 없음)도 읽기전용 조회에서 안 깨짐",
+      code == 0 and "판별불가 1건" in out and "미시도" not in out)
 
 # ── S7: 이상 징후 전혀 없을 때 "이상 징후 없음" ──────────────────────
 fresh_db()

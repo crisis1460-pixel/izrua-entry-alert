@@ -312,11 +312,20 @@ def print_health(conn, now: float) -> None:
         recent_stats = db.get_daily_stats(conn, 7)
     except sqlite3.OperationalError:
         recent_stats = []
+    # 동시터치 재검사 — '판별불가'(체결내역을 보고도 못 가름)와 '미시도'(예산 소진·
+    # 기능 OFF·구간 길이 초과로 아예 못 봄)를 갈라 표시한다(2026-07-26 감사 minor).
+    # 둘 다 결과는 보수적 miss 지만 처방이 다르다: 판별불가는 데이터 한계라 손댈 게
+    # 없고, 미시도는 bar_magnifier_* 설정을 손보면 줄어든다. ambiguous_skipped 가
+    # 없는 구세대 DB 행은 .get 기본값 0 으로 자연히 접힌다.
     amb_unresolved = sum(r.get("ambiguous_unresolved", 0) or 0 for r in recent_stats)
+    amb_skipped = sum(r.get("ambiguous_skipped", 0) or 0 for r in recent_stats)
     amb_magnified = sum(r.get("ambiguous_magnified", 0) or 0 for r in recent_stats)
-    if amb_unresolved:
-        total_amb = amb_unresolved + amb_magnified
-        warnings.append(f"⚠️ 최근 7일 동시터치(TP/SL 동시도달) 판별불가 {amb_unresolved}건"
+    if amb_unresolved or amb_skipped:
+        total_amb = amb_unresolved + amb_skipped + amb_magnified
+        detail = f"판별불가 {amb_unresolved}건"
+        if amb_skipped:
+            detail += f" · 미시도 {amb_skipped}건(예산/OFF)"
+        warnings.append(f"⚠️ 최근 7일 동시터치(TP/SL 동시도달) {detail}"
                         f"/{total_amb}건 — 보수적 miss 로 처리됨(판정 신뢰도 참고)")
 
     send_fail = sum(r.get("suppressed_send_fail", 0) or 0 for r in recent_stats)

@@ -114,6 +114,14 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def _magnify_feasible(scan_from: float, c_end: float, cfg_get) -> bool:
+    """체결내역 재검사를 '시도할 수 있는' 구간인지 — 예산과 무관한 길이 제약만 본다.
+
+    magnify_order 가 이 함수로 조기 반환하므로 규칙의 출처는 여기 하나다. 호출부는
+    같은 판정을 관찰집계 분류(ambiguous_skipped = 체결내역을 아예 못 봄)에만 쓴다."""
+    return c_end - scan_from <= cfg_get("bar_magnifier_max_span_sec")
+
+
 def magnify_order(ticker: str, scan_from: float, c_end: float,
                   tp_krw: float, sl_krw: float, cfg_get) -> Optional[str]:
     """동시터치 캔들을 체결내역으로 '확대'해 TP·SL 도달 순서를 판별 (Bar Magnifier).
@@ -130,7 +138,7 @@ def magnify_order(ticker: str, scan_from: float, c_end: float,
     scan_from 은 max(캔들 시작, 터치 시각) — 터치 이전 체결이 순서 판정에 섞이지
     않게 한다(캔들 스캔부의 '터치 이후만' 원칙과 동일, 2026-07-26 감사 major2 취지).
     """
-    if c_end - scan_from > cfg_get("bar_magnifier_max_span_sec"):
+    if not _magnify_feasible(scan_from, c_end, cfg_get):
         return None
     trades = upbit.fetch_trades_window(
         ticker, scan_from, c_end, cfg_get("http_timeout_sec"),
@@ -206,7 +214,8 @@ def run_once(now: float = None) -> dict:
         obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
                "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
                "suppressed_grade_tp_penalty_only": 0, "preview_dwell": 0,
-               "ambiguous_magnified": 0, "ambiguous_unresolved": 0}
+               "ambiguous_magnified": 0, "ambiguous_unresolved": 0,
+               "ambiguous_skipped": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
 
@@ -421,6 +430,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     - TP1 도달=hit / SL 도달=miss / '같은 캔들' 안에서 둘 다=체결내역 재검사
       (Bar Magnifier, 2026-07-26) → 순서가 복원되면 그대로, 복원 실패 시에만
       보수적 miss+ambiguous (여러 캔들에 걸친 순서 확정은 감사 2번 수정)
+      · 재검사 실패는 관찰집계에서 두 갈래로 나눠 센다 — 체결내역을 보고도 못 가른
+        ambiguous_unresolved / 아예 못 본 ambiguous_skipped (판정 동작은 동일)
     - TP 없으면 타임박스(창 만료 시 수익률 부호), SL 터치는 즉시 miss
     - 창 만료 강제 종결 시에도 judgment_mode 는 원래 모드 유지 (정보 보존)
     - 타임박스/수익률 기준가는 터치 시점 환율로 보정 (장기 창의 환율 드리프트 제거)
@@ -430,6 +441,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     obs = {} if obs is None else obs
     obs.setdefault("ambiguous_magnified", 0)
     obs.setdefault("ambiguous_unresolved", 0)
+    obs.setdefault("ambiguous_skipped", 0)
     resolved = 0
     default_window_sec = cfg_get("outcome_window_hours") * 3600
     r_lo, r_hi = cfg_get("r_clip_low"), cfg_get("r_clip_high")
@@ -518,12 +530,21 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 # 같은 캔들 안에서 TP·SL 동시 — 체결내역으로 실제 순서를 복원해 본다.
                 # 종결 '이전' 단계라 이미 확정된 판정을 뒤집는 게 아니다(안티게이밍
                 # 불변 스냅샷 원칙과 무충돌 — 판정은 여전히 단 한 번만 쓰인다).
+                scan_from = max(c_start, lv["touched_at"])
+                # '체결내역을 실제로 봤는가' — 판별 실패(unresolved)와 시도조차 못 함
+                # (skipped)을 가르는 기준(2026-07-26 감사 minor). 예전엔 한 칸에 합쳐
+                # 세서 "판정을 못 가른 것"과 "우리가 안 본 것"이 구분되지 않아
+                # 신뢰도 지표로 쓸 수 없었다. 판정 결과는 양쪽 다 예전 그대로
+                # (보수적 miss+ambiguous) — 이번 변경은 분류뿐이다.
+                attempted = (magnify_budget["left"] > 0
+                             and _magnify_feasible(scan_from, c_end, cfg_get))
                 refined = None
                 if magnify_budget["left"] > 0:
+                    # 예산 소모 시점은 기존과 동일하게 둔다(구간 길이 초과로 조회
+                    # 없이 끝나는 경우까지 포함) — 판정 경로의 동작 변화 0 이 우선.
                     magnify_budget["left"] -= 1
                     refined = magnify_order(
-                        ticker, max(c_start, lv["touched_at"]), c_end,
-                        tp_krw, sl_krw, cfg_get)
+                        ticker, scan_from, c_end, tp_krw, sl_krw, cfg_get)
                     logger.info("[적중판정] %s 동시터치 재검사 결과: %s",
                                 ticker, refined or "판별불가(보수적 miss 유지)")
                 if refined == "hit":
@@ -534,7 +555,10 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     obs["ambiguous_magnified"] += 1
                 else:
                     outcome, resolve_price, ambiguous = "miss", sl_krw, True
-                    obs["ambiguous_unresolved"] += 1
+                    # 조회 실패·부분커버·캔들 고저 불일치는 '봤지만 못 가름'
+                    # (비용을 쓰고도 결론이 안 난 건)이라 unresolved 쪽이다.
+                    obs["ambiguous_unresolved" if attempted
+                        else "ambiguous_skipped"] += 1
             elif tp_hit:
                 outcome, resolve_price = "hit", tp_krw
             elif sl_hit:

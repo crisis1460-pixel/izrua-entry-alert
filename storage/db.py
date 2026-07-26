@@ -110,10 +110,17 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- 갈린다).
     suppressed_grade_tp_penalty_only INTEGER NOT NULL DEFAULT 0,
     -- 동시터치(같은 1분봉 TP·SL 동시 도달) 재검사 결과 — 판정 신뢰도 지표.
-    -- magnified: 체결내역으로 실제 순서를 복원해 hit/miss 확정 / unresolved: 판별 실패로
-    -- 보수적 miss+ambiguous 유지. 둘 다 드물게만 증가한다(2026-07-26 Bar Magnifier).
+    -- magnified   : 체결내역으로 실제 순서를 복원해 hit/miss 확정
+    -- unresolved  : 체결내역을 봤는데도 순서를 못 가려 보수적 miss+ambiguous 유지
+    -- skipped     : 예산 소진·기능 OFF·구간 길이 초과로 체결내역을 아예 못 봄(2026-07-26
+    --               감사 minor 분리). 결과는 unresolved 와 똑같은 보수적 miss+ambiguous
+    --               지만 성격이 다르다 — unresolved 는 '데이터로도 못 가르는 한계',
+    --               skipped 은 '설정만 바꾸면 줄어드는 운영 이슈'라 한 칸에 합쳐 세면
+    --               신뢰도 지표로 쓸 수 없다.
+    -- 셋의 합 = 그 날 발생한 동시터치 전체 건수. 모두 드물게만 증가한다.
     ambiguous_magnified   INTEGER NOT NULL DEFAULT 0,
     ambiguous_unresolved  INTEGER NOT NULL DEFAULT 0,
+    ambiguous_skipped     INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 """
@@ -619,9 +626,13 @@ _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "preview_dwell",
                      # 동시터치(같은 1분봉에 TP·SL 동시 도달) 재검사 결과.
                      # magnified = 체결내역으로 실제 순서를 복원해 확정한 건,
-                     # unresolved = 재검사에도 판별 못 해 보수적 miss 로 남은 건.
-                     # 둘의 비율이 곧 판정 신뢰도 지표다(2026-07-26 Bar Magnifier 도입).
-                     "ambiguous_magnified", "ambiguous_unresolved")
+                     # unresolved = 체결내역을 보고도 판별 못 해 보수적 miss 로 남은 건,
+                     # skipped = 예산/스위치/구간길이 때문에 체결내역을 못 본 건.
+                     # magnified 비율이 곧 판정 신뢰도 지표이고, skipped 은 지표가
+                     # 아니라 운영 신호다(예산·스위치를 손보면 줄어든다) — 그래서
+                     # 분리한다(2026-07-26 감사 minor, Bar Magnifier 후속).
+                     "ambiguous_magnified", "ambiguous_unresolved",
+                     "ambiguous_skipped")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:

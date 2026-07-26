@@ -692,6 +692,30 @@ check("T29f 보존기간(60일) 초과분 삭제", removed29 >= 1 and "2020-01-0
 check("T29g 보존기간 이내 최근 데이터는 유지", "2026-07-20" in remaining29)
 os.remove(TEST_DB29)
 
+# T29h: 구세대 DB 마이그레이션 — daily_stats 테이블이 이미 있는 DB에는
+# CREATE TABLE IF NOT EXISTS 가 새 컬럼을 붙여주지 않아, _migrate 의
+# PRAGMA table_info + ALTER 경로가 반드시 태워져야 한다(2026-07-26 ambiguous_*
+# 추가 때 겪은 조용한 누락). ambiguous_skipped 분리도 같은 경로를 탄다.
+TEST_DB29H = "cache/_test_migrate.db"
+if os.path.exists(TEST_DB29H):
+    os.remove(TEST_DB29H)
+import sqlite3 as _sq29  # noqa: E402
+_conn29h = _sq29.connect(TEST_DB29H)
+_conn29h.execute("CREATE TABLE daily_stats (day_kst TEXT PRIMARY KEY, "
+                 "touches_total INTEGER NOT NULL DEFAULT 0, updated_at REAL)")
+_conn29h.commit()
+_conn29h.close()
+db.init_db(TEST_DB29H)
+with db.connect(TEST_DB29H) as conn:
+    cols29h = {r["name"] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
+    db.bump_daily_stats(conn, "2026-07-26", ambiguous_skipped=2, ambiguous_unresolved=1)
+    row29h = db.get_daily_stats(conn, days=1)[0]
+check("T29h 구세대 daily_stats 에 새 카운터 컬럼이 ALTER 로 추가됨",
+      set(db._DAILY_STATS_COLS) <= cols29h)
+check("T29h2 마이그레이션 직후 새 컬럼에 정상 누적",
+      row29h["ambiguous_skipped"] == 2 and row29h["ambiguous_unresolved"] == 1)
+os.remove(TEST_DB29H)
+
 # ── T30~T31: 클러스터 로직 리팩터 동등성 (monitor.price_check → analytics.clustering) ──
 # 개발자A가 analytics/clustering.py 에 build_clusters() 를 만들며 같은 병합 규칙이
 # 두 곳에 생겼다 — price_check._build_clusters 가 그쪽으로 위임하도록 리팩터하고,
@@ -794,20 +818,54 @@ _BM_C = (now - 600, now - 540)   # 동시터치가 일어난 캔들 구간
 _bm_candles = [(_BM_C[0], _BM_C[1], 12.2 * USDT_KRW, 8.9 * USDT_KRW)]  # TP·SL 둘 다 관통
 
 
-def _bm_run(key, trades, offset):
-    """entry 10 / SL 9 / TP 12 짜리 터치 레벨 1건을 주어진 체결내역으로 판정."""
+def _amb_totals():
+    """동시터치 집계 3종의 현재 누계 — 회차 델타 측정용. 날짜 키로 찾지 않고 전 행을
+    합산한다(테스트 실행이 KST 자정을 걸쳐도 흔들리지 않게)."""
+    with db.connect(TEST_DB) as conn:
+        rows = db.get_daily_stats(conn, days=60)
+    return {k: sum(r.get(k, 0) or 0 for r in rows)
+            for k in ("ambiguous_magnified", "ambiguous_unresolved", "ambiguous_skipped")}
+
+
+_bm_delta = {}
+
+
+def _bm_run(key, trades, offset, candles=None):
+    """entry 10 / SL 9 / TP 12 짜리 터치 레벨 1건을 주어진 체결내역으로 판정.
+    이 회차에 늘어난 동시터치 집계 델타를 _bm_delta 에 담아둔다(호출 직후 읽기)."""
+    before = _amb_totals()
     lid = add_touched("LINK", 10.0, 9.0, 12.0, 7200, key)
     fake["price"] = 10.0 * USDT_KRW
-    fake["candles"] = _bm_candles
+    fake["candles"] = candles or _bm_candles
     fake_trades["list"] = trades
     price_check.run_once(now + offset)
     fake["candles"] = None
     fake_trades["list"] = None
+    after = _amb_totals()
+    _bm_delta.clear()
+    _bm_delta.update({k: after[k] - before[k] for k in after})
     return outcome_of(lid)
+
+
+def _amb_is(**want):
+    """직전 회차 델타가 정확히 기대대로인지 — 지정하지 않은 카운터는 0 이어야 한다
+    (한 사건이 두 칸에 동시에 잡히는 이중계산을 잡는다)."""
+    return all(_bm_delta.get(k, 0) == want.get(k, 0) for k in _bm_delta)
 
 
 _TP_K, _SL_K = 12.0 * USDT_KRW, 9.0 * USDT_KRW
 _mid = _BM_C[0] + 10
+
+
+def _amb_flagged():
+    """보수적 처리로 ambiguous 표식이 붙은 레벨 수 — 집계 정합 대조군(BM9)."""
+    with db.connect(TEST_DB) as conn:
+        return conn.execute("SELECT COUNT(*) AS n FROM levels WHERE ambiguous=1").fetchone()["n"]
+
+
+# BM 구간 진입 시점의 기준선. 누적 절대값이 아니라 이 구간의 '증가분'으로 대조한다
+# (T23 이 levels 테이블을 통째로 비우는 구간이 앞에 있어 절대값끼리는 못 맞춘다).
+_bm_base, _bm_flagged_base = _amb_totals(), _amb_flagged()
 
 # BM1: 체결 순서상 TP 가 먼저 → hit 으로 정정되고 ambiguous 플래그도 안 선다
 o_bm1 = _bm_run("bm1", [(_mid, 10.0 * USDT_KRW), (_mid + 5, _TP_K + 1),
@@ -815,23 +873,35 @@ o_bm1 = _bm_run("bm1", [(_mid, 10.0 * USDT_KRW), (_mid + 5, _TP_K + 1),
 check("BM1 체결 재검사 - TP 선도달은 hit", o_bm1["outcome"] == "hit" and o_bm1["ambiguous"] == 0)
 check("BM1b hit 정정 시 R-멀티플도 TP 기준(+2)",
       o_bm1["r_multiple"] is not None and abs(o_bm1["r_multiple"] - 2.0) < 0.01)
+check("BM1-obs 집계 - 확정 건은 magnified 에만", _amb_is(ambiguous_magnified=1))
 
 # BM2: SL 이 먼저 → 결론은 예전과 같은 miss 지만 '확정된' miss 라 ambiguous=0
 o_bm2 = _bm_run("bm2", [(_mid, 10.0 * USDT_KRW), (_mid + 5, _SL_K - 1),
                         (_mid + 20, _TP_K + 1)], 5060)
 check("BM2 체결 재검사 - SL 선도달은 확정 miss(ambiguous 해제)",
       o_bm2["outcome"] == "miss" and o_bm2["ambiguous"] == 0)
+check("BM2-obs 집계 - miss 확정도 magnified", _amb_is(ambiguous_magnified=1))
+
+# ── BM3~BM8 집계 분리 (2026-07-26 감사 minor): 결과는 모두 같은 보수적
+# miss+ambiguous 지만, '체결내역을 보고도 못 가름'(unresolved)과 '아예 못
+# 봄'(skipped)은 처방이 다르다 — 전자는 데이터 한계, 후자는 예산·스위치 설정
+# 문제라 손댈 수 있다. 예전엔 둘이 unresolved 한 칸에 합쳐져 신뢰도 지표로
+# 쓸 수 없었다. 판정 동작(outcome/ambiguous)은 이번 변경으로 바뀌지 않는다.
 
 # BM3: 체결내역을 못 받으면(범위 밖·조회 실패·부분커버) 예전 보수적 처리 그대로
 o_bm3 = _bm_run("bm3", None, 5120)
 check("BM3 판별 불가 시 fail-safe - miss+ambiguous 유지",
       o_bm3["outcome"] == "miss" and o_bm3["ambiguous"] == 1)
+check("BM3-obs 집계 - 조회는 시도했으므로 unresolved(비용 쓰고도 결론 없음)",
+      _amb_is(ambiguous_unresolved=1))
 
 # BM3b: 구간은 받았는데 TP·SL 어디에도 안 닿는 체결뿐이면(캔들 고저와 불일치)
 #       억지로 결론 내지 않는다
 o_bm3b = _bm_run("bm3b", [(_mid, 10.0 * USDT_KRW), (_mid + 5, 10.1 * USDT_KRW)], 5180)
 check("BM3b 캔들 고저와 불일치하면 결론 보류(ambiguous 유지)",
       o_bm3b["outcome"] == "miss" and o_bm3b["ambiguous"] == 1)
+check("BM3b-obs 집계 - 체결을 봤으나 못 가름 → unresolved",
+      _amb_is(ambiguous_unresolved=1))
 
 # BM4: 회차당 재검사 예산 — 2분 핫패스 보호. 예산 0이면 재검사 자체를 안 한다.
 _bm_saved_budget = settings.SETTINGS["bar_magnifier_max_per_cycle"]
@@ -840,6 +910,8 @@ o_bm4 = _bm_run("bm4", [(_mid + 5, _TP_K + 1)], 5240)
 settings.SETTINGS["bar_magnifier_max_per_cycle"] = _bm_saved_budget
 check("BM4 회차 예산 소진 시 재검사 생략(보수적 처리)",
       o_bm4["outcome"] == "miss" and o_bm4["ambiguous"] == 1)
+check("BM4-obs 집계 - 예산 소진은 skipped(unresolved 아님)",
+      _amb_is(ambiguous_skipped=1))
 
 # BM5: 스위치 OFF 면 기능 전체가 비활성 (되돌리기 경로 보장)
 settings.SETTINGS["bar_magnifier_enabled"] = False
@@ -847,11 +919,16 @@ o_bm5 = _bm_run("bm5", [(_mid + 5, _TP_K + 1)], 5300)
 settings.SETTINGS["bar_magnifier_enabled"] = True
 check("BM5 스위치 OFF - 예전 동작으로 완전 복귀",
       o_bm5["outcome"] == "miss" and o_bm5["ambiguous"] == 1)
+check("BM5-obs 집계 - 기능 OFF 도 skipped(판별 실패로 오염시키지 않음)",
+      _amb_is(ambiguous_skipped=1))
 
 # BM6: 캔들이 너무 길면(15분봉 폴백 상한 초과) 재검사하지 않는다 — 체결량 폭주 방어
 check("BM6 구간 길이 상한 초과 시 재검사 생략",
       price_check.magnify_order("KRW-LINK", now - 3600, now, _TP_K, _SL_K,
                                 settings.get) is None)
+check("BM6b 길이 제약 판정의 출처가 하나(_magnify_feasible) - 상한 경계 기준",
+      price_check._magnify_feasible(now - 900, now, settings.get)
+      and not price_check._magnify_feasible(now - 901, now, settings.get))
 
 # BM7: 터치 이전 체결은 순서 판정에서 제외 (캔들 스캔부의 '터치 이후만' 원칙과 동일).
 #      magnify_order 에 넘기는 scan_from 이 max(캔들시작, 터치시각) 인지 직접 검증.
@@ -867,6 +944,26 @@ _bm7_res = price_check.magnify_order("KRW-LINK", max(_BM_C[0], _bm7_touch), _BM_
 upbit.fetch_trades_window = _saved_ftw
 check("BM7 스캔 시작점 = max(캔들시작, 터치시각)",
       _bm7_res == "hit" and abs(_bm7_args["start"] - _bm7_touch) < 1e-6)
+
+# BM8: 구간 길이 상한 초과(15분봉 폴백보다 긴 캔들)도 '체결내역을 못 본' 경우라
+#      skipped 로 센다 — 예산은 남아 있고 기능도 켜져 있지만 조회를 안 했다.
+o_bm8 = _bm_run("bm8", [(now - 1500, _TP_K + 1)], 5360,
+                candles=[(now - 2000, now - 1000, 12.2 * USDT_KRW, 8.9 * USDT_KRW)])
+check("BM8 긴 구간은 재검사 없이 보수적 처리",
+      o_bm8["outcome"] == "miss" and o_bm8["ambiguous"] == 1)
+check("BM8-obs 집계 - 구간 길이 초과도 skipped", _amb_is(ambiguous_skipped=1))
+
+# BM9: 세 카운터의 합 = 이 구간에서 발생한 동시터치 전체(이중계산·누락 방지).
+#      unresolved+skipped 는 전부 보수적 miss+ambiguous 로 표식되니 ambiguous=1 행
+#      증가분과 정확히 같아야 하고, magnified 건은 표식이 붙지 않아야 한다.
+_amb_d = {k: v - _bm_base[k] for k, v in _amb_totals().items()}
+check("BM9 집계 정합 - unresolved+skipped == ambiguous 표식 행 증가분",
+      _amb_d["ambiguous_unresolved"] + _amb_d["ambiguous_skipped"]
+      == _amb_flagged() - _bm_flagged_base)
+check("BM9b 분리 후 각 칸의 내역이 손계산과 일치 "
+      "(magnified=BM1,BM2 / unresolved=BM3,BM3b / skipped=BM4,BM5,BM8)",
+      _amb_d["ambiguous_magnified"] == 2 and _amb_d["ambiguous_unresolved"] == 2
+      and _amb_d["ambiguous_skipped"] == 3)
 
 # ── BM-U: upbit.fetch_trades_window 실물 로직 (가짜 requests.get, HTTP 없음) ──
 # 2026-07-26 실측 기반: count 상한 500, `to`=HH:MM:SS(UTC)+`daysAgo`(최대 7),

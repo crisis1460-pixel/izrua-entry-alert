@@ -47,6 +47,72 @@ check("G1b 감점 구간(<5%)은 전부 음수, 이후는 전부 양수",
       and all(p > 0 for hi, p in TP_DISTANCE_BANDS if hi > 5))
 check("G1c 대체배점 상한 일치", max(p for _, p in TP_DISTANCE_BANDS) == TP_REWARD_MAX)
 
+# ── G1d~G1j: 배점표 부호-경계 불변식 (2026-07-26 감사 미조치 minor 조치) ────
+# TP_DISTANCE_BANDS 는 감점과 대체배점을 한 표에 담은 '단일 배점표'라, 두 영역을
+# 가르는 표식이 따로 없고 **점수의 부호**뿐이다(tp_distance_points 의
+# `0.0 if (pts > 0 and has_rr) else pts` 게이팅). 그래서 아래 감점 역산이
+# 배점표의 구조에 암묵적으로 의존한다:
+#
+#   monitor/price_check.py `_tp_distance_penalty` = -tp_distance_points(has_rr=True)
+#   → run_once 가 `grade_from_score(score + tp_penalty)` 로 "감점만 없었다면
+#     min_grade 를 통과했을 건"(suppressed_grade_tp_penalty_only)을 역산한다.
+#
+# 의존하는 성질: (1) 첫 매칭 루프라 상한이 강한 오름차순 (2) 마지막이 inf 라
+# 전 구간을 덮음 (3) 0점 밴드가 없어 부호가 영역을 유일하게 가름 (4) 부호 교차가
+# 정확히 1회라 감점/가점이 배타적 (5) 역산이 감점을 정확히 상쇄하고 가점 구간엔
+# 아무것도 되돌리지 않음. 나중에 누가 배점표만 고쳐도 역산이 조용히 깨지지 않도록
+# 값이 아니라 '구조'를 검사한다. 실제 price_check 함수와의 값 교차검증은
+# scripts/test_price_logic.py T32 담당(여기선 grading.py 만 import — 순수 유지).
+_HI = [hi for hi, _ in TP_DISTANCE_BANDS]
+_PTS = [p for _, p in TP_DISTANCE_BANDS]
+
+
+def _pts_at(tp_pct, has_rr):
+    return tp_distance_points("long", 100.0, 100.0 * (1 + tp_pct / 100.0), has_rr)
+
+
+def _band_probe(i):
+    """i번째 밴드에 확실히 걸리는 tp_pct — (직전 상한, 이 밴드 상한) 사이의 값."""
+    lo = _HI[i - 1] if i else min(_HI[0] - 1.0, 0.0)
+    return lo + 1.0 if _HI[i] == float("inf") else (lo + _HI[i]) / 2.0
+
+
+def _penalty_at(tp_pct):
+    """price_check._tp_distance_penalty 의 역산 규칙 그대로(부호만 뒤집기)."""
+    return -_pts_at(tp_pct, True)
+
+
+check("G1d 상한이 강한 오름차순(중복 상한이 있으면 뒤 밴드가 죽는다)",
+      all(a < b for a, b in zip(_HI, _HI[1:])))
+check("G1e 마지막 밴드만 inf — 위쪽 구멍 없이 전 구간을 덮는다",
+      _HI[-1] == float("inf") and all(h != float("inf") for h in _HI[:-1]))
+check("G1f 아래쪽 구멍 없음 — 역방향 목표(tp_pct<0)도 첫 밴드가 받아낸다",
+      eq(_pts_at(-50.0, True), _PTS[0]) and eq(_pts_at(-50.0, False), _PTS[0]))
+check("G1g 모든 밴드가 도달 가능(빈틈/겹침으로 죽은 밴드 없음)",
+      all(eq(_pts_at(_band_probe(i), False), _PTS[i]) for i in range(len(_PTS))))
+check("G1h 0점 밴드 없음 — 부호가 감점/대체배점을 가르는 유일한 표식이라",
+      all(p != 0 for p in _PTS))
+check("G1i 부호 교차 정확히 1회(감점 전부 앞 · 가점 전부 뒤 = 두 영역 배타적)",
+      sum(1 for a, b in zip(_PTS, _PTS[1:]) if (a < 0) != (b < 0)) == 1
+      and _PTS[0] < 0 and _PTS[-1] > 0)
+
+# 역산 정확성 — 밴드마다 has_rr 양쪽으로 확인한다.
+_inv_sign, _inv_exact, _inv_ghost = True, True, True
+for _i in range(len(_PTS)):
+    _probe = _band_probe(_i)
+    _pen = _penalty_at(_probe)
+    if _pen < 0:
+        _inv_sign = False              # 되돌림이 점수를 깎으면 등급이 되레 내려간다
+    for _has_rr in (True, False):
+        _applied = _pts_at(_probe, _has_rr)
+        if _applied < 0 and not eq(_applied + _pen, 0):
+            _inv_exact = False         # 감점이 정확히 상쇄되지 않음
+        if _applied >= 0 and not eq(_pen, 0):
+            _inv_ghost = False         # 감점이 아닌데 되돌릴 게 있다고 나옴
+check("G1j-1 역산 결과는 항상 0 이상(되돌림이 감점이 되면 안 됨)", _inv_sign)
+check("G1j-2 감점 밴드는 역산으로 정확히 상쇄(score+penalty = 감점 이전 점수)", _inv_exact)
+check("G1j-3 가점/무감점 밴드는 되돌릴 것이 없다(유령 되돌림 0)", _inv_ghost)
+
 # ── G2: 목표거리 감점 (모든 글 공통, 기존 규칙 불변) ─────────────
 # has_rr=True(=SL 있어 R:R 산출됨)면 감점만 적용되고 대체배점은 0
 check("G2 초근접 TP 감점 -6", eq(tp_distance_points("long", 100.0, 101.5, True), -6))
