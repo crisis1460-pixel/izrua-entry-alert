@@ -446,6 +446,88 @@ _after_error = _pc_yml.split("::error::")[-1] if "::error::" in _pc_yml else ""
 check("수리7: ::error:: 직후 exit 1 로 잡을 실제로 실패시킨다", "exit 1" in _after_error[:200])
 
 
+# ══════════════════════════════════════════════════════════════════
+# 수리9(2026-07-27): 수집 순환 — 차단 중도 이탈 시 다음 회차가 이어받는다
+# (유니버스가 시총 내림차순 고정이라, 차단이 반복되면 꼬리 심볼이 영원히
+#  조회되지 않던 기아 문제. 실측: 쿠키 등록 후에도 61번째에서 403)
+# ══════════════════════════════════════════════════════════════════
+settings.SETTINGS["db_path"] = TEST_DB_RC
+settings.SETTINGS["tv_fetch_sleep_sec"] = 0.0   # 순환 검증에 페이싱 대기는 불필요
+db.init_db(TEST_DB_RC)
+
+_ROT_UNIVERSE = [
+    {"symbol": f"R{i}", "ticker": f"KRW-R{i}", "rank": i + 1, "name": f"R{i} Coin",
+     "price_usd": 10.0, "tier_icon": "🥈"} for i in range(5)
+]
+_fetched: list = []
+
+
+def _rot_fetch_ideas(symbol, timeout, max_age_hours=None):
+    _fetched.append(symbol)
+    return []
+
+
+coingecko.build_universe = lambda force=False: list(_ROT_UNIVERSE)
+tradingview.fetch_ideas = _rot_fetch_ideas
+tradingview.hard_block_detected = lambda: None
+upbit_mod.fetch_prices = lambda tickers, timeout: {}
+
+# R1: 차단 없이 완주 → offset 은 0 유지(대형주 우선 순서 복원)
+tradingview.is_blocked = lambda: False
+_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_RC) as conn:
+    _off1 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+check("수리9-R1: 완주 시 순환 지점 0 (기존 순서 유지)", _off1 == "0")
+check("수리9-R1: 전체 5심볼 순서대로 조회", _fetched == ["R0", "R1", "R2", "R3", "R4"])
+
+# R2: 2개 처리 후 차단 → 멈춘 지점(2)이 저장되고 나머지는 이월
+tradingview.is_blocked = lambda: len(_fetched) >= 2
+_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_RC) as conn:
+    _off2 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+check("수리9-R2: 차단 이탈 시 멈춘 절대 위치 저장", _off2 == "2")
+check("수리9-R2: 차단 전까지만 조회(R0,R1)", _fetched == ["R0", "R1"])
+
+# R3: 다음 회차는 저장 지점(R2)부터 재개, 완주하면 0 으로 리셋
+tradingview.is_blocked = lambda: False
+_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_RC) as conn:
+    _off3 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+check("수리9-R3: 재개 회차는 이월 지점부터 회전 순회", _fetched == ["R2", "R3", "R4", "R0", "R1"])
+check("수리9-R3: 완주 후 순환 지점 0 리셋", _off3 == "0")
+
+# R4: 연쇄 차단 — 재개 회차도 중도 이탈하면 절대 위치로 환산해 저장된다
+with db.connect(TEST_DB_RC) as conn:
+    db.set_meta(conn, run_collect._UNIVERSE_OFFSET_META, "3")
+tradingview.is_blocked = lambda: len(_fetched) >= 3
+_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_RC) as conn:
+    _off4 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+check("수리9-R4: 재개(R3부터) 후 3개 처리 뒤 차단 → (3+3)%5=1 저장",
+      _fetched == ["R3", "R4", "R0"] and _off4 == "1")
+
+# R5: --symbols 수동 실행은 순환을 읽지도 쓰지도 않는다
+with db.connect(TEST_DB_RC) as conn:
+    db.set_meta(conn, run_collect._UNIVERSE_OFFSET_META, "4")
+tradingview.is_blocked = lambda: False
+_fetched.clear()
+_run_main(["run_collect.py", "--symbols", "R0"])
+with db.connect(TEST_DB_RC) as conn:
+    _off5 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+check("수리9-R5: --symbols 는 순환 미적용(전체가 아닌 지정분만, meta 불변)",
+      _fetched == ["R0"] and _off5 == "4")
+
+# R6: 페이싱 완충 확대(3.0→5.0)가 설정 소스에 반영돼 있다 — 이 프로세스는 위에서
+# SETTINGS 를 0.0 으로 덮었으므로 런타임 값이 아니라 소스 리터럴을 검사한다.
+_settings_src = (_repo_root / "config" / "settings.py").read_text(encoding="utf-8")
+check("수리9-R6: tv_fetch_sleep_sec 기본값 5.0 (2026-07-27 완충 확대)",
+      '"tv_fetch_sleep_sec": 5.0' in _settings_src)
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
 for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY):
     try:

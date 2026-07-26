@@ -30,7 +30,12 @@ SETTINGS = {
     "collect_interval_hours": 4,         # TradingView 수집 주기 (실효값)
     "collect_retry_minutes": 30,         # 수집 실패 후 재시도까지 백오프 (2분마다 재시도 방지)
     "max_post_age_hours": 168,           # 7일 이내 글만 수집
-    "tv_fetch_sleep_sec": 3.0,           # 심볼당 요청 간격 (Cloudflare 차단 회피)
+    "tv_fetch_sleep_sec": 5.0,           # 심볼당 요청 간격. 3.0 이던 2026-07-26 실측:
+                                          # 쿠키(TV_COOKIE) 등록 후에도 61번째에서 403 —
+                                          # 신원이 아닌 속도 제한으로 추정돼 완충을 확대.
+                                          # 예산 81심볼×~5.5s≈7.4분 < 수집 타임아웃 12분.
+                                          # 커버리지 보장은 순환(collect_universe_offset)
+                                          # 몫이고 페이싱은 차단 빈도 완화용.
     "tv_empty_rest_sec": 30.0,           # 연속 0건 시 휴식
 
     # 알림 트리거

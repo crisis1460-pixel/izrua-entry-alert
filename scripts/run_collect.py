@@ -91,6 +91,9 @@ def _check_deletions(conn, timeout: float) -> int:
 # (_prune_tv_block_alert_meta) 양쪽에서 공유해 접두사가 어긋날 일이 없게 한다.
 _TV_BLOCK_ALERT_KEY_PREFIX = "tv_block_alert_count_"
 
+# 수집 순환 재개 지점(원본 유니버스 기준 절대 인덱스) — 차단 기아 방지 (2026-07-27)
+_UNIVERSE_OFFSET_META = "collect_universe_offset"
+
 
 def _maybe_alert_block(conn, now: float) -> None:
     """이번 수집 주기 중 확정 차단(403/429/캡차/1020)이 감지됐으면 하루 상한 내에서
@@ -192,9 +195,33 @@ def main() -> int:
     max_age_h = settings.get("max_post_age_hours")
 
     with db.connect(db_path) as conn:
+        # ── 수집 순환 (2026-07-27): 유니버스는 시총 내림차순 '고정'이라, 차단으로
+        # 중도 이탈하면 매번 앞쪽 대형주만 수집되고 꼬리는 영원히 조회되지 않는
+        # 기아가 생긴다(실측: 쿠키 등록 후에도 61번째에서 403 → 하위 21개 0회 조회
+        # 확정 경로). 멈춘 지점을 meta 에 남겨 다음 회차에 그 지점부터 이어받는다 —
+        # 차단이 반복돼도 두세 회차(8~12h)면 전체가 한 바퀴 돈다. 완주하면 0 으로
+        # 리셋해 평상시엔 기존 순서(대형주 우선) 그대로. --symbols/--limit(수동
+        # 진단)는 순환을 읽지도 쓰지도 않는다. 차단을 '유발한' 심볼은 다음 재개
+        # 지점에서 한 칸 앞이라 이번 바퀴를 건너뛸 수 있는데, 판별이 불가능하므로
+        # (fetch_ideas 는 차단이어도 빈 목록) 다음 바퀴에 자연 회복되게 둔다.
+        rotate = not args.symbols and not args.limit and len(universe) > 1
+        offset = 0
+        if rotate:
+            try:
+                offset = int(float(db.get_meta(conn, _UNIVERSE_OFFSET_META, "0") or 0))
+            except (TypeError, ValueError):
+                offset = 0
+            offset %= len(universe)
+            if offset:
+                universe = universe[offset:] + universe[:offset]
+                logger.info("수집 순환 재개: %d번째(%s)부터 (직전 회차 차단 이월분)",
+                            offset + 1, universe[0]["symbol"])
+
+        stopped_at = None
         for i, coin in enumerate(universe):
             if tradingview.is_blocked():
-                logger.warning("차단 쿨다운 감지 - 남은 %d개 심볼 이번 주기 생략",
+                stopped_at = i
+                logger.warning("차단 쿨다운 감지 - 남은 %d개 심볼 다음 회차로 이월",
                                len(universe) - i)
                 break
             ideas = tradingview.fetch_ideas(coin["symbol"], timeout, max_age_hours=max_age_h)
@@ -254,6 +281,15 @@ def main() -> int:
 
             if i < len(universe) - 1:
                 time.sleep(sleep_sec)
+
+        # 순환 지점 저장 — 완주면 0(평상시 대형주 우선 복원), 차단 이탈이면 그 지점.
+        # (offset + stopped_at) 은 회전 전 원본 목록 기준 절대 위치로 환산한 값.
+        if rotate:
+            if stopped_at is None:
+                db.set_meta(conn, _UNIVERSE_OFFSET_META, "0")
+            else:
+                db.set_meta(conn, _UNIVERSE_OFFSET_META,
+                            str((offset + stopped_at) % len(universe)))
 
         # 파서 개선 자동 전파: 원문 있는 기존 레벨을 현재 파서로 재파싱해 오염값 치유
         reparsed = db.reparse_all(conn)

@@ -1,5 +1,6 @@
 # 가격체크 상태머신 오프라인 테스트 — 네트워크/텔레그램 없이 몽키패치로 검증.
 import sys, time, os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
@@ -32,6 +33,14 @@ if os.path.exists(TEST_DB):
 db.init_db(TEST_DB)
 
 now = time.time()
+# 자정 경계 가드(2026-07-27 실전 발견): 이 파일은 run_once(now+60 ~ now+1310)로
+# 최대 22분 '미래' 시각을 쓰는데, KST 자정 직전(23:38~)에 실행되면 그 이벤트들이
+# daily_stats 의 다음 날 행으로 갈라져 T26~T28 손계산 절대값이 어긋난다(검증 대상
+# 로직과 무관한 시계 문제 — 실제로 23:39 통과 → 23:45 실패로 재현). 경계 30분
+# 이내면 1시간 물러나 모든 상대 시각이 같은 KST 날짜 안에 머물게 한다.
+_KST = timezone(timedelta(hours=9))
+if datetime.fromtimestamp(now, _KST).date() != datetime.fromtimestamp(now + 1800, _KST).date():
+    now -= 3600
 USDT_KRW = 1400.0
 
 # 레벨 3개: LINK 엔트리 8.30/8.25(±1% 클러스터) + 7.50(별개), 등급 B — 필터 통과
