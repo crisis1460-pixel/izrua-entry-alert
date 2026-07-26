@@ -11,7 +11,12 @@ except Exception:
     pass
 
 from notify import telegram
-from storage import db
+from storage import audit_dump, db
+
+# 이 파일의 기존 블록들은 임시 DB 로 db.init_db 를 부르는데, 2026-07-27 카드 #4 이후
+# init_db 에는 주간 감사 덤프 훅이 달려 있다. 기본으로 꺼두고(부수효과 없는 기존 검증
+# 유지) 아래 A 섹션에서만 명시적으로 켜서 훅 자체를 검증한다.
+audit_dump.SUPPRESSED = True
 
 ok = True
 
@@ -215,7 +220,229 @@ msg11 = telegram.render_weekly_report({}, now=now, calibration_result=CAL, **RK)
 check("C14 빈 작성자 표본에서도 등급 축 표시",
       "아직 표본 부족" in msg11 and "🎚️ 등급 캘리브레이션" in msg11)
 
+# ── A: 주간 감사 덤프 + raw_text 보존정책 (2026-07-27 기획 카드 #4) ──────────
+# storage/audit_dump.py + db.prune_raw_text. 알림·필터·등급과 무관한 기록 전용 기능이라
+# 여기서 검증하는 건 "파일이 정확히 나오는가 / 원문이 아카이브된 뒤에만 지워지는가 /
+# 실패해도 회차를 안 죽이는가" 세 가지다.
+import json  # noqa: E402
+import shutil  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from config import settings  # noqa: E402
+
+A_DB = "cache/_test_audit.db"
+A_DIR = Path("cache/_test_audit_out")
+DAY = 86400.0
+
+for _p in (A_DB, str(A_DIR)):
+    if os.path.isdir(_p):
+        shutil.rmtree(_p)
+    elif os.path.exists(_p):
+        os.remove(_p)
+
+db.init_db(A_DB)   # SUPPRESSED=True 라 이 시점엔 덤프가 돌지 않는다
+
+
+def _ins(conn, key, status, collected_at, raw, **kw):
+    cols = ["signal_key", "coin_symbol", "ticker", "direction", "status",
+            "collected_at", "raw_text"]
+    vals = [key, "SOL", "KRW-SOL", "long", status, collected_at, raw]
+    for k, v in kw.items():
+        cols.append(k)
+        vals.append(v)
+    conn.execute(f"INSERT INTO levels ({','.join(cols)}) VALUES "
+                 f"({','.join('?' for _ in cols)})", vals)
+
+
+with db.connect(A_DB) as conn:
+    # 1) 활성 — 원문은 재파싱 자가치유가 아직 쓰므로 절대 지워지면 안 된다
+    _ins(conn, "a_watch", "watching", now - 40 * DAY, "원문-감시중", grade="B")
+    _ins(conn, "a_prev", "previewed", now - 40 * DAY, "원문-예고중", grade="A")
+    # 2) 종결 + 보존기간 경과 → 정리 대상
+    _ins(conn, "a_old_touch", "touched", now - 60 * DAY, "원문-오래된터치",
+         touched_at=now - 50 * DAY, resolved_at=now - 45 * DAY, grade="C")
+    _ins(conn, "a_old_exp", "expired", now - 60 * DAY, "원문-오래된만료",
+         expired_at=now - 40 * DAY, grade="D")
+    # 섀도 터치(touched_at NULL) — 종결 시각 폴백이 collected_at 으로 떨어지는 경로
+    _ins(conn, "a_shadow", "touched", now - 60 * DAY, "원문-섀도", grade="C")
+    # 3) 종결이지만 보존기간 이내 → 아직 유지 (다음 덤프가 한 번 더 담고 지나간다)
+    _ins(conn, "a_new_touch", "touched", now - 3 * DAY, "원문-최근터치",
+         touched_at=now - 2 * DAY, grade="S")
+    conn.execute("INSERT INTO daily_stats (day_kst, touches_total) VALUES (?,?)",
+                 ("2026-07-20", 3))
+    conn.execute("INSERT INTO daily_stats (day_kst, touches_total) VALUES (?,?)",
+                 ("2026-07-19", 1))
+
+WEEK = db.week_kst(now)
+with db.connect(A_DB) as conn:
+    res = audit_dump.run_weekly_audit(conn, A_DB, now=now, out_dir=A_DIR)
+
+lv_path = A_DIR / f"levels_{WEEK}.ndjson"
+ds_path = A_DIR / f"daily_stats_{WEEK}.ndjson"
+check("A1 KST 주차 파일명으로 levels·daily_stats 덤프 생성",
+      lv_path.exists() and ds_path.exists()
+      and set(res["files"]) == {lv_path.name, ds_path.name})
+
+lv_lines = lv_path.read_text(encoding="utf-8").splitlines()
+lv_meta = json.loads(lv_lines[0])
+lv_rows = [json.loads(x) for x in lv_lines[1:]]
+check("A2 첫 줄 메타(테이블·주차·행수) + 나머지는 한 줄 한 행",
+      lv_meta["_table"] == "levels" and lv_meta["_week_kst"] == WEEK
+      and lv_meta["_rows"] == 6 and len(lv_rows) == 6)
+check("A3 행은 객체(컬럼명 자기기술) + id 오름차순 고정",
+      isinstance(lv_rows[0], dict) and lv_rows[0]["signal_key"] == "a_watch"
+      and [r["id"] for r in lv_rows] == sorted(r["id"] for r in lv_rows)
+      and lv_rows[0]["grade"] == "B")
+ds_rows = [json.loads(x) for x in ds_path.read_text(encoding="utf-8").splitlines()[1:]]
+check("A4 daily_stats 도 덤프(day_kst 오름차순)",
+      [r["day_kst"] for r in ds_rows] == ["2026-07-19", "2026-07-20"])
+
+dumped_raw = {r["signal_key"]: r["raw_text"] for r in lv_rows}
+check("A5 덤프에 원문(raw_text) 포함 — 정리 대상 행도 원문이 남는다",
+      dumped_raw["a_old_touch"] == "원문-오래된터치"
+      and dumped_raw["a_old_exp"] == "원문-오래된만료"
+      and dumped_raw["a_shadow"] == "원문-섀도")
+
+with db.connect(A_DB) as conn:
+    left = {r["signal_key"]: r["raw_text"] for r in
+            conn.execute("SELECT signal_key, raw_text FROM levels").fetchall()}
+check("A6 종결+보존기간 경과 행의 원문만 DB 에서 비워짐(3행)",
+      res["raw_text_pruned"] == 3 and left["a_old_touch"] is None
+      and left["a_old_exp"] is None and left["a_shadow"] is None)
+check("A7 활성(watching/previewed) 원문은 보존 — 재파싱 자가치유가 쓴다",
+      left["a_watch"] == "원문-감시중" and left["a_prev"] == "원문-예고중")
+check("A8 종결이라도 보존기간 이내면 보존", left["a_new_touch"] == "원문-최근터치")
+
+# A9: 같은 주차 재실행은 같은 파일을 덮어쓴다(멱등) + 이미 비운 원문은 재정리 0건
+with db.connect(A_DB) as conn:
+    res2 = audit_dump.run_weekly_audit(conn, A_DB, now=now, out_dir=A_DIR)
+check("A9 같은 주차 재실행 멱등(파일 증식 없음, 정리 0건)",
+      len(list(A_DIR.glob("*.ndjson"))) == 2 and res2["raw_text_pruned"] == 0)
+
+# ── A10: 보존정책 — 최근 N주차분만 남긴다 ─────────────────────────────
+for wk in ("2026-W20", "2026-W21", "2026-W22"):
+    for t in ("levels", "daily_stats"):
+        (A_DIR / f"{t}_{wk}.ndjson").write_text("{}\n", encoding="utf-8")
+(A_DIR / "무관한파일.txt").write_text("x", encoding="utf-8")
+_keep_old = settings.SETTINGS["audit_dump_keep_weeks"]
+settings.SETTINGS["audit_dump_keep_weeks"] = 2
+removed = audit_dump.prune_old_dumps(A_DIR, 2)
+left_weeks = sorted({p.name.split("_")[-1][:-len(".ndjson")]
+                     for p in A_DIR.glob("*.ndjson")})
+check("A11 최근 2주차분만 남기고 오래된 덤프 삭제",
+      left_weeks == sorted({WEEK, "2026-W22"}) and len(removed) == 4)
+check("A12 덤프 패턴이 아닌 파일은 건드리지 않음", (A_DIR / "무관한파일.txt").exists())
+settings.SETTINGS["audit_dump_keep_weeks"] = _keep_old
+
+# ── A13: 주기 게이트 (meta 기반, run_cycle 수집/리포트와 같은 패턴) ─────
+G_DB = "cache/_test_audit_gate.db"
+G_DIR = Path("cache/_test_audit_gate_out")
+for _p in (G_DB, str(G_DIR)):
+    if os.path.isdir(_p):
+        shutil.rmtree(_p)
+    elif os.path.exists(_p):
+        os.remove(_p)
+db.init_db(G_DB)
+audit_dump.SUPPRESSED = False   # 여기서부터 훅/게이트 자체를 검증
+with db.connect(G_DB) as conn:
+    s1 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now, out_dir=G_DIR)
+    s2 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now + 3600, out_dir=G_DIR)
+    s3 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now + 8 * DAY, out_dir=G_DIR)
+check("A13 최초 실행 ok → 주기 미도래 skipped → 8일 후 ok", (s1, s2, s3) == ("ok", "skipped", "ok"))
+
+with db.connect(G_DB) as conn:
+    # 미래 시각 meta(시계 역행/수동 편집)는 신뢰하지 않는다 — 영구 굶주림 방지
+    db.set_meta(conn, audit_dump.META_LAST_DUMP, str(now + 999 * DAY))
+    s4 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now + 9 * DAY, out_dir=G_DIR)
+check("A14 미래 시각 meta 무시(영구 굶주림 방지)", s4 == "ok")
+
+# ── A15: 실패 격리 — 덤프가 터져도 예외가 밖으로 안 나가고 백오프만 남는다 ──
+_real_dump = audit_dump.dump_table
+
+
+def _boom(*a, **k):
+    raise RuntimeError("덤프 강제 실패")
+
+
+audit_dump.dump_table = _boom
+with db.connect(G_DB) as conn:
+    db.set_meta(conn, audit_dump.META_LAST_DUMP, "0")
+    db.set_meta(conn, audit_dump.META_LAST_DUMP_FAIL, "0")
+    s5 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now + 20 * DAY, out_dir=G_DIR)
+    fail_at = db.get_meta(conn, audit_dump.META_LAST_DUMP_FAIL)
+    # 실패 직후 재시도는 백오프로 막힌다(2분 회차마다 재시도 방지)
+    s6 = audit_dump.maybe_weekly_audit(conn, G_DB, now=now + 20 * DAY + 60, out_dir=G_DIR)
+check("A15 덤프 실패는 예외 전파 없이 failed + 실패시각 기록", s5 == "failed" and fail_at)
+check("A16 실패 후 백오프 동안은 재시도 안 함", s6 == "skipped")
+
+with db.connect(G_DB) as conn:
+    before = conn.execute("SELECT COUNT(*) n FROM levels").fetchone()["n"]
+check("A17 실패해도 DB 는 멀쩡(회차 생존)", before == 0)
+
+# init_db 훅 자체의 격리 — 감사 기능이 통째로 터져도 스키마 초기화는 성공해야 한다
+_real_maybe = audit_dump.maybe_weekly_audit
+audit_dump.maybe_weekly_audit = _boom
+try:
+    db.init_db(G_DB)
+    hook_isolated = True
+except Exception:
+    hook_isolated = False
+audit_dump.maybe_weekly_audit = _real_maybe
+audit_dump.dump_table = _real_dump
+check("A18 init_db 훅 실패 격리 — 감사가 터져도 init_db 는 성공", hook_isolated)
+
+# ── A19: 원문 제외 모드면 정리도 함께 멈춘다(아카이브 없는 삭제 경로 없음) ──
+N_DB = "cache/_test_audit_noraw.db"
+N_DIR = Path("cache/_test_audit_noraw_out")
+for _p in (N_DB, str(N_DIR)):
+    if os.path.isdir(_p):
+        shutil.rmtree(_p)
+    elif os.path.exists(_p):
+        os.remove(_p)
+db.init_db(N_DB)
+with db.connect(N_DB) as conn:
+    _ins(conn, "n_old", "touched", now - 60 * DAY, "원문-지우면안됨",
+         touched_at=now - 50 * DAY)
+_raw_old = settings.SETTINGS["audit_dump_include_raw_text"]
+settings.SETTINGS["audit_dump_include_raw_text"] = False
+with db.connect(N_DB) as conn:
+    res_n = audit_dump.run_weekly_audit(conn, N_DB, now=now, out_dir=N_DIR)
+settings.SETTINGS["audit_dump_include_raw_text"] = _raw_old
+n_meta = json.loads((N_DIR / f"levels_{WEEK}.ndjson").read_text(
+    encoding="utf-8").splitlines()[0])
+with db.connect(N_DB) as conn:
+    n_left = conn.execute("SELECT raw_text FROM levels").fetchone()["raw_text"]
+check("A19 원문 제외 모드: 덤프에 raw_text 컬럼 없음",
+      "raw_text" not in n_meta["_columns"])
+check("A20 원문 제외 모드: DB 원문 정리도 멈춘다(아카이브 없이 삭제 금지)",
+      res_n["raw_text_pruned"] == 0 and n_left == "원문-지우면안됨")
+
+# ── A21: 비정상 실수(NaN/Inf)는 표준 JSON 이 아니므로 null 로 눕힌다 ────
+with db.connect(N_DB) as conn:
+    conn.execute("UPDATE levels SET score=?, rr=? WHERE signal_key='n_old'",
+                 (float("nan"), float("inf")))
+with db.connect(N_DB) as conn:
+    audit_dump.dump_table(conn, N_DIR, "levels", "2099-W01", now=now)
+nan_row = json.loads((N_DIR / "levels_2099-W01.ndjson").read_text(
+    encoding="utf-8").splitlines()[1])
+check("A21 NaN/Infinity → null (jq 등 외부 도구가 읽을 수 있게)",
+      nan_row["score"] is None and nan_row["rr"] is None)
+
+# ── A22: SUPPRESSED 스위치 (읽기 전용 잡이 주기 meta 를 앞당기지 못하게) ──
+audit_dump.SUPPRESSED = True
+with db.connect(N_DB) as conn:
+    db.set_meta(conn, audit_dump.META_LAST_DUMP, "0")
+    s7 = audit_dump.maybe_weekly_audit(conn, N_DB, now=now + 99 * DAY, out_dir=N_DIR)
+    still_zero = db.get_meta(conn, audit_dump.META_LAST_DUMP)
+check("A22 SUPPRESSED 면 덤프도 meta 갱신도 없음", s7 == "skipped" and still_zero == "0")
+
+for _p in (A_DB, G_DB, N_DB):
+    if os.path.exists(_p):
+        os.remove(_p)
+for _d in (A_DIR, G_DIR, N_DIR):
+    shutil.rmtree(_d, ignore_errors=True)
+
 print()
-n_checks = 43
+n_checks = 64
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

@@ -11,12 +11,15 @@ KRW 환산은 가격체크 시점의 실시간 USDT/KRW 로 그때그때 계산�
 """
 
 import hashlib
+import logging
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("alert.db")
 
 _KST = timezone(timedelta(hours=9))
 
@@ -209,10 +212,32 @@ def _migrate(conn) -> None:
     _backfill_outcome_chain(conn)
 
 
+def _maybe_audit_dump(conn, db_path: str) -> None:
+    """주간 감사 덤프 훅 (2026-07-27 기획 카드 #4 — storage/audit_dump.py 참고).
+
+    왜 여기인가: 덤프는 "DB 를 커밋백하는 그 잡"에서 돌아야 같은 커밋에 실리는데,
+    그 회차 엔트리포인트(scripts/run_cycle.py, monitor/price_check.py)는 지금 다른
+    세션이 잡고 있어 손댈 수 없다. 두 파일 모두 회차 시작 시 init_db 를 정확히
+    한 번 부르므로(그리고 이 함수는 이미 _backfill_outcome_chain 같은 1회성
+    유지보수를 품고 있으므로) 여기에 붙이면 배선 추가 없이 라이터 잡 안에서 돈다.
+    실제 수행 여부는 audit_dump 쪽 주간 meta 게이트가 정한다 — 매 회차 비용은
+    meta 조회 1건.
+
+    감사 기능의 어떤 실패도 회차를 죽이면 안 된다 — 통째로 삼키고 경고만 남긴다."""
+    try:
+        from storage import audit_dump
+        audit_dump.maybe_weekly_audit(conn, db_path)
+    except BaseException as e:  # noqa: BLE001 - 감사 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.warning("감사 덤프 훅 실패(무시하고 진행): %s: %s", type(e).__name__, e)
+
+
 def init_db(db_path: str) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
+        _maybe_audit_dump(conn, db_path)
 
 
 def upsert_level(conn, level: dict) -> bool:
@@ -880,6 +905,38 @@ def prune_daily_stats(conn, now: Optional[float] = None, keep_days: int = 60) ->
     now = now or time.time()
     cutoff_day = datetime.fromtimestamp(now - keep_days * 86400, tz=_KST).strftime("%Y-%m-%d")
     cur = conn.execute("DELETE FROM daily_stats WHERE day_kst < ?", (cutoff_day,))
+    return cur.rowcount
+
+
+def prune_raw_text(conn, now: Optional[float] = None, keep_days: int = 14) -> int:
+    """종결(touched/expired) 레벨의 글 원문(raw_text)을 보존기간 후 비운다.
+    반환: 비운 행 수. (prune_daily_stats 와 같은 '보존정책' 계열 함수)
+
+    왜 비워도 되나: raw_text 의 유일한 소비처는 재파싱 자가치유(reparse_all)이고,
+    그건 `status IN ('watching','previewed')` 인 활성 행만 본다. 업서트 경로의
+    raw_text 갱신도 같은 조건이라(upsert_level) 종결 행의 원문은 런타임에서 다시
+    읽힐 경로가 없다. 그런데 이 컬럼이 DB 용량의 절반 가까이를 차지하고, DB 는
+    2분마다 레포에 바이너리로 통째 커밋되므로 그 무게가 매 커밋마다 반복된다.
+
+    왜 종결 '전이 시점'이 아니라 주기 정리인가: 원문은 감사 덤프(ndjson)에 아카이브된
+    뒤에만 지워야 한다(storage/audit_dump.py 참고 — 덤프 → 정리 순서가 안전장치다).
+    전이 시점에 즉시 비우면 주 1회 덤프가 그 원문을 한 번도 못 본 채 영구 소실된다.
+    보존기간(기본 14일)은 주간 덤프 주기(7일)의 2배 — 한 주 덤프가 실패해 백오프로
+    밀려도 다음 주 덤프가 반드시 원문을 담고 지나간다.
+
+    복원 불가 지점을 최소화하려고 조건을 좁게 잡는다:
+      · status 가 종결(touched/expired)이고 (활성 행은 절대 건드리지 않는다)
+      · 종결 시각(resolved_at > expired_at > touched_at > collected_at 순 폴백)이
+        보존기간을 넘긴 행만. 섀도 터치(touched_at NULL)는 collected_at 로 떨어진다.
+    """
+    now = now or time.time()
+    cutoff = now - keep_days * 86400
+    cur = conn.execute(
+        "UPDATE levels SET raw_text=NULL "
+        "WHERE raw_text IS NOT NULL AND status IN ('touched','expired') "
+        "AND COALESCE(resolved_at, expired_at, touched_at, collected_at) < ?",
+        (cutoff,),
+    )
     return cur.rowcount
 
 

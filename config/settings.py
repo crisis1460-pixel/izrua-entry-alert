@@ -109,6 +109,16 @@ SETTINGS = {
     # 수집 주기(4h)의 3배 - 실패 백오프(30분) 몇 번 겹쳐도 오탐 안 나게 여유를 둔다.
     "last_collect_stale_hours": 12,
 
+    # 가격체크 회차 자체 정지(공백) 감시 (2026-07-27 기획 카드 #2 과제2)
+    # collect_stale/collect_silence 는 '수집'을 보지만, 이건 2분 주기 회차(가격체크)
+    # 자체가 멈춘 것을 잡는다 — 회차가 도는 동안엔 자기 정지를 스스로 감지할 수
+    # 없으므로, 다음에 살아난 회차가 직전 last_check_at 과의 공백을 사후 재구성한다
+    # (monitor/price_check.py `_check_price_check_gap`). 카드 #2 과제1(GH schedule
+    # 백업, 30분 주기)이 있어 정상 상황에서도 공백이 최대 ~40~60분까지 벌어질 수 있다
+    # (백업 자체 지연 포함) — 임계값을 그 위에 넉넉히 잡아 "백업만으로 정상 동작 중"을
+    # 오탐하지 않고 "백업까지 죽은" 완전 정지만 잡는다.
+    "price_check_gap_alert_minutes": 120,
+
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 - 백로그 구현)
     "deletion_check_daily_limit": 5,        # 하루 1회(수집 주기 중 1번)만 순환 확인,
                                              # 이 건수만큼만 - TradingView 부담/차단 위험 억제
@@ -150,6 +160,24 @@ SETTINGS = {
     # 폐기했다(웹소켓 전용 필드). 대신 터치 확정 시에만 /v1/orderbook 1콜로 스냅샷.
     # **순수 로깅** — 알림 본문·필터·등급 어디에도 반영하지 않는다(관찰기 동결 준수).
     "orderbook_pressure_enabled": True,
+
+    # 주간 감사 덤프 (2026-07-27 기획 카드 #4 — storage/audit_dump.py)
+    # data/levels.db 는 바이너리라 git diff 가 안 된다. 주 1회 levels/daily_stats 를
+    # data/audit/*.ndjson 텍스트로 떨궈 "등급/상태가 언제·왜 바뀌었나"를 사후에 읽을 수
+    # 있게 한다. 알림·필터·등급 산식과 무관한 **기록 전용** 기능.
+    "audit_dump_enabled": True,
+    "audit_dump_interval_hours": 168,       # 주 1회 (주간 리포트/스냅샷과 같은 주기)
+    "audit_dump_retry_minutes": 60,         # 실패 시 백오프 (2분 회차마다 재시도 방지)
+    "audit_dump_keep_weeks": 8,             # 작업본에 남길 주차 수 — 레포 무한 증가 방지.
+                                             # 지워도 그 파일이 실렸던 과거 커밋에는 영구히
+                                             # 남으므로 아카이브 자체는 잃지 않는다.
+    # 원문(levels.raw_text) 아카이브 여부. True 여야만 아래 DB 원문 정리가 돈다 —
+    # 아카이브 안 된 원문을 지우는 경로는 만들지 않는다(복구 불가 손실 방지).
+    "audit_dump_include_raw_text": True,
+    # 종결(touched/expired) 후 이 기간이 지난 레벨의 raw_text 를 DB 에서 비운다.
+    # 소비처(reparse_all)가 활성 행만 보므로 런타임엔 무해하고, DB 용량의 큰 몫을
+    # 회수한다. 덤프 주기(7일)의 2배 — 한 주 덤프가 실패해도 다음 주가 담고 지나간다.
+    "audit_raw_text_keep_days": 14,
 
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",

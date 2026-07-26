@@ -29,7 +29,7 @@ from analytics import calibration, clustering
 from config import settings
 from notify import telegram
 from scripts.show_status import fetch_calibration_rows
-from storage import db
+from storage import audit_dump, db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("alert.weekly_report")
@@ -82,6 +82,13 @@ def send_report(db_path: str = None, now: float = None) -> bool:
 
 
 def main() -> int:
+    # 이 잡(.github/workflows/weekly-report.yml)은 **읽기 전용**이라 data/ 를 커밋백하지
+    # 않는다. 여기서 주간 감사 덤프(카드 #4)가 돌면 파일은 러너와 함께 사라지는데 주기
+    # meta(last_audit_dump_at)만 앞당겨져, 정작 라이터 회차(price-check.yml)가 그 주
+    # 덤프를 건너뛴다 = 그 주 감사 기록이 통째로 빈다. 그래서 명시적으로 끈다.
+    # (run_cycle 이 send_report() 를 직접 부르는 경로는 이미 회차 시작 시 init_db 에서
+    #  덤프 기회를 지났으므로 영향이 없다.)
+    audit_dump.SUPPRESSED = True
     send_report()
     return 0  # 수동 실행은 발송 실패해도 잡을 빨갛게 만들지 않는다(로그로 확인)
 

@@ -1469,6 +1469,49 @@ check("EX4 섀도 터치도 수집 기준으로 만료", _ex_st[_ex_shadow] == "
 #    (T8/T9/T10/T11/T13/T15/BM1~BM8 등, run_once/_judge_outcomes 정상 경로로
 #    종결된 전체 표본)이 통째로 하나의 유효한 해시체인을 이루는지 확인한다 —
 #    개별 단위테스트(test_resilience.py)와 달리 실제 운영 경로 산출물 검증.
+
+# ── AD: 주간 감사 덤프가 운영 배선(init_db 훅)으로 실제로 도는가 (카드 #4) ──
+# 단위 검증은 scripts/test_weekly_report.py(A 섹션) 담당. 여기서는 "회차가 부르는
+# db.init_db 만으로 배선이 완결되는가"만 본다 — 회차 엔트리포인트(run_cycle/
+# price_check)는 매 회차 init_db 를 부르고, 덤프는 DB 옆(data/audit)에 떨어져
+# price-check.yml 의 `git add data/` 에 그대로 실린다(워크플로 무수정).
+import json as _json  # noqa: E402
+import shutil as _shutil  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+from storage import audit_dump as _audit  # noqa: E402
+
+_AD_ROOT = _Path("cache/_ad_wiring")
+_shutil.rmtree(_AD_ROOT, ignore_errors=True)
+_AD_DB = str(_AD_ROOT / "levels.db")
+db.init_db(_AD_DB)   # 1회차 — 이력 없음 → 덤프가 돌아야 한다
+
+_AD_DIR = _AD_ROOT / "audit"
+_AD_WEEK = db.week_kst()
+check("AD1 init_db 훅만으로 DB 옆(<db 폴더>/audit)에 주차 덤프 생성 — 워크플로 무수정 배선",
+      _audit.audit_dir_for(_AD_DB) == _AD_DIR.resolve()
+      and (_AD_DIR / f"levels_{_AD_WEEK}.ndjson").exists()
+      and (_AD_DIR / f"daily_stats_{_AD_WEEK}.ndjson").exists())
+
+# 2회차 이후는 주기 게이트가 막는다 — 2분마다 도는 핫패스에 파일 IO 를 얹으면 안 된다
+with db.connect(_AD_DB) as _c:
+    _c.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status,"
+        " collected_at, raw_text) VALUES ('ad1','SOL','KRW-SOL','long','watching',?,?)",
+        (time.time(), "원문"))
+db.init_db(_AD_DB)
+_ad_meta = _json.loads((_AD_DIR / f"levels_{_AD_WEEK}.ndjson").read_text(
+    encoding="utf-8").splitlines()[0])
+check("AD2 같은 주 안의 다음 회차는 게이트로 생략(핫패스 비용 = meta 조회 1건)",
+      _ad_meta["_rows"] == 0)
+
+# 감사 훅이 붙어도 가격체크가 쓰는 활성 레벨의 원문은 그대로다(재파싱 자가치유 보호)
+with db.connect(_AD_DB) as _c:
+    _ad_raw = _c.execute("SELECT raw_text FROM levels").fetchone()["raw_text"]
+check("AD3 감사 훅이 활성 레벨 원문을 건드리지 않음(reparse_all 대상 보존)",
+      _ad_raw == "원문")
+_shutil.rmtree(_AD_ROOT, ignore_errors=True)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
