@@ -308,8 +308,8 @@ def render_collect_silence_alert(window_hours: float, baseline_avg_per_day: floa
     lines = [
         _SEP,
         "🚨 <b>[수집 급감 경고]</b>",
-        f"최근 {window_hours:.0f}시간 신규 수집 0건 (직전 {baseline_avg_per_day:.1f}건/일 대비)",
-        "cron/Actions 는 초록불이어도 실제 수집이 멈췄을 수 있습니다 - 확인 필요.",
+        f"최근 {window_hours:.0f}시간 신규 수집 0건",
+        f"(직전 {baseline_avg_per_day:.1f}건/일 대비)",
         _SEP,
     ]
     return "\n".join(lines)
