@@ -297,6 +297,24 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     return "\n".join(lines)
 
 
+# ── 수집 급감(조용한 고장) 경고 (2026-07-26) ──────────────────────────
+# 기존 render_alert 와 명확히 구분되는 별도 렌더러 - render_alert 는 변경하지 않는다.
+
+
+def render_collect_silence_alert(window_hours: float, baseline_avg_per_day: float) -> str:
+    """cron/Actions 는 정상(초록불)인데 신규 수집이 끊긴 '조용한 고장' 경고.
+    일반 알림과 헷갈리지 않게 🚨 헤더로 시작 - 하루 1회 상한은 호출부(price_check)의
+    meta 중복방지가 담당하고, 이 함수는 순수 렌더링만 한다."""
+    lines = [
+        _SEP,
+        "🚨 <b>[수집 급감 경고]</b>",
+        f"최근 {window_hours:.0f}시간 신규 수집 0건 (직전 {baseline_avg_per_day:.1f}건/일 대비)",
+        "cron/Actions 는 초록불이어도 실제 수집이 멈췄을 수 있습니다 - 확인 필요.",
+        _SEP,
+    ]
+    return "\n".join(lines)
+
+
 # ── 주간 성적 리포트 (ACCURACY_DB_PLAN 2단계 후속, 2026-07-26) ────────────
 #
 # 랭킹 수학은 analytics.ranking 그대로 사용(재설계 금지) — 여기선 톤을 맞춘 렌더링만.

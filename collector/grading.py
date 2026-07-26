@@ -99,3 +99,23 @@ def calculate_grade(
 
 def meets_min_grade(grade: str, min_grade: str) -> bool:
     return GRADE_ORDER.index(grade) <= GRADE_ORDER.index(min_grade)
+
+
+def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[str, float, Optional[float]]:
+    """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
+
+    배경(2026-07-26 감사): calculate_grade 의 가격근접도(최대 20점)는 채점 시점
+    가격 기준이라, 수집 당시엔 멀어서 근접도 0점 → D등급이던 레벨이 며칠 뒤
+    entry 근접(=알림상 가장 중요해진 순간)해도 재채점 없이는 계속 D로 남아
+    필터에서 영구 배제됐다(터치 52건 중 18건/35%가 이 사유로 억제됨).
+
+    followers/entry/sl/tp/direction 은 DB 원본 그대로 쓰고 가격만 최신화한다 —
+    기존 calculate_grade 를 그대로 재사용(중복 구현 금지)."""
+    return calculate_grade(
+        level.get("author_followers"),
+        level.get("direction"),
+        level.get("entry_usd"),
+        level.get("sl_usd"),
+        level.get("tp_usd"),
+        current_usd_price,
+    )

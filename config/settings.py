@@ -25,7 +25,10 @@ SETTINGS = {
     ],
 
     # 수집
-    "collect_interval_hours": 4,         # TradingView 수집 주기 (참고용, 실제 트리거는 cron-job.org)
+    # 2026-07-26 구조 개선: 수집은 별도 잡이 아니라 가격체크 회차(run_cycle.py)가
+    # 흡수한다. 아래 값이 실제 주기 판정 기준이다(meta.last_collect_at 과 비교).
+    "collect_interval_hours": 4,         # TradingView 수집 주기 (실효값)
+    "collect_retry_minutes": 30,         # 수집 실패 후 재시도까지 백오프 (2분마다 재시도 방지)
     "max_post_age_hours": 168,           # 7일 이내 글만 수집
     "tv_fetch_sleep_sec": 3.0,           # 심볼당 요청 간격 (Cloudflare 차단 회피)
     "tv_empty_rest_sec": 30.0,           # 연속 0건 시 휴식
@@ -46,6 +49,12 @@ SETTINGS = {
     "rank_min_neff": 5,                  # 자체 승률 표시·랭킹 등재 게이트 (raw n≥5 대체)
     "rank_grade_neff": 30,               # 등급 부여 게이트 (3단계, 향후)
 
+    # 주간 성적 리포트 (2026-07-26: 외부 크론 등록 없이 가격체크 회차가 흡수)
+    "weekly_report_interval_hours": 168,   # 발송 주기 (7일)
+    "weekly_report_retry_minutes": 60,     # 발송 실패 시 재시도 백오프
+    "weekly_report_kst_hour_from": 9,      # 이 시각 이후에만 발송 (새벽 발송 방지)
+    "weekly_report_kst_hour_to": 22,       # 이 시각 전까지만 발송
+
     # 네트워크
     "http_timeout_sec": 10.0,
 
@@ -53,6 +62,13 @@ SETTINGS = {
     "outcome_window_hours": 168,     # 터치 후 이 시간 내 미종결 시 타임박스 강제 종결
     "r_clip_low": -1.0,              # R-멀티플 윈저라이즈 하한
     "r_clip_high": 5.0,              # 상한
+
+    # 수집 급감(조용한 고장) 감지 (2026-07-26: cron/Actions 초록불인데 신규수집
+    # 0건이 3일 지속된 사고 재발 방지 - price_check 잡에서 collected_at 집계로 감시)
+    "collect_silence_window_hours": 24,     # 이 시간 동안 신규 수집 0건이면 경고 후보
+    "collect_silence_baseline_days": 7,     # 비교 기준(직전 N일) 평균 수집량
+    "collect_silence_min_baseline_avg": 0.5,  # 직전 평균 일일 수집이 이 미만이면 원래 조용한
+                                               # 기간으로 보고 오탐 처리(경고 생략)
 
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",

@@ -317,6 +317,75 @@ with db.connect(TEST_DB) as conn:
 order = [t for t in call_order if t in ("KRW-URGA", "KRW-URGB", "KRW-URGC")]
 check("T21 판정 루프 임박순 정렬", order == ["KRW-URGA", "KRW-URGC", "KRW-URGB"])
 
+# ── T22: 등급 재평가(freeze 결함 수정) ──────────────────────────
+# 수집 시 가격이 멀어 D등급(근접도 0점)으로 저장된 레벨이, 체크 시점 가격이
+# entry 에 근접하면 재채점돼 필터를 통과해야 한다(2026-07-26 감사: 터치 52건 중
+# 18건이 이 결함으로 억제됨). alert_min_grade 는 기본 'C'.
+from collector import grading as _grading
+with db.connect(TEST_DB) as conn:
+    lv22 = dict(coin_symbol="EGLD", ticker="KRW-EGLD", direction="long",
+                entry_usd=20.0, sl_usd=18.0, tp_usd=26.0, rr=3.0,
+                grade="D", score=13,  # 수집 당시(가격 멂) D등급으로 저장됨
+                author="AuthE", author_followers=100,
+                author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+                mcap_rank=80, mcap_tier_icon="🥉", post_url="https://tv.com/u22",
+                post_age_minutes=500, collected_at=now - 600)
+    lv22["signal_key"] = db.make_signal_key("EGLD", 20.0, "AuthE", "u22")
+    db.upsert_level(conn, lv22)
+fake["low"] = fake["high"] = fake["candles"] = None  # 이전 테스트 잔여값 초기화
+fake["price"] = 20.0 * USDT_KRW * 1.006  # entry 대비 +0.6% - 예고 밴드 이내, 근접도 20점권
+sent_messages.clear()
+s22 = price_check.run_once(now + 1200)
+check("T22 재채점 - 원거리땐 D였던 레벨이 근접 시 알림 통과(예고/터치 무관)",
+      (s22["previews"] + s22["touches"]) == 1 and len(sent_messages) == 1
+      and "D등급" not in sent_messages[0])
+with db.connect(TEST_DB) as conn:
+    row22 = conn.execute("SELECT grade, score FROM levels WHERE signal_key=?",
+                         (lv22["signal_key"],)).fetchone()
+check("T22 DB 원본 등급/점수는 보존(불변) - 필터용 재계산은 in-memory만",
+      row22["grade"] == "D" and abs(row22["score"] - 13) < 1e-9)
+# regrade_current 단위 계산 검증: entry=20, current=20.12 -> diff 0.6% (<2%) -> +20점
+g22, s22score, _ = _grading.regrade_current(lv22, fake["price"] / USDT_KRW)
+check("T22 regrade_current 함수 자체 계산 정합", g22 in ("S", "A", "B") and s22score > 13)
+
+# ── T23: 수집 급감 경고 (조용한 고장 감지) ───────────────────────
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM meta WHERE key='collect_silence_warned_date'")
+    conn.execute("DELETE FROM levels")
+    base_collect = now - 25 * 3600  # 24h 감시창 밖(=25h 전)부터 과거로 7일 평균 채움
+    for i in range(14):  # 직전 7일 동안 이틀에 한 번꼴 수집 -> 평균 2건/일
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, collected_at) "
+            "VALUES (?, 'X', 'KRW-X', 'long', 'expired', ?)",
+            (f"silence_seed_{i}", base_collect - i * 12 * 3600))
+sent_messages.clear()
+with db.connect(TEST_DB) as conn:
+    s23 = price_check._check_collect_silence(conn, now, settings.get)
+check("T23 24h 무수집+평년 수집있음 - 경고 발송", s23 is True and len(sent_messages) == 1
+      and "수집 급감" in sent_messages[0])
+
+with db.connect(TEST_DB) as conn:
+    s23b = price_check._check_collect_silence(conn, now + 30, settings.get)
+check("T23b 같은 날 재호출 - 중복 억제(하루 1회)", s23b is False and len(sent_messages) == 1)
+
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM meta WHERE key='collect_silence_warned_date'")
+    conn.execute("DELETE FROM levels")  # 원래도 조용했던 기간(신규 프로젝트) - 오탐 방지
+sent_messages.clear()
+with db.connect(TEST_DB) as conn:
+    s23c = price_check._check_collect_silence(conn, now, settings.get)
+check("T23c 원래 조용한 기간(직전 평균도 0) - 오탐 없음", s23c is False and not sent_messages)
+
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM meta WHERE key='collect_silence_warned_date'")
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, collected_at) "
+        "VALUES ('silence_recent', 'X', 'KRW-X', 'long', 'expired', ?)", (now - 3600,))
+sent_messages.clear()
+with db.connect(TEST_DB) as conn:
+    s23d = price_check._check_collect_silence(conn, now, settings.get)
+check("T23d 최근 24h 내 수집 있음 - 정상(무경고)", s23d is False and not sent_messages)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)

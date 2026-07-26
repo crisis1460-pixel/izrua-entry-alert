@@ -22,9 +22,13 @@
 ## 2. 아키텍처 (100% 서버리스, PC 불필요, 비용 0)
 
 ```
-cron-job.org (사용자 계정, 워쳐와 같은 패턴)
-├─ collect.yml 트리거: 4시간마다  → TradingView 글 수집→추출→등급→DB 저장
-└─ price-check.yml 트리거: 2분마다 → 업비트 시세로 접근/터치 판정→알림→적중판정
+cron-job.org (사용자 계정, 워쳐와 같은 패턴) — 등록 잡은 이제 **1개뿐**
+└─ price-check.yml 트리거: 2분마다 → scripts/run_cycle.py (단일 DB 라이터)
+   ├─ 매 회차: 업비트 시세로 접근/터치 판정→알림→적중판정
+   ├─ 4시간마다(meta.last_collect_at): TradingView 글 수집→추출→등급→DB 저장
+   └─ 7일마다(meta.last_weekly_report_at, KST 09~22시): 주간 성적 리포트 발송
+   ※ 2026-07-26: collect.yml 폐지. 두 잡이 각자 levels.db(바이너리)를 커밋해
+     항상 충돌→한쪽 유실되던 구조를 라이터 1개로 정리(장애 26ac522 근본 해결).
 상태: data/levels.db (SQLite) — 매 변경 시 레포에 커밋백([skip ci]) = 영속+백업
 Secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, COINGECKO_API_KEY, WATCHER_GITHUB_TOKEN
 ```
@@ -32,8 +36,8 @@ Secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, COINGECKO_API_KEY, WATCHER_GITHUB
 파일 지도: `collector/`(coingecko 유니버스=top200∩업비트KRW·스테이블 제외, tradingview 수집
 3단 폴백, extractor 파싱, grading 등급, watcher_stats), `monitor/`(price_check 핵심 로직,
 upbit REST, binance 김프용, market_sentiment BTC.D/ALT.S/F&G 1h캐시), `notify/telegram.py`
-(렌더러+발송), `storage/db.py`, `scripts/`(run_collect, run_price_check, 테스트 2종,
-check_secrets), `ALERT_BOT_PLAN.md`·`ACCURACY_DB_PLAN.md`(확정 기획서 — 상세 결정 전부 여기).
+(렌더러+발송), `storage/db.py`, `scripts/`(run_cycle=운영 엔트리포인트, run_collect·
+run_price_check·run_weekly_report=수동/하위 단계, 테스트, check_secrets), `ALERT_BOT_PLAN.md`·`ACCURACY_DB_PLAN.md`(확정 기획서 — 상세 결정 전부 여기).
 
 ## 3. 핵심 확정 결정 (변경 시 사용자 합의 필요)
 

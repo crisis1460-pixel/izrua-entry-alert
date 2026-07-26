@@ -1,14 +1,12 @@
-# 주간 성적 리포트 잡 — cron-job.org 이 workflow_dispatch 로 트리거 (collect/price-check 와
-# 동일한 프로젝트 컨벤션: 네이티브 GitHub schedule cron 미사용, 외부 크론이 항상 트리거).
+# 주간 성적 리포트 — **수동 실행 전용** (즉석으로 리포트를 보고 싶을 때 Actions 탭에서 Run).
 #
-# ⚠️ 이 워크플로 파일만으로는 자동 발송되지 않는다. cron-job.org 대시보드에 별도로
-#    "주 1회" 스케줄 잡(예: 매주 월요일 09:00 KST) 을 사용자가 직접 등록해야 한다
-#    (다른 두 잡의 cron-job.org 등록과 동일한 방식 — repository_dispatch 아님, 이 저장소의
-#    workflow_dispatch 엔드포인트를 호출하도록 설정).
+# 2026-07-26 구조 개선: 정기(7일) 발송은 price-check.yml 회차가 흡수했다
+# (scripts/run_cycle.py 가 meta.last_weekly_report_at 을 보고 KST 09~22시 창에서 발송).
+# 따라서 cron-job.org 에 주간 트리거를 등록할 필요가 **없다**. 이미 등록했다면 지워도 된다
+# — 안 지워도 중복 발송만 생길 뿐 상태가 깨지지는 않는다(이 잡은 주기 meta 를 안 건드림).
 #
-# 읽기 전용 잡: data/levels.db 를 조회만 하고 쓰지 않으므로 collect.yml/price-check.yml 과
-# 달리 상태 커밋 백 단계가 없다 (data/ 는 그 두 잡이 매 실행 커밋백하므로 checkout 시점에
-# 이미 최신 상태 — 구버전 아티팩트 마이그레이션도 읽기 전용 리포트엔 불필요).
+# 읽기 전용 잡: data/levels.db 를 조회만 하고 쓰지 않으므로 상태 커밋 백 단계가 없다.
+# 라이터는 price-check.yml 하나로 유지되어야 하므로 여기에 커밋 단계를 추가하지 말 것.
 name: weekly-report
 
 on:

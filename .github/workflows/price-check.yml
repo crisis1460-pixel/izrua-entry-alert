@@ -1,25 +1,50 @@
-# 가격체크 잡 — cron-job.org 이 5~10분마다 workflow_dispatch 로 트리거.
-# 알림 지연을 줄이려 가볍게 유지 (실행 ~1분). 터치 소급 판정은 1분봉 저가로 하므로
-# 트리거가 밀려도 놓치지 않는다.
+# 운영 회차 잡 — cron-job.org 가 2분마다 workflow_dispatch 로 트리거.
+# 파일명은 유지한다(cron-job.org 에 등록된 dispatch 엔드포인트가 파일명 기준).
+#
+# ⚠️ 이 워크플로는 이 저장소에서 data/ 를 커밋하는 **유일한 라이터**다.
+#
+# 2026-07-26 구조 개선 — 왜 하나로 합쳤나:
+#   collect(4h)와 price-check(2m)가 각자 data/levels.db 를 커밋하던 시절,
+#   바이너리는 3-way 머지가 불가능해 두 잡의 커밋은 항상 충돌했고 rebase 전략
+#   (-X ours / -X theirs)은 "누가 버려지나"만 정할 뿐이었다. 실제로 07-23~26 수집분이
+#   전부 폐기됐다(26ac522). 라이터를 1개로 줄이면 충돌 경로 자체가 사라진다.
+#   → 한 회차 = 가격체크(매번) + 수집(4h마다) + 주간 성적 리포트(7일마다).
+#     주기 판정은 DB meta 키(last_collect_at / last_weekly_report_at)로 하고,
+#     실패 격리·백오프는 scripts/run_cycle.py 참고.
 name: price-check
 
 on:
   workflow_dispatch:
+    inputs:
+      force_collect:
+        description: "이번 실행에 수집을 강제(4시간 주기 무시)"
+        type: boolean
+        default: false
+      force_report:
+        description: "이번 실행에 주간 성적 리포트를 강제 발송"
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # data/ 상태 커밋 백
   actions: read    # 구버전 아티팩트 마이그레이션용
 
-# 2026-07-24: collect 와 그룹 분리 (공유 시 pending collect 가 반복 취소되는
-# 수집 기아 문제). 가격체크끼리는 이 그룹으로 직렬화된다.
+# 단일 라이터이므로 그룹도 하나. cancel-in-progress: false 가 핵심이다 —
+# true 였다면 2분마다 오는 트리거가 진행 중인 5~8분짜리 수집 회차를 중도 취소해,
+# 커밋백 전에 죽은 수집분이 통째로 유실된다. false 이므로 실행 중인 회차는 끝까지
+# 보장되고, 겹쳐 들어온 트리거만 대기열에서 정리된다(가격체크는 1분봉 소급 판정이라
+# 몇 회차 건너뛰어도 터치를 놓치지 않는다). 예전의 '수집 기아' 문제도 사라졌다 —
+# 수집이 별도 대기열 항목이 아니라 실행되는 회차 안에 들어있기 때문이다.
 concurrency:
-  group: price-check-runner
+  group: db-writer
   cancel-in-progress: false
 
 jobs:
-  check:
+  cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # 가격체크만이면 ~1분, 수집 편입 회차는 5~8분. 수집에는 run_cycle 내부에서 12분
+    # 하드 타임아웃이 걸려 있어 잡 타임아웃(20분)에 먼저 닿지 않는다.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,16 +69,24 @@ jobs:
             mkdir -p data && unzip -o state.zip -d data && rm state.zip
             echo "아티팩트 → data/ 마이그레이션 완료 (artifact $ART_ID)"
           else
-            echo "이전 상태 없음 - 수집이 먼저 1회 돌아야 함 (레벨 0개로 정상 종료)"
+            echo "이전 상태 없음 - 첫 회차가 수집부터 수행한다 (레벨 0개로 정상 종료)"
           fi
 
-      - name: 가격체크 실행
+      - name: 회차 실행 (가격체크 + 조건부 수집·주간리포트)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scripts/run_price_check.py
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          WATCHER_GITHUB_TOKEN: ${{ secrets.WATCHER_GITHUB_TOKEN }}
+          TV_COOKIE: ${{ secrets.TV_COOKIE }}
+          FORCE_COLLECT: ${{ inputs.force_collect }}
+          FORCE_REPORT: ${{ inputs.force_report }}
+        run: python scripts/run_cycle.py
 
-      - name: 상태 커밋 백 (변경 시에만, 경합 재시도)
+      # always(): 가격체크가 실패해도 그때까지 DB 에 쓰인 상태(수집분·터치 기록)는
+      # 반드시 남긴다. 커밋하지 못하면 러너와 함께 통째로 사라진다.
+      - name: 상태 커밋 백 (변경 시에만)
+        if: always()
         run: |
           set -e
           git config user.name "izrua-bot"
@@ -62,10 +95,14 @@ jobs:
           if git diff --cached --quiet; then
             echo "상태 변경 없음"; exit 0
           fi
-          git commit -m "data: check $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          git commit -m "data: cycle $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
           for i in 1 2 3; do
-            git pull --rebase -X ours origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
+            # data/ 를 쓰는 워크플로가 이 잡 하나뿐이고 concurrency 로 직렬화되므로
+            # 정상 상황에서 충돌은 발생하지 않는다. 따라서 병합 전략(-X ours/theirs)을
+            # 지정하지 않는다 — 사람이 손댄 커밋 같은 예상 밖 충돌이 나면 조용히 한쪽을
+            # 버리는 대신 rebase 를 실패시키고 경고를 남기는 편이 안전하다.
+            git pull --rebase origin main || { git rebase --abort 2>/dev/null || true; sleep 3; continue; }
             git push origin main && exit 0
             sleep 3
           done
-          echo "::warning::상태 커밋 push 3회 실패 - 다음 회차에 재감지됨"
+          echo "::warning::상태 커밋 push 3회 실패 - 다음 회차에서 재시도(터치는 1분봉 소급 재검출)"

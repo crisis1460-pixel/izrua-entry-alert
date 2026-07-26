@@ -48,6 +48,41 @@ def _day_kst(now: float) -> str:
     return datetime.fromtimestamp(now, tz=_KST).strftime("%Y-%m-%d")
 
 
+# ── 수집 급감(조용한 고장) 감지 (2026-07-26) ──────────────────────────
+# cron 초록불 + Actions 초록불 + 신규 수집 0건이 3일 지속된 사고를 계기로 추가.
+# 수집 잡(run_collect.py) 자체가 죽어도 이 잡(price_check, 2분 주기)이 살아있으면
+# 감지되도록 여기 둔다. DB 쓰기는 meta 뿐이라 가볍고, 하루 1회 넘게 보내지 않는다.
+def _check_collect_silence(conn, now: float, cfg_get) -> bool:
+    day = _day_kst(now)
+    if db.get_meta(conn, "collect_silence_warned_date") == day:
+        return False  # 오늘 이미 경고 발송함 - 중복 방지
+
+    window_sec = cfg_get("collect_silence_window_hours") * 3600
+    baseline_days = cfg_get("collect_silence_baseline_days")
+    recent = conn.execute(
+        "SELECT COUNT(*) FROM levels WHERE collected_at >= ?", (now - window_sec,)
+    ).fetchone()[0]
+    if recent > 0:
+        return False  # 정상 - 최근 수집 있음
+
+    baseline_start = now - window_sec - baseline_days * 86400
+    prior = conn.execute(
+        "SELECT COUNT(*) FROM levels WHERE collected_at >= ? AND collected_at < ?",
+        (baseline_start, now - window_sec),
+    ).fetchone()[0]
+    baseline_avg = prior / baseline_days
+    if baseline_avg < cfg_get("collect_silence_min_baseline_avg"):
+        return False  # 원래도 조용했던 기간(신규 프로젝트 등) - 오탐 방지
+
+    text = telegram.render_collect_silence_alert(
+        cfg_get("collect_silence_window_hours"), baseline_avg)
+    if telegram.send(text):
+        db.set_meta(conn, "collect_silence_warned_date", day)
+        logger.warning("[체크] 수집 급감 경고 발송 (직전 %.1f건/일 -> 최근 0건)", baseline_avg)
+        return True
+    return False
+
+
 def _build_clusters(levels: list, band_pct: float) -> list:
     """엔트리 내림차순 greedy 병합. 반환: [ [level,...](entry 내림차순), ... ]"""
     with_entry = [l for l in levels if l.get("entry_usd")]
@@ -80,6 +115,11 @@ def run_once(now: float = None) -> dict:
     summary = {"checked": 0, "previews": 0, "touches": 0, "suppressed": 0}
 
     with db.connect(db_path) as conn:
+        # 수집 급감 감시는 활성 레벨 유무와 무관하게 매 회차 수행(조용한 고장 감지가
+        # 목적이라, 아래 "대상 없음" 조기 반환보다 먼저 돌아야 한다)
+        if _check_collect_silence(conn, now, cfg_get):
+            summary["collect_silence_alert"] = True
+
         expired = db.expire_old(conn, cfg_get("level_expiry_hours") * 3600, now)
         if expired:
             logger.info("[체크] 만료 처리 %d건", expired)
@@ -122,7 +162,7 @@ def run_once(now: float = None) -> dict:
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
 
-        from collector.grading import meets_min_grade  # 순환 import 방지 지연 로드
+        from collector.grading import meets_min_grade, regrade_current  # 순환 import 방지 지연 로드
         from monitor import market_sentiment
 
         # 시장 심리(BTC.D/ALT.S/F&G)는 실제로 알림을 보낼 때만 1회 지연 조회
@@ -197,6 +237,18 @@ def run_once(now: float = None) -> dict:
 
                 if kind == "preview" and any(l["status"] == "previewed" for l in cluster):
                     continue  # 이미 예고한 클러스터
+
+                # 등급 재평가 (2026-07-26 감사: freeze 결함 수정) — calculate_grade 의
+                # 가격근접도(최대 20점)는 채점 시점 가격 기준이라, 수집 당시 등급을 그대로
+                # 쓰면 이후 가격이 entry 에 근접해 정작 알림이 가장 중요해진 순간에도
+                # 여전히 옛 등급(D 등)에 갇혀 필터에서 배제된다(터치 52건 중 18건 사례).
+                # DB 원본 grade/score 는 보존한다 — 판정(hit/miss/r_multiple)은 entry/sl/tp
+                # 만으로 결정돼 등급과 무관하고, 수집 시점 등급은 그 자체로 사후분석
+                # 가치(등급-실제성과 상관관계 검증)가 있어 덮어쓰지 않는 편이 낫다.
+                # rep(표시·필터 대표) 하나만 in-memory 로 재계산 - DB 쓰기 없음, 가벼움.
+                current_usd = current / usdt_krw
+                cur_grade, cur_score, _cur_rr = regrade_current(rep, current_usd)
+                rep["grade"], rep["score"] = cur_grade, cur_score
 
                 # 알림 필터 (상태 전이는 필터와 무관하게 수행 — 재알림 방지)
                 # 일일 상한은 터치(본알림)에만 적용 (2026-07-24 감사: 예고가 상한을
