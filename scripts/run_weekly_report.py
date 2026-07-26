@@ -25,9 +25,10 @@ try:
 except Exception:
     pass
 
-from analytics import clustering
+from analytics import calibration, clustering
 from config import settings
 from notify import telegram
+from scripts.show_status import fetch_calibration_rows
 from storage import db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -58,10 +59,15 @@ def send_report(db_path: str = None, now: float = None) -> bool:
             settings.get("cluster_band_pct"),
             window_sec=settings.get("confluence_window_hours") * 3600,
         )
+        # 등급 캘리브레이션(기획 카드 #26): 등급별 실측 TP1 도달률 + Wilson CI.
+        # 순수 로컬 연산(외부 API 0). SQL 은 show_status 에 한 벌만 둔다 —
+        # storage/db.py 는 동시 작업 중이라 손대지 않는다.
+        calibration_result = calibration.calibrate_grades(fetch_calibration_rows(conn))
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
-                                         raw_records=raw_records, confluence=confluence)
+                                         raw_records=raw_records, confluence=confluence,
+                                         calibration_result=calibration_result)
     ok = telegram.send(text)
 
     logger.info(

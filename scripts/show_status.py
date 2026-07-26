@@ -34,7 +34,7 @@ try:
 except Exception:
     pass
 
-from analytics import clustering, ranking
+from analytics import calibration, clustering, ranking
 from collector.grading import GRADE_ORDER
 from config import settings
 from storage import db
@@ -176,6 +176,56 @@ def _grade_distribution(conn) -> dict:
     return {r["grade"] or "(미채점)": r["n"] for r in rows}
 
 
+# ── 등급 캘리브레이션 원천 행 (기획 카드 #26) ─────────────────────────
+#
+# storage/db.py 는 이번 스프린트에 개발자 B가 작업 중이라 손대지 않는다 — 조회는
+# 여기서 conn.execute 로 직접 한다(같은 파일의 _grade_distribution 과 동일 패턴).
+# scripts/run_weekly_report.py 도 이 함수를 import 해 쓴다: SQL 정의는 한 곳만 둔다.
+
+def fetch_calibration_rows(conn) -> list:
+    """등급 캘리브레이션용 종결 표본 원시 행 [(grade, outcome, ambiguous), ...].
+
+    제외 기준은 기존 통계(db.get_author_outcome_rows)와 동일하게 맞춘다 —
+    미종결(outcome NULL)과 섀도 터치(touched_at NULL)는 표본이 아니다.
+    grade 는 **수집 시점에 기록된 DB 원본값**을 그대로 읽는다(재채점하지 않는다).
+    ambiguous 컬럼이 없는 구세대 DB 는 OperationalError → 호출부가 빈 목록 처리.
+    """
+    return [tuple(r) for r in conn.execute(
+        "SELECT grade, outcome, ambiguous FROM levels "
+        "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL"
+    ).fetchall()]
+
+
+def _calibration(conn):
+    """캘리브레이션 결과 dict. 조회 실패(구세대 스키마)면 None."""
+    try:
+        rows = fetch_calibration_rows(conn)
+    except sqlite3.OperationalError:
+        return None
+    return calibration.calibrate_grades(rows)
+
+
+def _print_calibration_summary(conn) -> None:
+    """현황 화면용 요약 — 등급별 도달률 한 줄 + 위반 신호 한 줄(표기 전용)."""
+    cal = _calibration(conn)
+    if not cal or not cal["pooled"]["n"]:
+        return
+    parts = []
+    for g in cal["order"]:
+        b = cal["buckets"][g]
+        if not b["n"]:
+            continue
+        low = "" if b["enough"] else "?"  # 표본 부족 표식
+        parts.append(f"{g} {b['rate'] * 100:.0f}%({b['hits']}/{b['n']}){low}")
+    print(f"  등급 캘리브레이션(TP1 도달률, 종결 {cal['pooled']['n']}건): {' · '.join(parts)}"
+          f"   ?=표본 n<{cal['min_n']:g}")
+    if cal["violations"]:
+        v = cal["violations"][0]
+        sig = "CI 비겹침" if v["significant"] else "CI 겹침"
+        print(f"  ⚠️ 단조성 위반 {len(cal['violations'])}건 (예: {v['lower']} > {v['higher']}, "
+              f"{sig}) — 배점 재검토 '신호'일 뿐, 산식은 그대로입니다")
+
+
 def print_pipeline_status(conn, now: float) -> None:
     print()
     print(_SEP)
@@ -197,6 +247,7 @@ def print_pipeline_status(conn, now: float) -> None:
         print(f"  등급 분포(감시중+예고중): {' · '.join(parts)}")
     else:
         print("  등급 분포(감시중+예고중): (대상 없음)")
+    _print_calibration_summary(conn)
 
     print()
     try:
@@ -392,7 +443,8 @@ def print_weekly_report_text(conn, now: float) -> None:
     from notify import telegram
     text = telegram.render_weekly_report(
         rows_by_author, now=now, baseline=baseline,
-        raw_records=raw_records, confluence=confluence)
+        raw_records=raw_records, confluence=confluence,
+        calibration_result=_calibration(conn))
     print(_strip_html(text))
 
 

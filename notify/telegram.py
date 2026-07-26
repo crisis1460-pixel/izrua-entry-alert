@@ -30,7 +30,7 @@ import time
 
 import requests
 
-from analytics import clustering, ranking
+from analytics import calibration, clustering, ranking
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -489,12 +489,72 @@ def _baseline_section(rows_by_author: dict, order: list, baseline: dict,
     return lines
 
 
+def _pct(v) -> str:
+    return f"{v * 100:.0f}%" if v is not None else "-"
+
+
+def _calibration_section(cal: dict) -> list:
+    """🎚️ 등급 캘리브레이션 섹션 (기획 카드 #26). 미주입/표본 0 이면 빈 목록.
+
+    수학은 analytics.calibration 이 전부 담당하고 여기선 문구만 만든다.
+    **표기 전용** — 이 섹션은 배점(collector/grading.py)·알림 필터·엔트리 알림
+    양식 어디에도 되먹임되지 않는다. 문구에서도 그 점을 매번 명시한다(읽는 사람이
+    '봇이 알아서 등급을 고쳤겠거니' 오해하면 안 된다).
+    """
+    if not cal or not cal.get("buckets"):
+        return []
+    pooled = cal.get("pooled") or {}
+    if not pooled.get("n"):
+        return []  # 종결 표본 0 — 섹션 통째로 생략(빈 표를 띄우느니 안 띄운다)
+
+    min_n = cal.get("min_n", calibration.DEFAULT_MIN_N)
+    z = cal.get("z", calibration.DEFAULT_Z)
+    ci_label = f"CI = {calibration.confidence_pct(z):.0f}% Wilson score 구간"
+    lines = [_SEP,
+             f"🎚️ 등급 캘리브레이션 (수집 시점 등급별 TP1 도달률, 종결 {pooled['n']}건)"]
+    for g in cal["order"]:
+        b = cal["buckets"].get(g) or {}
+        if not b.get("n"):
+            continue  # 그 등급의 종결 표본이 아직 없음 — 행 자체를 만들지 않는다
+        amb = f" · 판별불가 {b['ambiguous']}건" if b.get("ambiguous") else ""
+        # '<' 는 반드시 &lt; (parse_mode=HTML — 날 '<' 는 400 Can't parse entities)
+        note = "" if b.get("enough") else f" · ⚠️표본 부족(n&lt;{min_n:g}), 참고용"
+        lines.append(f"  {g}  {_pct(b['rate'])} ({b['hits']}/{b['n']})  "
+                     f"CI {_pct(b['ci_low'])}~{_pct(b['ci_high'])}{amb}{note}")
+    lines.append(f"  ({ci_label}. 도달률 분자 = TP1 실제 도달 건만 — "
+                 f"판정창 만료 종결은 분모에만 들어갑니다)")
+
+    violations = cal.get("violations") or []
+    if violations:
+        lines.append(f"⚠️ 단조성 위반 {len(violations)}건 — 하위 등급이 상위 등급보다 "
+                     f"실측이 높습니다")
+        for v in violations[:5]:
+            mark = ("CI 비겹침 — 강한 신호" if v["significant"]
+                    else "CI 겹침 — 약한 신호")
+            lines.append(f"  {v['lower']} {_pct(v['lower_rate'])} &gt; "
+                         f"{v['higher']} {_pct(v['higher_rate'])} ({mark})")
+        if len(violations) > 5:
+            lines.append(f"  · 외 {len(violations) - 5}쌍")
+        lines.append("→ 배점 재검토 '신호'로만 표기합니다. 등급 산식·알림 필터는 "
+                     "이 리포트로 바뀌지 않습니다(사람이 판단할 몫).")
+    elif cal.get("eligible", 0) < 2:
+        lines.append(f"ℹ️ 단조성 판정 보류 — 표본 n≥{min_n:g} 등급이 2개 미만입니다 "
+                     f"(계속 관찰 중)")
+    else:
+        lines.append("✅ 단조성 유지 — 하위 등급이 상위 등급을 앞지른 쌍 없음")
+
+    lines.append("ℹ️ E_LB(작성자 실력 축)와는 <b>다른 축</b>입니다 — 이 섹션은 "
+                 "'등급 산식이 실제 결과와 맞는가'만 봅니다.")
+    return lines
+
+
 def render_weekly_report(rows_by_author: dict, now: float = None,
                          half_life_days: float = None, z: float = None,
                          prior_m: int = None, min_neff: float = None,
                          confluence: dict = None, baseline: dict = None,
                          raw_records: dict = None, baseline_min_n: int = None,
-                         confluence_min_clusters: int = None) -> str:
+                         confluence_min_clusters: int = None,
+                         calibration_result: dict = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -508,7 +568,13 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
       → 랭킹/승률 행 아래 '🤝 합의 참여 X/Y회'. 미주입이면 그 줄만 빠진다.
     - baseline: {n, positive, rate} (analytics.clustering.baseline_positive_rate)
       + raw_records: {author: {wins, losses}} → '🎲 초과 적중률' 섹션.
-      pooled n 이 baseline_min_n 미만이면 섹션 자체를 생략한다."""
+      pooled n 이 baseline_min_n 미만이면 섹션 자체를 생략한다.
+
+    2026-07-27 신규(기획 카드 #26):
+    - calibration_result: analytics.calibration.calibrate_grades(...) 결과
+      → '🎚️ 등급 캘리브레이션' 섹션(등급별 TP1 도달률·Wilson CI·단조성 신호).
+      미주입이면 섹션만 빠지고 나머지 출력은 완전히 동일하다. 표시 전용이라
+      랭킹 수식·정렬 키·알림 필터·등급 산식 어디에도 영향이 없다."""
     now = time.time() if now is None else now
     half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
     z = settings.get("rank_z") if z is None else z
@@ -527,6 +593,9 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         lines.append(_SEP)
         lines.append("아직 표본 부족합니다 — 터치 후 종결된 레벨이 쌓이면 다음 리포트부터 "
                       "순위가 표시됩니다.")
+        # 등급 캘리브레이션은 작성자 축과 독립이다 — 작성자 미상(author NULL) 종결
+        # 표본만 있는 경우에도 등급 축은 볼 수 있으므로 이 경로에서도 붙인다.
+        lines.extend(_calibration_section(calibration_result))
         lines.append(_SEP)
         return "\n".join(lines)
 
@@ -580,7 +649,10 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     lines.extend(_baseline_section(rows_by_author, baseline_order, baseline,
                                    raw_records, baseline_min_n))
 
-    # ④ 안내: 표본부족 + 역신호 후보
+    # ④ 등급 캘리브레이션 (기획 카드 #26) — 작성자 축과 무관한 별도 축, 표시 전용
+    lines.extend(_calibration_section(calibration_result))
+
+    # ⑤ 안내: 표본부족 + 역신호 후보
     if under_sample or n_anti:
         lines.append(_SEP)
     if under_sample:
@@ -595,4 +667,25 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                      f"자동 필터·태깅 아님, 관찰 참고용)")
 
     lines.append(_SEP)
+    return "\n".join(lines)
+
+
+# ── 적중 DB 해시체인 무결성 경보 (2026-07-27 기획 카드 #3) ────────────────
+# 기존 렌더러(render_alert 등)와 무관한 별도 함수 - 하루 1회 중복방지는 호출부
+# (monitor.price_check) 의 meta 게이트가 담당하고, 이 함수는 순수 렌더링만 한다.
+# 정상 상황에선 절대 울리지 않는 안티게이밍 경보 - 판정 기록의 사후 변조·유실
+# 자가 감지 결과를 사람이 읽을 수 있게 옮길 뿐이다.
+
+
+def render_outcome_chain_alert(mismatch: dict) -> str:
+    """storage.db.verify_outcome_chain() 의 첫 불일치 지점을 경보 텍스트로 변환.
+    mismatch: {"level_id": int|None, "reason": str}."""
+    lines = [
+        _SEP,
+        "🚨 <b>[적중 DB 무결성 경고]</b>",
+        f"판정 해시체인 불일치 감지 (level_id={mismatch.get('level_id')}, "
+        f"사유={html.escape(str(mismatch.get('reason')))})",
+        "판정 기록이 사후에 변조되었거나 유실되었을 수 있습니다 - DB를 확인하세요.",
+        _SEP,
+    ]
     return "\n".join(lines)

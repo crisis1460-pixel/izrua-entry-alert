@@ -202,7 +202,115 @@ with db.connect(TEST_DB2) as conn:
           and rec["B"]["losses"] == 1 and "C" not in rec)
 os.remove(TEST_DB2)
 
+# ── G: 등급 캘리브레이션 (analytics/calibration.py, 2026-07-27 기획 카드 #26) ──
+# Wilson 기대값은 전부 손계산. z=1.96 → z²=3.8416.
+#   center = (p + z²/2n)/(1 + z²/n),  half = z/(1+z²/n)·√(p(1−p)/n + z²/4n²)
+from analytics import calibration  # noqa: E402
+
+
+def ci(hits, n):
+    return calibration.wilson_interval(hits, n)
+
+
+# G1: 0/5 — p=0 → center=half=0.38416/1.76832=0.2172457 → [0, 0.4344915]
+#     (교과서 예시값: 0/5 의 95% Wilson 상한 ≈ 0.4345. Wald 였다면 [0,0] 로 붕괴)
+lo1, hi1 = ci(0, 5)
+check("G1 Wilson 0/5 손계산", close(lo1, 0.0) and close(hi1, 0.434491))
+
+# G2: 6/6 — p=1, z²/n=0.640267 → center=1.320133/1.640267=0.804827,
+#     half=1.194927·√(3.8416/144)=0.195170 → [0.609657, 1.0(클램프)]
+lo2, hi2 = ci(6, 6)
+check("G2 Wilson 6/6 손계산", close(lo2, 0.609657) and close(hi2, 1.0))
+
+# G3: 5/12 — p=0.416667, z²/n=0.320133 → center=0.436875,
+#     half=1.484699·√(0.0202546+0.0066694)=0.243618 → [0.193257, 0.680493]
+lo3, hi3 = ci(5, 12)
+check("G3 Wilson 5/12 손계산", close(lo3, 0.193257) and close(hi3, 0.680493))
+
+# G4: 경계 — 표본 0 은 구간 없음 / 극단값도 [0,1] 밖으로 새지 않음
+check("G4 표본 0·구간 클램프", ci(0, 0) == (None, None)
+      and ci(0, 1)[0] == 0.0 and ci(1, 1)[1] == 1.0)
+
+# G5: 실측 스냅샷 시나리오(2026-07-27 프로덕션 DB 분포) — S 0/4, A 0/4, C 5/12, D 6/6
+CAL_ROWS = ([("S", "miss", 0)] * 4 + [("A", "miss", 0)] * 4
+            + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 7 + [("D", "hit", 0)] * 6)
+cal = calibration.calibrate_grades(CAL_ROWS)
+check("G5 등급 버킷팅·도달률", cal["pooled"]["n"] == 26
+      and cal["buckets"]["S"]["rate"] == 0.0 and cal["buckets"]["S"]["n"] == 4
+      and close(cal["buckets"]["C"]["rate"], 5 / 12)
+      and cal["buckets"]["D"]["rate"] == 1.0
+      and cal["buckets"]["B"]["n"] == 0 and cal["buckets"]["B"]["rate"] is None)
+check("G5b 소표본 플래그(n<5 인 S·A·B 만 enough=False)",
+      not cal["buckets"]["S"]["enough"] and not cal["buckets"]["A"]["enough"]
+      and cal["buckets"]["C"]["enough"] and cal["buckets"]["D"]["enough"])
+
+# G6: timeboxed_win 은 TP1 을 찍은 게 아니므로 분자 제외·분모 포함 (2/4 = 50%)
+g6 = calibration.calibrate_grades(
+    [("B", "hit", 0), ("B", "hit", 0), ("B", "timeboxed_win", 0), ("B", "miss", 0)])
+check("G6 timeboxed_win 분모만", g6["buckets"]["B"]["n"] == 4
+      and g6["buckets"]["B"]["hits"] == 2)
+
+# G7: 미종결(outcome None)·미채점(grade None)·정의 밖 등급은 표본 아님
+g7 = calibration.calibrate_grades(
+    [("C", "hit", 0), ("C", None, 0), (None, "hit", 0), ("F", "hit", 0)])
+check("G7 미종결·미채점·미지등급 제외", g7["pooled"]["n"] == 1)
+
+# G8: 단조성 — min_n=5 면 S·A(4건)는 판정 제외, C(42%)<D(100%) 역전 1건.
+#     D 하한 0.6097 < C 상한 0.6805 → CI 겹침 = 약한 신호
+check("G8 단조성 위반 1건·CI 겹침(약한 신호)",
+      len(cal["violations"]) == 1 and cal["monotonic"] is False
+      and cal["violations"][0]["higher"] == "C" and cal["violations"][0]["lower"] == "D"
+      and cal["violations"][0]["significant"] is False and cal["significant"] == 0
+      and cal["eligible"] == 2)
+
+# G9: min_n=1 로 낮추면 소표본 등급도 판정 대상 — S(상한 0.4899) vs D(하한 0.6097)
+#     은 CI 비겹침 = 강한 신호. 인접쌍만 봤다면 놓쳤을 '건너뛴 역전'이다.
+cal_all = calibration.calibrate_grades(CAL_ROWS, min_n=1)
+sig = [(v["higher"], v["lower"]) for v in cal_all["violations"] if v["significant"]]
+check("G9 비인접 역전 + CI 비겹침 판정", sig == [("S", "D"), ("A", "D")]
+      and len(cal_all["violations"]) == 5)
+
+# G10: 정상(단조) 케이스 — S 90% > C 50% > D 10% → 위반 없음
+g10 = calibration.calibrate_grades(
+    [("S", "hit", 0)] * 9 + [("S", "miss", 0)]
+    + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 5
+    + [("D", "hit", 0)] + [("D", "miss", 0)] * 9)
+check("G10 단조 유지 시 위반 없음", g10["violations"] == [] and g10["monotonic"] is True
+      and g10["eligible"] == 3)
+
+# G11: ambiguous(동시터치 보수적 miss)는 건수만 따로 — 도달률 분모/분자는 판정 그대로
+g11 = calibration.calibrate_grades(
+    [("C", "hit", 0), ("C", "miss", 1), ("C", "miss", 1)])
+check("G11 판별불가 건수 병기", g11["buckets"]["C"]["ambiguous"] == 2
+      and close(g11["buckets"]["C"]["rate"], 1 / 3))
+
+# G12: 입력 형식 무관 — 튜플/dict/sqlite3.Row 모두 같은 결과 (호출부 SELECT 호환)
+g12 = calibration.calibrate_grades(
+    [dict(grade=g, outcome=o, ambiguous=a) for g, o, a in CAL_ROWS])
+check("G12 dict 입력 동등", g12["buckets"] == cal["buckets"])
+
+TEST_DB3 = "cache/_test_calibration.db"
+if os.path.exists(TEST_DB3):
+    os.remove(TEST_DB3)
+db.init_db(TEST_DB3)
+from scripts.show_status import fetch_calibration_rows  # noqa: E402
+
+with db.connect(TEST_DB3) as conn:
+    rows_in = [("c1", "C", "hit", now), ("c2", "C", "miss", now),
+               ("c3", None, "hit", now),          # 미채점 — 조회 단계에서 제외
+               ("c4", "S", "hit", None)]          # 섀도 터치 — 조회 단계에서 제외
+    for k, grade, outcome, t in rows_in:
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+            "collected_at, author, grade, outcome, touched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (k, "SOL", "KRW-SOL", "long", "touched", now - D, "A", grade, outcome, t))
+    fetched = fetch_calibration_rows(conn)
+check("G13 조회 SQL — 미채점/섀도터치 제외",
+      sorted(fetched) == [("C", "hit", 0), ("C", "miss", 0)]
+      and calibration.calibrate_grades(fetched)["pooled"]["n"] == 2)
+os.remove(TEST_DB3)
+
 print()
-n_checks = 28
+n_checks = 41
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

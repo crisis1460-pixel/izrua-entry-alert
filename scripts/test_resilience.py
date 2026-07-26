@@ -528,8 +528,193 @@ check("수리9-R6: tv_fetch_sleep_sec 기본값 5.0 (2026-07-27 완충 확대)",
       '"tv_fetch_sleep_sec": 5.0' in _settings_src)
 
 
+# ══════════════════════════════════════════════════════════════════
+# 카드3: 적중 DB 해시체인 무결성 검증 (2026-07-27) — 정상체인/변조탐지/구세대
+# 소급 마이그레이션/검증 실패해도 회차 생존, 4가지를 오프라인으로 확인한다.
+# ══════════════════════════════════════════════════════════════════
+from monitor import price_check as pc
+
+TEST_DB_CHAIN = "cache/_test_resilience_chain.db"
+if os.path.exists(TEST_DB_CHAIN):
+    os.remove(TEST_DB_CHAIN)
+db.init_db(TEST_DB_CHAIN)
+
+
+def _insert_level_chain(conn, key, **extra):
+    cols = dict(signal_key=key, coin_symbol="CHN", ticker="KRW-CHN", direction="long",
+                entry_usd=1.0, author="AuthChain", post_url=f"https://tv.example/{key}",
+                status="touched", collected_at=time.time())
+    cols.update(extra)
+    fields = ", ".join(cols.keys())
+    qs = ", ".join("?" for _ in cols)
+    cur = conn.execute(f"INSERT INTO levels ({fields}) VALUES ({qs})", tuple(cols.values()))
+    return cur.lastrowid
+
+
+# ── 체인1: 정상 체인 — resolve_outcome 으로 여러 건 종결 후 검증 통과 ─────
+with db.connect(TEST_DB_CHAIN) as conn:
+    id_a = _insert_level_chain(conn, "chain_a")
+    id_b = _insert_level_chain(conn, "chain_b")
+    id_c = _insert_level_chain(conn, "chain_c")
+
+with db.connect(TEST_DB_CHAIN) as conn:
+    db.resolve_outcome(conn, id_a, "hit", 1500.0, "tp_sl", r_multiple=2.0, now=time.time())
+    db.resolve_outcome(conn, id_b, "miss", 900.0, "tp_sl", r_multiple=-1.0,
+                       ambiguous=True, now=time.time())
+    # 같은 호출 안에서 동일 now(동시각 타이) — 체인 tip 이 순차적으로 전진하는지도 겸해 확인
+    same_now = time.time()
+    db.resolve_outcome(conn, id_c, "timeboxed_win", 1100.0, "timeboxed",
+                       r_multiple=0.3, now=same_now)
+
+with db.connect(TEST_DB_CHAIN) as conn:
+    rows = {r["id"]: dict(r) for r in conn.execute(
+        "SELECT id, outcome_prev_hash, outcome_hash FROM levels "
+        "WHERE id IN (?,?,?)", (id_a, id_b, id_c)).fetchall()}
+    v1 = db.verify_outcome_chain(conn)
+
+check("체인1: resolve_outcome 3건 모두 outcome_hash 채워짐",
+      all(rows[i]["outcome_hash"] for i in (id_a, id_b, id_c)))
+check("체인1: 첫 판정의 prev_hash 는 고정 제네시스",
+      rows[id_a]["outcome_prev_hash"] == db._OUTCOME_CHAIN_GENESIS)
+check("체인1: 두 번째 판정의 prev_hash 는 첫 판정의 hash(체인 연결)",
+      rows[id_b]["outcome_prev_hash"] == rows[id_a]["outcome_hash"])
+check("체인1: 정상 체인은 verify_outcome_chain 이 None(불일치 없음)", v1 is None)
+
+# 이미 종결된 행에 재호출하면 no-op(불변 스냅샷 원칙) — 체인도 건드리지 않아야 함
+with db.connect(TEST_DB_CHAIN) as conn:
+    db.resolve_outcome(conn, id_a, "miss", 1.0, "tp_sl", r_multiple=-9.0, now=time.time())
+    row_a_after = dict(conn.execute(
+        "SELECT outcome, outcome_hash FROM levels WHERE id=?", (id_a,)).fetchone())
+check("체인1b: 이미 종결된 행 재호출은 값도 해시도 그대로(불변 원칙 유지)",
+      row_a_after["outcome"] == "hit" and row_a_after["outcome_hash"] == rows[id_a]["outcome_hash"])
+
+# ── 체인2: 행 변조 시 검출 — DB 를 직접 고쳐 판정 필드를 바꾸면 잡혀야 한다 ──
+with db.connect(TEST_DB_CHAIN) as conn:
+    conn.execute("UPDATE levels SET r_multiple=? WHERE id=?", (99.9, id_b))
+    v2 = db.verify_outcome_chain(conn)
+check("체인2: r_multiple 사후 변조 시 verify_outcome_chain 이 그 행을 지목",
+      v2 is not None and v2["level_id"] == id_b and v2["reason"] == "hash_mismatch")
+
+# 원복하면 다시 정상으로 돌아온다(해시 자체는 그대로 저장돼 있으므로)
+with db.connect(TEST_DB_CHAIN) as conn:
+    conn.execute("UPDATE levels SET r_multiple=? WHERE id=?", (-1.0, id_b))
+    v2b = db.verify_outcome_chain(conn)
+check("체인2b: 변조를 되돌리면 다시 정상(회귀 확인용)", v2b is None)
+
+# ── 체인3: 구세대 판정 행(outcome 있는데 hash 없음) 소급 마이그레이션 ──────
+TEST_DB_LEGACY = "cache/_test_resilience_chain_legacy.db"
+if os.path.exists(TEST_DB_LEGACY):
+    os.remove(TEST_DB_LEGACY)
+db.init_db(TEST_DB_LEGACY)
+with db.connect(TEST_DB_LEGACY) as conn:
+    # outcome_hash 컬럼 도입 이전에 이미 종결됐던 행처럼 - resolve_outcome 을 거치지
+    # 않고 직접 outcome 계열 컬럼만 채운다(체인 컬럼은 NULL 로 남김).
+    t0 = time.time() - 3600
+    lg1 = _insert_level_chain(conn, "legacy1", outcome="hit", resolved_at=t0,
+                              r_multiple=1.5, ambiguous=0)
+    lg2 = _insert_level_chain(conn, "legacy2", outcome="miss", resolved_at=t0 - 100,
+                              r_multiple=-1.0, ambiguous=0)  # 더 이른 시각(정렬 검증용)
+    lg3 = _insert_level_chain(conn, "legacy3", outcome="miss", resolved_at=t0,
+                              r_multiple=-1.0, ambiguous=1)  # lg1 과 동시각 - id 로 타이브레이크
+
+with db.connect(TEST_DB_LEGACY) as conn:
+    before = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE outcome IS NOT NULL AND outcome_hash IS NULL"
+    ).fetchone()["n"]
+check("체인3 사전조건: 마이그레이션 전엔 구세대 행 3건 모두 hash 없음", before == 3)
+
+# init_db 재호출 = 운영에서 매 회차 db.init_db 가 하는 것과 동일 경로(_migrate 가 소급 실행)
+db.init_db(TEST_DB_LEGACY)
+with db.connect(TEST_DB_LEGACY) as conn:
+    after = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE outcome IS NOT NULL AND outcome_hash IS NULL"
+    ).fetchone()["n"]
+    v3 = db.verify_outcome_chain(conn)
+    order_rows = conn.execute(
+        "SELECT id, outcome_prev_hash FROM levels WHERE id IN (?,?,?) "
+        "ORDER BY resolved_at ASC, id ASC", (lg1, lg2, lg3)).fetchall()
+check("체인3: 소급 마이그레이션 후 구세대 행 전부 hash 보유", after == 0)
+check("체인3: 소급 구축된 체인도 verify_outcome_chain 통과", v3 is None)
+check("체인3: 결정적 순서(resolved_at,id) — 가장 이른 legacy2 가 제네시스에서 시작",
+      order_rows[0]["id"] == lg2 and order_rows[0]["outcome_prev_hash"] == db._OUTCOME_CHAIN_GENESIS)
+check("체인3: 동시각 타이는 id 로 확정 — legacy1(작은 id)이 legacy3 보다 먼저",
+      [r["id"] for r in order_rows] == [lg2, lg1, lg3])
+
+# 재실행해도 이미 있는 체인은 건드리지 않는다(멱등성)
+with db.connect(TEST_DB_LEGACY) as conn:
+    hash_before_2nd = dict(conn.execute(
+        "SELECT id, outcome_hash FROM levels WHERE id=?", (lg1,)).fetchone())
+db.init_db(TEST_DB_LEGACY)
+with db.connect(TEST_DB_LEGACY) as conn:
+    hash_after_2nd = dict(conn.execute(
+        "SELECT id, outcome_hash FROM levels WHERE id=?", (lg1,)).fetchone())
+check("체인3b: 재-init_db 는 이미 체인 있는 행을 재계산하지 않는다(멱등)",
+      hash_before_2nd["outcome_hash"] == hash_after_2nd["outcome_hash"])
+
+# ── 체인4: 검증 실패(예외)해도 run_once 회차는 생존해야 한다 ─────────────
+# run_once 는 활성/미종결/수익률대기 레벨이 전무하면 조기 반환하며 이 검증 구간
+# 자체에 도달하지 않는다(early-return 경로) - 실제로 검증부까지 흐르도록 활성
+# 레벨을 하나 심고, 네트워크 의존(가격조회/발송)은 기존 test_price_logic.py 와
+# 동일한 방식으로 몽키패치해 오프라인으로 돌린다.
+TEST_DB_CHAIN_CYCLE = "cache/_test_resilience_chain_cycle.db"
+if os.path.exists(TEST_DB_CHAIN_CYCLE):
+    os.remove(TEST_DB_CHAIN_CYCLE)
+settings.SETTINGS["db_path"] = TEST_DB_CHAIN_CYCLE
+settings.SETTINGS["announcement_alert_enabled"] = False
+db.init_db(TEST_DB_CHAIN_CYCLE)
+with db.connect(TEST_DB_CHAIN_CYCLE) as conn:
+    lvc4 = dict(coin_symbol="CHC", ticker="KRW-CHC", direction="long", entry_usd=100.0,
+               sl_usd=90.0, tp_usd=130.0, rr=3.0, grade="B", score=60, author="AuthC4",
+               post_url="https://tv.example/c4", collected_at=time.time() - 600)
+    lvc4["signal_key"] = db.make_signal_key("CHC", 100.0, "AuthC4", lvc4["post_url"])
+    db.upsert_level(conn, lvc4)
+
+_orig_fetch_prices = upbit_mod.fetch_prices
+_orig_send = telegram.send
+upbit_mod.fetch_prices = lambda mkts, t: {m: 1400.0 for m in mkts}  # 가격이 entry 대비 멀어 터치 없음
+telegram.send = lambda text, urgency="high": True
+
+_orig_verify = db.verify_outcome_chain
+db.verify_outcome_chain = lambda conn: (_ for _ in ()).throw(RuntimeError("체인4 고의 예외"))
+
+_now_c4 = time.time()
+try:
+    s_c4 = pc.run_once(_now_c4)
+    _c4_survived = True
+except Exception as _e_c4:
+    _c4_survived = False
+check("체인4: verify_outcome_chain 이 예외를 던져도 run_once 는 죽지 않는다", _c4_survived)
+
+with db.connect(TEST_DB_CHAIN_CYCLE) as conn:
+    gate_c4 = db.get_meta(conn, pc._OUTCOME_CHAIN_CHECK_META)
+check("체인4: 예외가 나도 오늘 게이트는 마감됨(같은 예외로 매 회차 반복되지 않게)",
+      gate_c4 is not None)
+
+# 같은 날 두 번째 호출은 verify_outcome_chain 을 아예 다시 부르지 않아야 한다(게이트 재확인)
+_verify_calls = {"n": 0}
+
+
+def _counting_verify(conn):
+    _verify_calls["n"] += 1
+    raise RuntimeError("호출되면 안 됨")
+
+
+db.verify_outcome_chain = _counting_verify
+try:
+    pc.run_once(_now_c4 + 60)
+except Exception:
+    pass
+check("체인4b: 같은 날 재호출은 하루 게이트로 verify 자체를 건너뜀(회귀 없음)",
+      _verify_calls["n"] == 0)
+
+db.verify_outcome_chain = _orig_verify
+upbit_mod.fetch_prices = _orig_fetch_prices
+telegram.send = _orig_send
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
-for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY):
+for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY, TEST_DB_CHAIN, TEST_DB_LEGACY,
+           TEST_DB_CHAIN_CYCLE):
     try:
         if os.path.exists(_p):
             os.remove(_p)

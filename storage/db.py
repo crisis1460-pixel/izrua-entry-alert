@@ -176,6 +176,12 @@ _OUTCOME_COLUMNS = {
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
     "deleted_checked_at": "REAL",         # 마지막 생존 확인 시각 (없으면 미확인)
+    # 적중 판정 해시체인 (2026-07-27 기획 카드 #3 — 사후 행 변조·유실 자가 감지).
+    # outcome_hash = SHA-256(outcome_prev_hash + 판정 정체성 필드 직렬화), 최초 행은
+    # outcome_prev_hash = 고정 제네시스. 나중에 이 행의 outcome/resolved_at/r_multiple/
+    # ambiguous 가 조금이라도 바뀌면 재계산 해시가 달라져 체인이 끊긴다(verify_outcome_chain).
+    "outcome_prev_hash": "TEXT",
+    "outcome_hash": "TEXT",
 }
 
 
@@ -196,6 +202,11 @@ def _migrate(conn) -> None:
             if col not in ds_cols:
                 conn.execute(
                     f"ALTER TABLE daily_stats ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+
+    # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
+    # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
+    # 이미 체인이 있는 행은 WHERE 절이 걸러내 매 init_db 호출마다 사실상 공짜(no-op).
+    _backfill_outcome_chain(conn)
 
 
 def init_db(db_path: str) -> None:
@@ -480,17 +491,168 @@ def get_author_raw_record(conn) -> dict:
     return {r["author"]: {"wins": r["w"] or 0, "losses": r["l"] or 0} for r in rows}
 
 
+## ── 적중 판정 해시체인 (2026-07-27 기획 카드 #3) ─────────────────────────
+# 목적: levels 에 쌓이는 판정(hit/miss 등)은 작성자 랭킹(E_LB)의 근간이라 "단 한 번만
+# 쓰인다"는 불변 스냅샷 원칙이 이미 있지만, DB 파일을 직접 열어 행을 고치거나 지우면
+# 그 원칙을 우회할 수 있고 지금까지는 스스로 감지하는 장치가 없었다. 여기서는 판정이
+# 확정되는 순간 그 값들을 체인으로 엮어 - 나중에 몰래 바뀌면 재계산 해시가 어긋나게
+# 만든다(git 커밋 이력은 "언제 바뀌었나"는 보여주지만 "바뀐 그 자체"를 DB 스스로
+# 감지하진 못했다 - 이 체인은 DB 파일 자체의 자기 검증 능력을 더한다).
+#
+# 체인 규칙: outcome_hash = SHA256(outcome_prev_hash + "|" + 직렬화(id, outcome,
+# resolved_at, r_multiple, ambiguous)). 직렬화 필드는 딱 "판정의 정체성"만 —
+# resolve_price_krw/judgment_mode 등 부가 정보는 제외한다(안 그러면 사소한 필드
+# 변경까지 전부 체인 검증 실패로 잡혀 알림이 소음이 된다. 반대로 저 5개 필드가
+# 하나라도 바뀌면 반드시 체인이 깨져야 한다 - 그게 곧 hit/miss 판정 자체다).
+#
+# tip 은 meta 테이블에 저장한다(연결 재시작·회차 사이에도 이어지도록) - 매 resolve_outcome
+# 호출이 현재 tip 을 prev_hash 로 쓰고, 새 해시로 tip 을 갱신한다. 이 프로세스는
+# 단일 스레드로 순차 실행되므로(run_once 는 동기 루프) tip 읽기→쓰기 사이 경합이 없다.
+_OUTCOME_CHAIN_GENESIS = "izrua-outcome-chain-genesis-v1"  # 고정 제네시스 (최초 판정의 prev_hash)
+_OUTCOME_CHAIN_TIP_META_KEY = "outcome_chain_tip"
+
+
+def _outcome_chain_payload(level_id, outcome, resolved_at, r_multiple, ambiguous) -> str:
+    """판정 정체성 필드만 직렬화 - 이 문자열이 바뀌면 반드시 해시도 바뀐다.
+    float(resolved_at/r_multiple)는 repr() 로 고정한다 - str()은 일부 파이썬
+    버전/로케일에서 표현이 달라질 수 있지만 repr() 은 재현 가능한 정규 표현이다."""
+    parts = [
+        str(int(level_id)),
+        str(outcome),
+        repr(float(resolved_at)),
+        repr(float(r_multiple)) if r_multiple is not None else "None",
+        "1" if ambiguous else "0",
+    ]
+    return "|".join(parts)
+
+
+def _compute_outcome_hash(prev_hash: str, level_id, outcome, resolved_at,
+                          r_multiple, ambiguous) -> str:
+    payload = prev_hash + "|" + _outcome_chain_payload(
+        level_id, outcome, resolved_at, r_multiple, ambiguous)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _get_chain_tip(conn) -> str:
+    return get_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY) or _OUTCOME_CHAIN_GENESIS
+
+
+def _set_chain_tip(conn, chain_hash: str) -> None:
+    set_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY, chain_hash)
+
+
+def _backfill_outcome_chain(conn) -> int:
+    """구세대 판정 행(outcome 은 있는데 outcome_hash 가 없는 - 이 컬럼이 생기기 전에
+    이미 종결된 행) 에 1회성으로 소급 체인을 구축한다. 반환: 새로 엮은 행 수.
+
+    순서는 (resolved_at, id) 오름차순으로 결정적으로 고정 - 실제 판정이 확정된
+    시간순을 최대한 보존하면서, 동시각(같은 run_once 회차에서 여러 건 종결) 타이는
+    id 로 확정한다 - 재실행해도 항상 같은 체인이 나와야 검증이 의미가 있다.
+    이미 체인이 있는 행(outcome_hash NOT NULL)은 절대 건드리지 않는다(불변 원칙 —
+    한 번 확정된 판정의 해시가 사후에 바뀌면 그 자체가 체인 목적에 반한다)."""
+    rows = conn.execute(
+        "SELECT id, outcome, resolved_at, r_multiple, ambiguous FROM levels "
+        "WHERE outcome IS NOT NULL AND outcome_hash IS NULL "
+        "ORDER BY resolved_at ASC, id ASC"
+    ).fetchall()
+    if not rows:
+        return 0
+    prev = _get_chain_tip(conn)
+    for r in rows:
+        h = _compute_outcome_hash(prev, r["id"], r["outcome"], r["resolved_at"] or 0.0,
+                                  r["r_multiple"], bool(r["ambiguous"]))
+        conn.execute(
+            "UPDATE levels SET outcome_prev_hash=?, outcome_hash=? WHERE id=?",
+            (prev, h, r["id"]))
+        prev = h
+    _set_chain_tip(conn, prev)
+    return len(rows)
+
+
+def verify_outcome_chain(conn) -> Optional[dict]:
+    """전체 판정 해시체인을 재계산해 첫 불일치 지점을 찾는다. 정상이면 None.
+
+    실제 저장된 prev_hash→hash 포인터를 그대로 링크드리스트처럼 따라가며 재검증한다
+    (임의의 정렬 기준을 가정하지 않는다 - 같은 회차에 여러 건이 동시에 체인에
+    엮여도 실제 호출 순서가 곧 체인 순서이므로 항상 올바르게 재구성된다).
+
+    반환: None(정상) | {"level_id": int|None, "reason": str}
+      - "hash_mismatch": 어떤 행의 판정 필드가 사후에 바뀜(변조)
+      - "orphan_not_chained": 체인에 연결되지 않은 행이 있음(중간 행 유실/삭제로
+        다음 행이 가리키는 prev_hash 를 가진 행이 사라짐)
+      - "missing_hash": outcome 은 있는데 outcome_hash 가 없음(마이그레이션 누락/버그)
+      - "broken_genesis": 제네시스에서 시작하는 행이 0개 또는 2개 이상(갈래/유실)
+      - "chain_fork": 한 해시에서 다음 행이 2개 이상으로 갈라짐(불가능해야 정상)
+    """
+    rows = conn.execute(
+        "SELECT id, outcome, resolved_at, r_multiple, ambiguous, "
+        "outcome_prev_hash, outcome_hash FROM levels WHERE outcome_hash IS NOT NULL"
+    ).fetchall()
+
+    def _orphan_missing_hash():
+        row = conn.execute(
+            "SELECT id FROM levels WHERE outcome IS NOT NULL AND outcome_hash IS NULL "
+            "ORDER BY id LIMIT 1").fetchone()
+        return {"level_id": row["id"], "reason": "missing_hash"} if row else None
+
+    if not rows:
+        return _orphan_missing_hash()
+
+    by_prev: dict = {}
+    for r in rows:
+        by_prev.setdefault(r["outcome_prev_hash"], []).append(r)
+
+    heads = by_prev.get(_OUTCOME_CHAIN_GENESIS, [])
+    if len(heads) != 1:
+        return {"level_id": (heads[0]["id"] if heads else rows[0]["id"]),
+                "reason": "broken_genesis"}
+
+    visited = []
+    cur = heads[0]
+    while True:
+        expected = _compute_outcome_hash(
+            cur["outcome_prev_hash"], cur["id"], cur["outcome"],
+            cur["resolved_at"] or 0.0, cur["r_multiple"], bool(cur["ambiguous"]))
+        if expected != cur["outcome_hash"]:
+            return {"level_id": cur["id"], "reason": "hash_mismatch"}
+        visited.append(cur["id"])
+        nxts = by_prev.get(cur["outcome_hash"], [])
+        if len(nxts) > 1:
+            return {"level_id": nxts[1]["id"], "reason": "chain_fork"}
+        if not nxts:
+            break
+        cur = nxts[0]
+
+    if len(visited) != len(rows):
+        visited_set = set(visited)
+        missing = next(r for r in rows if r["id"] not in visited_set)
+        return {"level_id": missing["id"], "reason": "orphan_not_chained"}
+
+    return _orphan_missing_hash()
+
+
 def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
                     judgment_mode: str, r_multiple: Optional[float] = None,
                     ambiguous: bool = False, best_tp_hit: Optional[int] = None,
                     now: Optional[float] = None) -> None:
-    conn.execute(
+    now_val = now or time.time()
+    # 체인 계산은 판정 로직/값 자체와 무관 - 이 함수가 실제로 새 판정을 쓸 때만
+    # (WHERE outcome IS NULL 에 걸려 rowcount>0 일 때만) tip 을 전진시킨다. 이미
+    # 종결된 행에 재호출되면(no-op) tip 도 건드리지 않는다.
+    prev_hash = _get_chain_tip(conn)
+    chain_hash = _compute_outcome_hash(prev_hash, level_id, outcome, now_val,
+                                       r_multiple, ambiguous)
+    cur = conn.execute(
         """UPDATE levels SET outcome=?, resolved_at=?, resolve_price_krw=?,
-             judgment_mode=?, r_multiple=?, ambiguous=?, best_tp_hit=?
+             judgment_mode=?, r_multiple=?, ambiguous=?, best_tp_hit=?,
+             outcome_prev_hash=?, outcome_hash=?
            WHERE id=? AND outcome IS NULL""",
-        (outcome, now or time.time(), resolve_price_krw, judgment_mode,
-         r_multiple, 1 if ambiguous else 0, best_tp_hit, level_id),
+        (outcome, now_val, resolve_price_krw, judgment_mode,
+         r_multiple, 1 if ambiguous else 0, best_tp_hit,
+         prev_hash, chain_hash, level_id),
     )
+    if cur.rowcount:
+        _set_chain_tip(conn, chain_hash)
 
 
 def get_author_self_stats(conn, author: str) -> dict:

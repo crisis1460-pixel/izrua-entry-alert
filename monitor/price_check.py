@@ -84,6 +84,38 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
     return False
 
 
+# ── 적중 DB 해시체인 무결성 검증 (2026-07-27 기획 카드 #3) ────────────────
+# 하루 1회만(meta 날짜 게이트, _check_collect_silence/_check_deletions 와 동일
+# 패턴) storage.db.verify_outcome_chain 을 돌려 사후 행 변조·유실을 자가 감지한다.
+# 판정 자체와 무관한 부가 안전장치라 - 검증이 실패하거나 예외를 던져도 이 회차
+# (run_once, 2분 주기 핫패스)는 절대 죽으면 안 된다. 호출부에서 예외를 전부 삼킨다.
+_OUTCOME_CHAIN_CHECK_META = "last_outcome_chain_check_day"
+
+
+def _check_outcome_chain(conn, now: float, day: str) -> bool:
+    """하루 게이트 통과 시에만 체인 전체를 재계산 검증. 불일치 발견 시 경보 1회.
+    반환: 경보를 실제로 발송했으면 True(테스트/요약용).
+
+    verify_outcome_chain 자체가 예외를 던져도(예상 밖 DB 상태 등) 여기서 삼키고
+    게이트를 오늘 것으로 마감한다 - 그래야 지속되는 내부 버그가 2분마다 매 회차
+    같은 예외를 반복시키는 소음이 되지 않는다(호출부 run_once 의 try/except 는
+    그래도 이중 방어로 남겨둔다)."""
+    if db.get_meta(conn, _OUTCOME_CHAIN_CHECK_META) == day:
+        return False  # 오늘 이미 검증함 - 중복 방지
+    try:
+        mismatch = db.verify_outcome_chain(conn)
+    except Exception as e:  # noqa: BLE001 - 검증 실패가 회차를 죽이면 안 됨
+        logger.warning("[체크] 해시체인 재계산 중 예외(무시): %s", e)
+        db.set_meta(conn, _OUTCOME_CHAIN_CHECK_META, day)
+        return False
+    db.set_meta(conn, _OUTCOME_CHAIN_CHECK_META, day)  # 정상이든 불일치든 오늘은 1회로 끝
+    if mismatch is None:
+        return False
+    logger.warning("[체크] 적중 DB 해시체인 불일치 감지 - level_id=%s reason=%s",
+                   mismatch.get("level_id"), mismatch.get("reason"))
+    return telegram.send(telegram.render_outcome_chain_alert(mismatch))
+
+
 def _build_clusters(levels: list, band_pct: float) -> list:
     """엔트리 내림차순 greedy 병합. 반환: [ [level,...](entry 내림차순), ... ]
 
@@ -437,6 +469,15 @@ def run_once(now: float = None) -> dict:
         # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
         db.bump_daily_stats(conn, day, **obs)
         db.prune_daily_stats(conn, now)
+
+        # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의
+        # 버그/예외가 2분 주기 핫패스를 죽이면 절대 안 되므로 통째로 격리한다
+        # (_check_collect_silence/announcements 감시와 동일 원칙).
+        try:
+            if _check_outcome_chain(conn, now, day):
+                summary["outcome_chain_alert"] = True
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 해시체인 검증 실패(무시하고 진행): %s", e)
 
         _save_last_check(conn, now)
 

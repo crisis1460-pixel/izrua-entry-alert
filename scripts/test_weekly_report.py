@@ -155,7 +155,67 @@ msg7 = telegram.render_weekly_report(
     raw_records={"GoodAuthor": {"wins": 3, "losses": 7}}, baseline_min_n=20, **RK)
 check("W7 raw_records 우선 사용(3승7패=30%)", "원시승률 30%" in msg7)
 
+# ── C: 등급 캘리브레이션 섹션 (2026-07-27 기획 카드 #26) ──────────────────
+# 수학 검증은 scripts/test_ranking.py(G 섹션) 담당 — 여기선 렌더 통합만 본다.
+from analytics import calibration  # noqa: E402
+
+CAL_ROWS = ([("S", "miss", 0)] * 4 + [("A", "miss", 0)] * 4
+            + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 7 + [("D", "hit", 0)] * 6)
+CAL = calibration.calibrate_grades(CAL_ROWS)
+msg8 = telegram.render_weekly_report(rows_by_author, now=now,
+                                     calibration_result=CAL, **RK)
+print(msg8)
 print()
-n_checks = 29
+
+check("C1 섹션 헤더(종결 26건) + 신뢰수준 문구", "🎚️ 등급 캘리브레이션" in msg8
+      and "TP1 도달률" in msg8 and "종결 26건" in msg8
+      and "CI = 95% Wilson score 구간" in msg8)
+check("C2 등급 행 + Wilson CI 표기", "S  0% (0/4)" in msg8 and "C  42% (5/12)" in msg8
+      and "D  100% (6/6)" in msg8 and "CI 19%~68%" in msg8 and "CI 61%~100%" in msg8)
+check("C3 표본 없는 등급(B)은 행 자체 생략", "  B  " not in msg8)
+check("C4 소표본 등급에 '참고용' 병기 (S·A 만)",
+      msg8.count("표본 부족(n&lt;5), 참고용") == 2)
+check("C5 단조성 위반 표기 + CI 겹침 라벨",
+      "단조성 위반 1건" in msg8 and "D 100% &gt; C 42%" in msg8
+      and "CI 겹침 — 약한 신호" in msg8)
+check("C6 산식 불변 명시(재검토 '신호'일 뿐)",
+      "배점 재검토" in msg8 and "등급 산식·알림 필터는 이 리포트로 바뀌지 않습니다" in msg8)
+check("C7 E_LB 와 다른 축임을 명시", "E_LB(작성자 실력 축)와는 <b>다른 축</b>" in msg8)
+check("C8 HTML 안전 — 날 '<'/'>' 없음(parse_mode=HTML 400 방지)",
+      "n<5" not in msg8 and "% > " not in msg8)
+check("C9 랭킹 섹션은 그대로 (캘리브레이션은 정렬·수식 무관)",
+      "E_LB +1.00" in msg8 and msg8.index("@GoodAuthor") < msg8.index("@BadAuthor"))
+
+# C10: 단조 유지 케이스 → ✅ 문구, 위반 문구 없음
+CAL_OK = calibration.calibrate_grades(
+    [("S", "hit", 0)] * 9 + [("S", "miss", 0)]
+    + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 5
+    + [("D", "hit", 0)] + [("D", "miss", 0)] * 9)
+msg9 = telegram.render_weekly_report(rows_by_author, now=now,
+                                     calibration_result=CAL_OK, **RK)
+check("C10 단조 유지 시 ✅ 문구", "✅ 단조성 유지" in msg9 and "단조성 위반" not in msg9)
+
+# C11: 판정 가능한 등급이 2개 미만 → 보류 문구
+CAL_THIN = calibration.calibrate_grades([("C", "hit", 0)] * 3 + [("D", "miss", 0)] * 2)
+msg10 = telegram.render_weekly_report(rows_by_author, now=now,
+                                      calibration_result=CAL_THIN, **RK)
+check("C11 판정 보류 문구", "단조성 판정 보류" in msg10 and "단조성 위반" not in msg10)
+
+# C12: 종결 표본 0 → 섹션 통째 생략 (빈 표를 띄우지 않는다)
+CAL_EMPTY = calibration.calibrate_grades([])
+check("C12 표본 0 시 섹션 생략",
+      "등급 캘리브레이션" not in telegram.render_weekly_report(
+          rows_by_author, now=now, calibration_result=CAL_EMPTY, **RK))
+
+# C13: 미주입(기존 호출부) → 섹션만 빠지고 나머지 출력은 완전히 동일
+check("C13 미주입 시 기존 렌더 불변", "등급 캘리브레이션" not in msg6 and msg6 == msg)
+
+# C14: 작성자 표본이 하나도 없어도(빈 DB 경로) 등급 축은 표시된다 — 독립 축이므로
+msg11 = telegram.render_weekly_report({}, now=now, calibration_result=CAL, **RK)
+check("C14 빈 작성자 표본에서도 등급 축 표시",
+      "아직 표본 부족" in msg11 and "🎚️ 등급 캘리브레이션" in msg11)
+
+print()
+n_checks = 43
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

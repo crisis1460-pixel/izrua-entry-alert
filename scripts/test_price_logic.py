@@ -478,6 +478,24 @@ check("T22 DB 원본 등급/점수는 보존(불변) - 필터용 재계산은 in
 g22, s22score, _ = _grading.regrade_current(lv22, fake["price"] / USDT_KRW)
 check("T22 regrade_current 함수 자체 계산 정합", g22 in ("S", "A", "B") and s22score > 13)
 
+# ── 체인(카드3): 이 시점까지 T8/T9/T10/T11/T13/T15/T19~T21 등 run_once/
+#    _judge_outcomes 실경로로 쌓인 실제 판정 전체가 하나의 유효한 해시체인을
+#    이루는지 확인한다(개별 단위테스트는 test_resilience.py 쪽, 여긴 실운영
+#    경로 산출물 검증). T23부터는 테스트가 levels 테이블을 통째로 비우므로
+#    그 전인 지금 확인해야 한다.
+with db.connect(TEST_DB) as conn:
+    _chain_v = db.verify_outcome_chain(conn)
+    _chain_n = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE outcome IS NOT NULL"
+    ).fetchone()["n"]
+    _chain_hashed = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE outcome IS NOT NULL AND outcome_hash IS NOT NULL"
+    ).fetchone()["n"]
+check("체인: run_once/_judge_outcomes 실경로로 쌓인 전체 판정이 유효한 체인을 이룸",
+      _chain_v is None)
+check("체인: 종결된 판정 전부(N건) outcome_hash 보유(누락 없음)",
+      _chain_n > 0 and _chain_n == _chain_hashed)
+
 # ── T23: 수집 급감 경고 (조용한 고장 감지) ───────────────────────
 with db.connect(TEST_DB) as conn:
     conn.execute("DELETE FROM meta WHERE key='collect_silence_warned_date'")
@@ -1383,6 +1401,10 @@ check("OB7 최근 잔량비 조회",
       len(_obrecent) == 1 and _obrecent[0]["coin_symbol"] == "OBX"
       and _obrecent[0]["touch_bid_ask_ratio"] == 2.5)
 
+# ── 체인(카드3): 이 파일에서 그동안 resolve_outcome 을 거쳐 쌓인 실제 판정
+#    (T8/T9/T10/T11/T13/T15/BM1~BM8 등, run_once/_judge_outcomes 정상 경로로
+#    종결된 전체 표본)이 통째로 하나의 유효한 해시체인을 이루는지 확인한다 —
+#    개별 단위테스트(test_resilience.py)와 달리 실제 운영 경로 산출물 검증.
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
