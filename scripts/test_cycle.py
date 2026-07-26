@@ -484,4 +484,56 @@ tradingview.hard_block_detected = _orig_hard_block
 settings.SETTINGS["tv_block_alert_daily_limit"] = _orig_alert_limit
 os.remove(TEST_DB4)
 
+
+# ── S1~S5: 작성자 주간 스냅샷 (2026-07-26 — 역신호 태깅 선행 인프라) ──
+SNAP_DB = "cache/_test_snapshot.db"
+if os.path.exists(SNAP_DB):
+    os.remove(SNAP_DB)
+db.init_db(SNAP_DB)
+with db.connect(SNAP_DB) as _c:
+    for _i, (_a, _oc, _r) in enumerate([("AuthX", "hit", 2.0), ("AuthX", "miss", -1.0),
+                                        ("AuthY", "miss", -1.0)]):
+        _c.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+            "collected_at, author, outcome, r_multiple, touched_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (f"s{_i}", "SOL", "KRW-SOL", "long", "touched", NOON_KST - 86400,
+             _a, _oc, _r, NOON_KST - 3600))
+
+_n_snap = run_cycle.take_author_snapshot(SNAP_DB, now=NOON_KST)
+check("S1 작성자 수만큼 저장", _n_snap == 2)
+
+with db.connect(SNAP_DB) as _c:
+    _snaps = {r["author"]: r for r in db.get_author_snapshots(_c)}
+check("S2 주차 키 형식(YYYY-Www)", db.week_kst(NOON_KST).startswith("2026-W")
+      and all(s["week_kst"] == db.week_kst(NOON_KST) for s in _snaps.values()))
+check("S3 지표·원시 승패 함께 저장",
+      _snaps["AuthX"]["wins"] == 1 and _snaps["AuthX"]["losses"] == 1
+      and _snaps["AuthX"]["e_lb"] is not None and _snaps["AuthY"]["neff_r"] is not None)
+
+# 같은 주 재실행은 덮어쓰기 (행이 늘지 않음)
+run_cycle.take_author_snapshot(SNAP_DB, now=NOON_KST + 60)
+with db.connect(SNAP_DB) as _c:
+    _cnt = _c.execute("SELECT COUNT(*) FROM author_snapshots").fetchone()[0]
+check("S4 같은 주 재실행은 덮어쓰기(중복 행 없음)", _cnt == 2)
+
+# 주기 게이트: 1회 저장 후 즉시 재호출은 skipped, 168h 뒤엔 다시 ok
+settings.SETTINGS["db_path"] = SNAP_DB
+check("S5 주기 게이트",
+      run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST) == "ok"
+      and run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 60) == "skipped"
+      and run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 169 * 3600) == "ok")
+
+# 스냅샷이 죽어도 회차는 계속 (부분 실패 격리)
+def _snap_boom(*_a, **_k):
+    raise RuntimeError("snapshot boom")
+
+check("S5b 스냅샷 실패 격리",
+      run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 400 * 3600,
+                                      snapshot_runner=_snap_boom) == "failed")
+settings.SETTINGS["db_path"] = TEST_DB
+if os.path.exists(SNAP_DB):
+    os.remove(SNAP_DB)
+
+
 sys.exit(0 if ok else 1)

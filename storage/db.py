@@ -73,6 +73,25 @@ CREATE TABLE IF NOT EXISTS meta (
 -- 여기 중복 저장하지 않고 조회 시점에 집계한다(get_observation_report). 여기엔
 -- 다른 곳엔 없는 값 — 필터 억제 전 '원(raw) 이벤트'와 억제 사유별 건수만 쌓는다.
 -- 보존기간 60일(prune_daily_stats) — 하루 1행이라 자연히 가벼움.
+-- 작성자 주간 지표 스냅샷 (2026-07-26 사용자 결정 — 역신호 태깅의 선행 인프라).
+-- 역신호 판정 규칙은 "n_eff>=5 이면서 E_LB<0 이 2주 연속"인데, 지금은 매 시점의
+-- 값만 계산할 수 있고 '지난주에 어땠는지'를 알 방법이 없어 연속 판정이 불가능했다.
+-- 여기 주 1회 찍어두면 나중에 판정 로직만 얹으면 된다.
+-- **저장 전용** — 이 테이블은 알림·필터·등급 어디에도 영향을 주지 않는다(관찰기 안전).
+CREATE TABLE IF NOT EXISTS author_snapshots (
+    week_kst   TEXT NOT NULL,        -- ISO 주차 (YYYY-Www, KST 기준)
+    author     TEXT NOT NULL,
+    e_lb       REAL,                 -- R 트랙 보수적 기대값 (표본 없으면 NULL)
+    neff_r     REAL,                 -- R 트랙 유효표본 (게이트 판정용)
+    p_hat      REAL,                 -- 베이지안 수축 승률
+    neff_win   REAL,                 -- 승률축 유효표본
+    wins       INTEGER,              -- 원시 승 (해석 보조)
+    losses     INTEGER,
+    taken_at   REAL NOT NULL,
+    PRIMARY KEY (week_kst, author)
+);
+CREATE INDEX IF NOT EXISTS idx_snap_author ON author_snapshots(author, week_kst);
+
 CREATE TABLE IF NOT EXISTS daily_stats (
     day_kst              TEXT PRIMARY KEY,          -- YYYY-MM-DD (KST)
     touches_total        INTEGER NOT NULL DEFAULT 0, -- 필터 무관 전체 터치 발생(클러스터 단위)
@@ -358,6 +377,46 @@ def list_authors_with_outcomes(conn) -> list:
         "SELECT DISTINCT author FROM levels "
         "WHERE author IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL"
     ).fetchall()]
+
+
+def week_kst(now: Optional[float] = None) -> str:
+    """ISO 주차 문자열 (YYYY-Www, KST 기준) — 작성자 스냅샷의 주 단위 키."""
+    d = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST)
+    iso = d.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def save_author_snapshot(conn, week: str, author: str, met: dict,
+                         now: Optional[float] = None) -> None:
+    """작성자 주간 지표 1행 저장(같은 주 재실행이면 덮어씀 — 그 주 마지막 값이 남는다).
+
+    met 는 analytics.ranking.author_metrics() 반환 dict. 저장 전용이며 어떤 판정에도
+    쓰이지 않는다 — 역신호 '2주 연속' 판정 로직을 나중에 얹기 위한 원천 데이터."""
+    conn.execute(
+        """INSERT INTO author_snapshots
+             (week_kst, author, e_lb, neff_r, p_hat, neff_win, wins, losses, taken_at)
+           VALUES (?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(week_kst, author) DO UPDATE SET
+             e_lb=excluded.e_lb, neff_r=excluded.neff_r, p_hat=excluded.p_hat,
+             neff_win=excluded.neff_win, wins=excluded.wins, losses=excluded.losses,
+             taken_at=excluded.taken_at""",
+        (week, author, met.get("e_lb"), met.get("neff_r"), met.get("p_hat"),
+         met.get("neff_win"), met.get("wins"), met.get("losses"),
+         now if now is not None else time.time()),
+    )
+
+
+def get_author_snapshots(conn, author: Optional[str] = None, limit_weeks: int = 8) -> list:
+    """최근 주차 스냅샷 조회 (author 지정 시 그 작성자만). 최신 주차부터 내림차순."""
+    if author:
+        rows = conn.execute(
+            "SELECT * FROM author_snapshots WHERE author=? "
+            "ORDER BY week_kst DESC LIMIT ?", (author, limit_weeks)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM author_snapshots ORDER BY week_kst DESC, author "
+            "LIMIT ?", (limit_weeks * 50,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_ret24_values(conn) -> list:

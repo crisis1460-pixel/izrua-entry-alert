@@ -56,6 +56,9 @@ SETTINGS = {
     # `python scripts/run_weekly_report.py` 로 즉시 볼 수 있다. 나중에 다시 받고 싶으면
     # 이 값만 True 로 되돌리면 된다(주기 판정 meta 는 그대로라 바로 재개됨).
     "weekly_report_auto_send": False,
+    # 작성자 주간 스냅샷(역신호 '2주 연속' 판정용 원천 데이터) — 리포트 발송과 무관하게
+    # 계속 쌓인다. 저장 전용이라 알림·필터에 영향 없음(2026-07-26 사용자 결정).
+    "author_snapshot_interval_hours": 168,
     "weekly_report_interval_hours": 168,   # 발송 주기 (7일)
     "weekly_report_retry_minutes": 60,     # 발송 실패 시 재시도 백오프
     "weekly_report_kst_hour_from": 9,      # 이 시각 이후에만 발송 (새벽 발송 방지)

@@ -183,6 +183,76 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     return "ok"
 
 
+# ── 작성자 주간 스냅샷 (2026-07-26 사용자 결정 — 역신호 태깅 선행 인프라) ──
+#
+# 왜 별도 훅인가: 역신호 판정 규칙이 "n_eff>=5 이면서 E_LB<0 이 2주 연속"인데,
+# 지금은 '이번 주 값'만 계산 가능하고 지난주를 알 방법이 없어 연속 판정이 불가능하다.
+# 주 1회 찍어두면 나중에 판정 로직만 얹으면 된다. 주간 리포트 발송은 꺼졌지만(사용자
+# 결정) 이 축적은 리포트와 독립적으로 계속 돌아야 하므로 별도 meta 키를 쓴다.
+# **저장 전용** — 알림·필터·등급 어디에도 영향을 주지 않는다(관찰기 안전).
+
+META_LAST_SNAPSHOT = "last_author_snapshot_at"
+
+
+def take_author_snapshot(db_path: str, now: float = None) -> int:
+    """작성자별 현재 지표를 그 주 스냅샷으로 저장. 반환: 저장한 작성자 수."""
+    from analytics import ranking
+
+    now = time.time() if now is None else now
+    week = db.week_kst(now)
+    saved = 0
+    db.init_db(db_path)  # 단독 호출(수동 실행·테스트)에서도 테이블이 보장되게
+    with db.connect(db_path) as conn:
+        raw = db.get_author_raw_record(conn)  # {author: {"wins": w, "losses": l}}
+        for author in db.list_authors_with_outcomes(conn):
+            rows = db.get_author_outcome_rows(conn, author)
+            if not rows:
+                continue
+            met = dict(ranking.author_metrics(rows, now))
+            rec = raw.get(author) or {}
+            met["wins"], met["losses"] = rec.get("wins"), rec.get("losses")
+            db.save_author_snapshot(conn, week, author, met, now=now)
+            saved += 1
+    return saved
+
+
+def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
+                          enabled: bool = True, snapshot_runner=None) -> str:
+    """주 1회 작성자 스냅샷. 반환 "skipped" | "ok" | "failed".
+
+    실패해도 회차를 죽이지 않는다(수집·리포트와 동일한 부분 실패 격리 원칙).
+    리포트와 달리 발송이 없어 조용하다 — 사용자에게 어떤 알림도 가지 않는다."""
+    now = time.time() if now is None else now
+    if not enabled:
+        return "skipped"
+
+    with db.connect(db_path) as conn:
+        last = db.get_meta(conn, META_LAST_SNAPSHOT)
+    try:
+        last_ts = float(last) if last else 0.0
+    except (TypeError, ValueError):
+        last_ts = 0.0
+    if last_ts > now:          # 시계 역행 방어 (수집·리포트와 동일)
+        last_ts = 0.0
+    interval = settings.get("author_snapshot_interval_hours") * 3600
+    if not force and last_ts and now - last_ts < interval:
+        return "skipped"
+
+    try:
+        n = (snapshot_runner or take_author_snapshot)(db_path, now)
+    except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("작성자 스냅샷 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::작성자 스냅샷 실패 - {type(e).__name__}")
+        return "failed"
+
+    with db.connect(db_path) as conn:
+        db.set_meta(conn, META_LAST_SNAPSHOT, str(now))
+    logger.info("작성자 주간 스냅샷 저장: %d명 (%s)", n, db.week_kst(now))
+    return "ok"
+
+
 # ── 주간 리포트 ──────────────────────────────────────────────────────
 
 def _default_report_runner():
@@ -255,6 +325,9 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
 
     collect_status = maybe_collect(db_path, now=now, force=force_collect,
                                    enabled=collect_enabled, collect_runner=collect_runner)
+    # 작성자 주간 스냅샷 — 발송이 없어 조용하고, 리포트 ON/OFF 와 무관하게 계속 쌓인다
+    snapshot_status = maybe_author_snapshot(db_path, now=now)
+
     # 자동 발송 스위치(settings.weekly_report_auto_send)가 꺼져 있으면 정기 발송을
     # 하지 않는다 — 2026-07-26 사용자 결정. --force-report 는 여전히 동작한다
     # (수동으로 지금 보고 싶을 때). 리포트가 쓰는 데이터·계산은 전부 그대로 쌓인다.
@@ -263,9 +336,10 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
         enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
         report_runner=report_runner)
 
-    logger.info("회차 완료: 가격체크=%s 수집=%s 주간리포트=%s",
-                price_status, collect_status, report_status)
+    logger.info("회차 완료: 가격체크=%s 수집=%s 스냅샷=%s 주간리포트=%s",
+                price_status, collect_status, snapshot_status, report_status)
     return {"price_check": price_status, "collect": collect_status,
+            "author_snapshot": snapshot_status,
             "weekly_report": report_status, "summary": price_summary}
 
 
