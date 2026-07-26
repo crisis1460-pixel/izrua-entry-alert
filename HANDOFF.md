@@ -1,8 +1,7 @@
 # 인수인계 — izrua-entry-alert 고도화 세션용 컨텍스트
 
-> 사용 방법: 새 세션 시작 시 이 파일 내용을 통째로 붙여넣거나,
-> "C:\Users\User\Desktop\izrua_entry_alert\HANDOFF.md 읽고 시작해" 한 줄로 시작.
-> (작성: 2026-07-24, 직전 세션에서 개발·검증 완료 후 작성)
+> 새 세션 시작: "C:\Users\User\Desktop\izrua_entry_alert\HANDOFF.md 읽고 시작해" 한 줄.
+> (최종 갱신: 2026-07-26 밤 — 스프린트 1~7 완료 후. 이전판은 07-24 기준이었음)
 
 ## 1. 프로젝트 정체
 
@@ -13,98 +12,156 @@
 - **레포**: https://github.com/crisis1460-pixel/izrua-entry-alert (공개 — Actions 무료 무제한의 조건)
 - **로컬 클론**: `C:\Users\User\Desktop\izrua_entry_alert`
 - **관계 프로젝트**:
-  - `izrua_watcher`(비공개 레포) — 별도 운영 중인 워쳐. **무수정 유지 원칙**. 이 봇은 워쳐의
-    DB 아티팩트(이름 `crypto-db`)에서 작성자 적중률·화이트리스트만 읽어옴 (스키마:
-    chartist_stats(username, outcome∈hit/miss) 집계 = hit/(hit+miss))
-  - `C:\Users\User\Desktop\upbit_bot` — 폐기된 구 자동매매 봇. **삭제 대기**(사용자 승인 필요,
-    결정 #10). 로컬 `.env`에 텔레그램 토큰 등 있음(테스트 발송 시 load_dotenv로 사용)
+  - `izrua_watcher`(비공개 레포, 로컬 `C:\Users\User\Desktop\izrua_watcher`) — 별도 운영 워쳐.
+    **무수정 유지 원칙**(2026-07-26 문구 수정 1건만 예외적으로 승인받아 처리). 이 봇은 워쳐의
+    DB 아티팩트(`crypto-db`)에서 작성자 적중률·화이트리스트만 읽어옴.
+    ⚠️ 워쳐 스캔 주기는 **6시간**(2026-07-26 변경 — GitHub 무료 2,000분/월이 매달 25일경
+    소진되던 문제. cron-job.org 설정 `23 */6 * * *`)
+  - `C:\Users\User\Desktop\upbit_bot` — 폐기된 구 자동매매 봇. **삭제 대기**(사용자 승인 필요)
 
 ## 2. 아키텍처 (100% 서버리스, PC 불필요, 비용 0)
 
 ```
-cron-job.org (사용자 계정, 워쳐와 같은 패턴) — 등록 잡은 이제 **1개뿐**
-└─ price-check.yml 트리거: 2분마다 → scripts/run_cycle.py (단일 DB 라이터)
-   ├─ 매 회차: 업비트 시세로 접근/터치 판정→알림→적중판정
-   ├─ 4시간마다(meta.last_collect_at): TradingView 글 수집→추출→등급→DB 저장
-   └─ 7일마다(meta.last_weekly_report_at, KST 09~22시): 주간 성적 리포트 발송
-   ※ 2026-07-26: collect.yml 폐지. 두 잡이 각자 levels.db(바이너리)를 커밋해
-     항상 충돌→한쪽 유실되던 구조를 라이터 1개로 정리(장애 26ac522 근본 해결).
-상태: data/levels.db (SQLite) — 매 변경 시 레포에 커밋백([skip ci]) = 영속+백업
+cron-job.org — 등록 잡은 **1개뿐** (2분 트리거)
+└─ price-check.yml → scripts/run_cycle.py  ★ 단일 DB 라이터
+   ├─ 매 회차   : 가격 감시 → 접근/터치 판정 → 알림 → 적중 판정 → 관찰 집계
+   ├─ 4시간마다 : TradingView 수집 (meta.last_collect_at)
+   ├─ 7일마다   : 작성자 주간 스냅샷 (meta.last_author_snapshot_at)
+   └─ 7일마다   : 주간 리포트 — **자동발송 OFF**(사용자 결정), 스위치만 켜면 재개
+상태: data/levels.db (SQLite) — 매 변경 시 레포 커밋백([skip ci]) = 영속+백업
 Secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, COINGECKO_API_KEY, WATCHER_GITHUB_TOKEN
+         (TV_COOKIE 는 선택 — 등록만 하면 코드 수정 없이 자동 활용됨)
 ```
 
-파일 지도: `collector/`(coingecko 유니버스=top200∩업비트KRW·스테이블 제외, tradingview 수집
-3단 폴백, extractor 파싱, grading 등급, watcher_stats), `monitor/`(price_check 핵심 로직,
-upbit REST, binance 김프용, market_sentiment BTC.D/ALT.S/F&G 1h캐시), `notify/telegram.py`
-(렌더러+발송), `storage/db.py`, `scripts/`(run_cycle=운영 엔트리포인트, run_collect·
-run_price_check·run_weekly_report=수동/하위 단계, 테스트, check_secrets), `ALERT_BOT_PLAN.md`·`ACCURACY_DB_PLAN.md`(확정 기획서 — 상세 결정 전부 여기).
+**★ 2026-07-26 최대 사건**: collect.yml 과 price-check.yml 이 **각자** `data/levels.db`를
+커밋했는데, 바이너리는 3-way 머지가 불가능해 **항상 충돌 → 한쪽이 반드시 유실**됐다.
+`git pull --rebase -X ours` 의 ours/theirs 가 직관과 반대(재생되는 우리 커밋이 theirs)라
+07-23~26 **모든 수집분이 조용히 폐기**돼 신규 레벨 0건, 알림이 사실상 멈췄다.
+Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이터를 1개로 통합**(run_cycle.py)해
+충돌 경로 자체를 제거. `test_cycle.py` W1 이 "`git add data/` 워크플로는 1개"를 불변식으로 검사.
+
+### 파일 지도
+- `collector/` — coingecko(유니버스 top200∩업비트KRW), tradingview(수집 3단 폴백 +
+  차단 감지 `hard_block_detected` + 글 삭제 확인 `check_post_deleted`), extractor(파싱),
+  **grading**(등급 — `TP_DISTANCE_BANDS` 단일 배점표, `regrade_current` 재채점), watcher_stats
+- `monitor/` — **price_check**(핵심: 감시·알림·적중판정·관찰집계·`magnify_order`),
+  upbit(시세·캔들·`fetch_trades_window`), binance(김프), market_sentiment
+- `analytics/` — **ranking**(E_LB·베이지안 수축·최신성 가중), **clustering**(클러스터 규칙
+  정본 + 합의 CR + 베이스라인). 둘 다 "프로젝트 모듈 import 0" 순수 함수
+- `notify/telegram.py` — render_alert(양식 확정) / render_weekly_report /
+  render_collect_silence_alert / render_tv_block_alert
+- `storage/db.py` — 스키마·마이그레이션·조회 전부
+- `scripts/` — **run_cycle**(운영 엔트리), run_collect·run_price_check·run_weekly_report(수동),
+  **show_status**(현황 조회 CLI), 테스트 7종, check_secrets, repair_*(일회성 수리 이력)
 
 ## 3. 핵심 확정 결정 (변경 시 사용자 합의 필요)
 
 - 알림: 접근(+1%) 예고 1회 → 하방 터치 본알림 1회, 글당 1회, 게시 7일 만료
-- 클러스터: 같은 코인 진입가 ±1% 글들 병합, 상단 기준 1회 알림, 출처1·2 링크(URL 비노출)
-- 필터: 수집은 전부 저장, 알림은 등급 C↑ + 코인당 **본알림** 3건/일 (예고는 상한 제외)
-- **적중 DB** (ACCURACY_DB_PLAN 확정): TP1 도달=승 / SL=패 / 같은 1분봉 동시=패+ambiguous /
-  TP 없으면 타임박스(수익률 부호) / 판정창 = 작성자 타임프레임(1H=7일, 4H=14일, 1D=30일,
-  없으면 목표거리 10%당 7일, 상한 30일) / R-멀티플 [-1,+5] / 터치 이후 캔들만 시간순 스캔 /
-  기준가=자기 진입가(지정가 체결 모델)+터치시점 환율 저장(FX 드리프트 보정) /
-  클러스터 하단 미도달 레벨=섀도터치(통계 제외) / 24h·72h 수익률(도과 6h 허용오차)
-- 표시: 자체 표본 5건↑부터 `🏹 승률67% (4승2패) 터치율67%` 자동 병기, 워쳐 적중률과 별도 줄
-  (측정 기준이 달라 섞지 않음 — 자체는 "터치 시점부터", 워쳐는 "글 시점부터")
-- 환산: USD 저장값 × 업비트 KRW-USDT 시세(테더 김프 포함). 코인별 김프 잔차는 알림의 김프 행
+- 클러스터: 같은 코인 진입가 ±1% 병합, 상단 기준 1회 알림, 출처 링크(URL 비노출)
+- 필터: 수집은 전부 저장, 알림은 등급 C↑ + 코인당 **본알림** 3건/일
+- **적중 DB**: TP1=승 / SL=패 / 동시터치는 **체결내역으로 순서 복원 시도(Bar Magnifier)**
+  후 실패 시에만 패+ambiguous / TP 없으면 타임박스 / 판정창=작성자 타임프레임 /
+  R-멀티플 [-1,+5] / 터치 이후 캔들만 / 기준가=자기 진입가+터치시점 환율
+- **등급**(2026-07-26 재조정): 팔로워10 + R:R 55 + 근접도20 + 완결성30.
+  목표거리 배점표 — 2%↓ −6 / 2~3% −4 / 3~5% −2 (초근접 TP 는 실익 없음),
+  **SL 미기재 글에만** 5~8%+12 / 8~15%+20 / **15~25%+25(최고)** / 25~40%+18 /
+  40~60%+9 / 60%+ +3 (봉우리형 — 먼 목표에 만점 주지 않음).
+  이전엔 SL 없으면 상한 50점이라 **구조적으로 C가 한계**였고, 이게 사용자가 반려한
+  "SL 미기재 감점"과 결과적으로 같은 효과를 내고 있었다 → 해소(A 도달 가능, S 불가)
+- 표시: 자체 표본 n_eff≥5 부터 `🏹 승률67% (4승2패) 터치율67%` 자동 병기
+- 환산: USD 저장값 × 업비트 KRW-USDT 시세
 
-## 4. 현재 알림 양식 (최종 확정 — 임의 변경 금지)
+## 4. 알림 양식 (최종 확정 — 임의 변경 금지)
 
 ```
 ━━━━━━━━━━━━━━━━━━━━
 🎯 [진입가 터치] LINK          ← 예고는 ⚠️ [진입가 접근]
-🥇 시총 19위 · B등급 · 2일 전   ← 글 나이는 실시간 재계산
-✍️ 작성자: @ProChartist ⭐⭐    ← ⭐⭐=워쳐 화이트리스트
+🥇 시총 19위 · B등급 · 2일 전   ← 등급은 알림 시점 재채점값
+✍️ 작성자: @ProChartist ⭐⭐
 📊 평균 적중률: 72% (워쳐 25건)
-🏹 승률73% (8승3패) 터치율73%   ← 자체 표본 5건↑일 때만
+🏹 승률73% (8승3패) 터치율73%   ← 자체 n_eff≥5 일 때만
 ━━━━━━━━━━━━━━━━━━━━
-타점
-    현재:  12,078원             ← 원화 단독, 반올림 정수(1원 미만만 소수)
-    진입:  12,006~12,035원      ← 범위면 ~ 표기
-    목표:  13,848원  (+15.1%)   ← 손절 행은 비표시(사용자 결정, 데이터는 보존)
-    거래:  38위                 ← 업비트 KRW 24h 거래대금 실시간 순위
-52주(고가/저가/위치바) · 김프 · BTC.D/ALT.S/F&G · 출처1·2 하이퍼링크
+타점 (현재/진입/목표/거래순위) · 52주 · 김프 · BTC.D/ALT.S/F&G · 출처 링크
 ```
+손절 행 비표시(사용자는 스윙 트레이더로 손절 비중시 — SL 감점류 기능 제안 금지)
 
-## 5. 검증 이력 (신뢰 기준선)
+## 5. 검증 (신뢰 기준선)
 
-- 테스트 3종: `scripts/test_extractor.py` 25/25, `scripts/test_price_logic.py` 30/30,
-  `scripts/test_ranking.py` 15개 — **push 전 필수 실행** (2026-07-26 T18~20·랭킹 추가)
-- 전수감사 3회(멀티에이전트): 1차 15건 + 2차 major3/minor2 전부 수정 완료, critical 0 수렴
-- 실전 버그 이력(회귀 테스트 있음): TP 서수 오인("TP1:"의 1을 가격으로), 20xx 가격을 연도로
-  삭제, 터치 이전 캔들이 판정 오염, collect 큐 기아, 커밋백 abort로 재시도 사망
-- 보안: 비밀값 4중 방어(gitignore/자체스캐너/gitleaks CI/히스토리 전수검사 0건).
-  **업비트 API 키는 이 봇에 없음**(시세 무인증 — 설계 원칙, 추가 금지)
+- **테스트 7종** — extractor / grading / price_logic / ranking / weekly_report / cycle /
+  show_status. **push 전 필수**, 2026-07-26부터 **CI(tests.yml)에서 자동 실행**
+  (파일별 독립 프로세스 — settings 전역 오염 때문에 한 프로세스에 모으면 안 됨)
+- 감사 이력: 07-24 전수감사 15건 + major3/minor2, 07-26 재감사(major3+minor7),
+  07-26 밤 당일배포 전수감사(MAJOR 3건 — 2건 즉시 수정, 1건 시간 경과 대기)
+- 실전 버그 이력: TP 서수 오인 / 20xx 가격을 연도로 / 터치 이전 캔들 오염 /
+  collect 큐 기아 / 커밋백 abort / **rebase 전략으로 수집분 전량 폐기** /
+  등급 freeze(터치 52건 중 18건 억제) / 리포트 HTML `<` 미이스케이프로 발송 400 /
+  관찰지표가 '체류 회차'를 세던 문제
+- 보안: 비밀값 4중 방어. **업비트 API 키는 이 봇에 없음**(시세 무인증 — 설계 원칙, 추가 금지)
 
-## 6. 작업 컨벤션 (사용자와 합의된 방식 — 반드시 유지)
+## 6. 작업 컨벤션 (반드시 유지)
 
-1. **기획/설계 변경은 질문카드**: AskUserQuestion 객관식 + 추천안(근거 포함), 하나씩
-2. **양식 변경은 샘플 먼저**: 채팅에 렌더링 출력 → 사용자 확정 후 push (텔레그램 테스트
-   발송은 upbit_bot/.env 로드해 가능, "🧪 테스트" 라벨 필수)
-3. **push 절차**: 테스트 2종 통과 → `python scripts/check_secrets.py` → data/ 제외하고
-   커밋(`git checkout origin/main -- data` 로 정리) → `git pull --rebase -X ours origin main`
-   → push. **주의: 봇이 2분마다 data 커밋을 push하므로 경합 정상, `rm -rf data` 후
-   `git add -A` 절대 금지**(봇 데이터 삭제 커밋 사고 이력 있음)
-4. Windows: 파이썬 실행 시 `PYTHONIOENCODING=utf-8` 필수(cp949 이모지 크래시)
-5. 토큰 값은 채팅에 넣지 않기(GitHub/cron-job 화면에만). 리서치는 웹 검증 후 결정
-6. wait-and-see 원칙: 필터값(등급/상한/밴드)은 관찰 데이터 없이 변경 제안하지 말 것
+1. **기획/설계 변경은 질문카드**: AskUserQuestion 객관식 + 추천안(근거 포함)
+2. **양식 변경은 샘플 먼저**: 렌더링 출력 → 사용자 확정 후 push
+3. **push 절차**: 테스트 7종 + check_secrets → `git checkout origin/main -- data` 로 정리 →
+   rebase 후 push. **봇이 2분마다 data 를 커밋하므로 경합은 정상** — 재시도 루프를 쓴다.
+   `rm -rf data` 후 `git add -A` **절대 금지**(봇 데이터 삭제 사고 이력)
+4. Windows: `PYTHONIOENCODING=utf-8` 필수. PowerShell 에서 프로덕션 DB 쓰기가
+   분류기에 막히면 Bash 로 실행
+5. 토큰 값은 채팅에 넣지 않기. 리서치는 웹 검증 후 결정
+6. **프로덕션 DB 는 읽기 전용** — 사본은 `sqlite3.backup()`(단순 파일복사는 WAL 미반영)
 
-## 7. 미결·고도화 후보 (이번 방에서 할 일 후보)
+## 7. 현재 국면 — ⚠️ 관찰기 (가장 중요)
 
-**사용자 액션 대기**: ① 업비트 구 API 키 폐기 확인(업비트 웹) ② upbit_bot 폴더 완전삭제 승인
-**관찰 후 진행**: ③ 알림량 필터 조정 — 합의된 순서: 이미-터치 무알림 → C→B → 3→2건/일
-**고도화 백로그** (ACCURACY_DB_PLAN 2단계, 리서치 완료 상태):
-- ~~E_LB·베이지안 수축·최신성 가중~~ → **구현됨(2026-07-26)**: `analytics/ranking.py`
-  (카드 확정: R NULL 은 2트랙, prior 강도 m_eff=min(10,워쳐표본), 노출은 주간 리포트만,
-  알림은 게이트 교체(raw n≥5→n_eff≥5)만. 상세: izrua_company/dev_a/sprint01_ELB설계.md)
-- 주간 텔레그램 리포트(터치 N건 → 승/패/진행, 작성자 순위)
-- E_LB 지속 음수 작성자 역신호 태깅(Finfluencers: 56%가 anti-skilled)
-- 동시터치 ambiguous 건 하위 타임프레임 재검사(Bar Magnifier 방식)
-- 글 삭제 감지(deleted 플래그 — 삭제 건수 자체가 신뢰도 신호)
-- TV_COOKIE Secret 미설정(선택 — 차단 시 대비용)
-```
+2026-07-26 하루에 **알림량에 영향 주는 변수가 4개** 바뀌었다:
+수집 복구(감시 11→44건) / 등급 재평가 도입 / 목표거리 감점 / 등급 배점 재조정.
+
+**→ 며칠간 알림 필터·등급·양식을 건드리는 작업은 금지.** 관찰 데이터가 오염된다.
+봇이 `daily_stats`(터치·예고·억제사유별)와 `author_snapshots`(주 1회)를 자동으로 쌓는 중.
+
+- 현황 조회: `python scripts/show_status.py [--days 7] [--report]`
+- 사용자 태깅: 알림 받으며 "많다/적다/적당" → 5일 후 적정선 확정
+- 관찰 후 판단: 전환율(알림÷터치), 억제사유 분포, 등급 분포,
+  `suppressed_grade_tp_penalty_only`(감점 없었다면 몇 건 더 왔을지)
+
+## 8. 다음 할 일
+
+### 즉시 확인 (시간 경과 필요)
+- **오늘 배포한 3경로가 프로덕션에서 미검증**: daily_stats 첫 행 / 글 삭제 감지
+  (`deleted_checked_at`) / Bar Magnifier. 수집 회차 후 `show_status` 로 확인
+- 07-23 터치분 15건+ 미종결 → **07-30경 168h 창 만료로 일괄 타임박스 종결 예정**
+
+### 관찰 후 (데이터 쌓인 뒤)
+- 알림 필터 조정(합의 순서: 이미터치 무알림 → C→B → 3→2건/일)
+- 등급 밴드 경계·배점 실측 재조정 / 과대목표(+50%↑) R:R 감점 재상정
+- 유니버스 200→400 (터치건수 자체를 왜곡하므로 **반드시 관찰 후**)
+- 역신호 최종 판정 로직 (스냅샷 2주 필요 → 8월 중순 가능)
+
+### 미조치 minor (2026-07-26 감사 기록)
+- 감점 역산이 `TP_DISTANCE_BANDS` 부호-경계 분할에 암묵 의존(불변식 테스트 없음)
+- `ambiguous_unresolved` 가 "판별 실패"와 "예산 소진/OFF"를 합침
+- run_cycle 3·4단계 DB 접근 일부가 try 밖
+- `tv_block_alert_count_YYYY-MM-DD` meta 키 무한 증가
+- 수집 급감 감지가 '수집기 사망'이 아니라 '신규 0건'을 봄(위양성 가능).
+  정작 `meta.last_collect_at` staleness 는 미감시
+- `_rep` 가 수집 시점 score 로 대표 선정(재채점 전)
+
+### 사용자 액션 대기
+- 업비트 구 API 키 폐기 확인 / upbit_bot 폴더 삭제 승인
+- TV_COOKIE 등록(선택 — 차단 반복 시)
+
+## 9. 운영 체제 — 3인 개발사
+
+`C:\Users\User\Desktop\izrua_company\` 에 전체 기록.
+`NEXT.md`(재개 브리핑) → `meetings/`(회의록) → `planner/`·`dev_a/`·`dev_b/`(직원별 이력·산출물)
+
+| 직원 | 역할 | 모델 |
+|---|---|---|
+| 🧭 기획자 | 리서치·기획·정책 검토 | Sonnet |
+| 🔨 개발자 A | 신규 기능 설계·구현 | **Opus 고정** |
+| 🔧 개발자 B | 버그·유지보수·감사·효율화 | Sonnet (심층 감사 시 Opus) |
+
+- 트리거: 「스프린트 개시」(3인) / 「정비 개시」(B) / 「기획 개시」(기획자) / 「구현 개시」(A)
+- 파일 경계를 나눠 병렬 투입 — **경계면 상호작용이 실제로 두 번 사고를 냈으므로
+  스프린트 종료 시 통합 검증 필수**
+- 직원은 레포 **읽기 전용**, git 상태 변경 금지. 커밋·푸시는 CTO(오케스트레이터)만
+- 큰 결정만 사장님께 질문카드. 최종 보고는 핵심만 간결하게(전문은 회사 폴더)
