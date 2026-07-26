@@ -195,7 +195,8 @@ _SELF_STATS_MIN_N = 5  # 자체 표본이 이 이상일 때만 병기 (ACCURACY_
 def _author_block(rep: dict) -> list:
     """작성자 라인 + 적중률 라인 (워쳐 스타일 + 자체 적중 병기).
     2026-07-23 카드4 확정: 워쳐(글 시점 기준)와 자체(터치 시점 기준)는 측정 기준이
-    달라 섞지 않고 병기. 자체 표본 5건 미만이면 표시하지 않음(조용한 누적)."""
+    달라 섞지 않고 병기. 자체 표본은 R 트랙 유효표본(neff_r) 5건 이상일 때만 표시
+    (2026-07-27 판정 비대칭 대응 — 아래 게이트 주석 참고)."""
     author = html.escape(rep.get("author") or "?")
     star = " ⭐⭐" if rep.get("author_whitelisted") else ""
     # ✍️ 로 아래 📊/🏹/📎 행들과 시작 칸 정렬 (2026-07-24 사용자 확정)
@@ -206,11 +207,19 @@ def _author_block(rep: dict) -> list:
     # 자체 성적은 별도 줄 (이모지로 윗줄과 시작 위치 정렬). C안 함축 표기로 한 줄 유지
     # (2026-07-24 사용자 확정: "승률67% (4승2패) 터치율67%").
     self_line = None
-    # 게이트: 주입된 n_eff(최신성 가중 유효표본, 2026-07-26 카드 확정) 우선,
-    # 미주입이면 raw 폴백 (렌더러 단독 호출 테스트 호환)
-    _neff = rep.get("author_self_neff")
-    _gate_n = _neff if _neff is not None else wins + losses
-    if _gate_n >= _SELF_STATS_MIN_N:
+    # 게이트: R 트랙 유효표본(neff_r). 2026-07-27 사장님 확정으로 승률축(neff_win)에서
+    # 옮겼다 — 두 지표가 서로 다른 축을 보던 구멍을 막는다.
+    #   · 예전 승률 표시는 neff_win(판정 방식 무관 전체 종결) 기준 → SL 미기재 작성자도 통과
+    #   · 역신호 경고는 neff_r(r_multiple 필요 = SL 있어야 계산) 기준 → 그 작성자는 면제
+    #   ⇒ "SL 을 안 쓰면 승률 100% 로 표시되면서 경고는 절대 안 붙는" 구조였다.
+    # 실측 근거: tp_only(SL 미기재) 13건 중 13건 hit(100%) vs tp_sl 21건 중 4건(19%).
+    # SL 이 없으면 지는 경로가 거의 없다 — CryptoAnalystSignal 은 종결 12건 전부 tp_only 라
+    # "승률100% (12승0패)" 로 나갈 참이었다(활성 5건 대기 중이었음).
+    # 이제 표시와 경고가 같은 축을 쓴다 = 승률이 보이면 역신호 판정도 받은 표본이다.
+    # 미주입(렌더러 단독 호출·구버전 경로)이면 표시하지 않는다 — 예전의 raw 폴백이
+    # 바로 그 구멍이었으므로 보수적으로 숨긴다.
+    _gate_n = rep.get("author_self_neff_r") or 0.0
+    if _gate_n >= _SELF_STATS_MIN_N and (wins + losses) > 0:
         rate = wins / (wins + losses) * 100
         self_line = f"🏹 승률{rate:.0f}% ({wins}승{losses}패)"
         # 터치율 병기 (선택편향 처방, ACCURACY_DB_PLAN — 표본 5건↑일 때만)

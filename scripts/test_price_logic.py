@@ -328,13 +328,15 @@ price_check.run_once(now + 960)
 o13 = outcome_of(lid13)
 check("T13 7일 창 대조군 - 타임박스 종결", o13["outcome"] == "timeboxed_win")
 
-# T14: 자체 성적 병기 줄 (🏹 별도 줄, 5건 이상 발동)
+# T14: 자체 성적 병기 줄 (🏹 별도 줄) — 게이트는 R 트랙 유효표본 neff_r ≥ 5
+# (2026-07-27 변경: 예전엔 neff_win/raw 폴백이라 SL 미기재 작성자도 통과했다 — T14g 참고)
 from notify import telegram as tg
 msg_a = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4, grade="B", score=62,
     author="ProChartist", author_followers=None, author_hit_rate=0.72, author_hit_count=25,
     author_whitelisted=True, mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/a",
-    post_age_minutes=60, collected_at=now, author_self_wins=8, author_self_losses=3)],
+    post_age_minutes=60, collected_at=now, author_self_wins=8, author_self_losses=3,
+    author_self_neff_r=11.0, author_rank_min_neff=5.0)],
     8.35 * USDT_KRW, USDT_KRW)
 check("T14 워쳐+자체 병기 (별도줄)", "📊 평균 적중률: 72% (워쳐 25건)" in msg_a
       and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ 작성자:" in msg_a)
@@ -342,9 +344,37 @@ msg_b = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
     author="NewComer", author_followers=2300, author_hit_rate=None, author_hit_count=None,
     author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/b",
-    post_age_minutes=60, collected_at=now, author_self_wins=4, author_self_losses=2)],
+    post_age_minutes=60, collected_at=now, author_self_wins=4, author_self_losses=2,
+    author_self_neff_r=6.0, author_rank_min_neff=5.0)],
     8.35 * USDT_KRW, USDT_KRW)
 check("T14b 자체만 (워쳐없음)", "🏹 승률67% (4승2패)" in msg_b and "기록없음" not in msg_b)
+
+# T14g~T14i: 판정 비대칭 차단 (2026-07-27 사장님 확정)
+# SL 미기재 글은 r_multiple 이 없어 neff_r=0 → 승률을 표시하지 않는다. 실측 근거:
+# tp_only 13건 전승(100%) vs tp_sl 21건 중 4건(19%) — SL 이 없으면 지는 경로가 거의 없다.
+# CryptoAnalystSignal 이 종결 12건 전부 tp_only 라 "승률100% (12승0패)" 로 나갈 참이었고
+# (활성 5건 대기), 정작 역신호 경고는 neff_r 게이트라 그 작성자만 면제였다.
+_asym = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=9.5, rr=None,
+             grade="C", score=45, author="NoStopAuthor", author_followers=None,
+             author_hit_rate=None, author_hit_count=None, author_whitelisted=True,
+             mcap_rank=19, mcap_tier_icon="🥇", post_url="https://tv.com/g",
+             post_age_minutes=60, collected_at=now,
+             author_self_wins=12, author_self_losses=0, author_touched_n=12,
+             author_untouched_expired=0, author_rank_min_neff=5.0)
+msg_g = tg.render_alert("touch", "LINK",
+                        [dict(_asym, author_self_neff=12.0, author_self_neff_r=0.0)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14g SL 미기재 작성자(neff_r=0)는 승률 미표시 - 12승0패가 새어나가지 않는다",
+      "승률" not in msg_g and "12승0패" not in msg_g)
+check("T14g2 승률만 빠지고 작성자 줄은 정상 렌더", "✍️ 작성자: @NoStopAuthor" in msg_g)
+msg_h = tg.render_alert("touch", "LINK",
+                        [dict(_asym, author_self_neff=12.0, author_self_neff_r=5.0)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14h R 표본이 게이트를 넘기면 정상 표시(과잉 차단 아님)",
+      "🏹 승률100% (12승0패)" in msg_h)
+msg_i = tg.render_alert("touch", "LINK", [dict(_asym)], 8.35 * USDT_KRW, USDT_KRW)
+check("T14i 지표 미주입(구버전 경로)은 보수적 미표시 - 예전 raw 폴백이 그 구멍이었다",
+      "승률" not in msg_i)
 
 # T14c~T14e: 역신호 경고 줄 (2026-07-27) — 워쳐 적중률·⭐⭐ 가 "믿을 만한 작성자"로
 # 읽히는데 자체 표본은 정반대인 실제 사례(@mastercrypto2020) 대응. 억제가 아니라 표기.

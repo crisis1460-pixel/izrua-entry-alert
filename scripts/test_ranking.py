@@ -95,7 +95,10 @@ check("I1 실데이터 시나리오 E_LB", len(rows) == 7 and close(m1["neff_r"]
       and close(m1["e_lb"], -0.9026))
 os.remove(TEST_DB)
 
-# I2: 렌더 게이트 — n_eff 4.9 미표시 / 5.0 표시 (raw 4승2패=6건이어도 n_eff 가 기준)
+# I2: 렌더 게이트 — 경계 4.9 미표시 / 5.0 표시 (raw 4승2패=6건이어도 n_eff 가 기준).
+# 2026-07-27: 게이트 축이 neff_win → neff_r 로 바뀌었다. 승률 표시와 역신호 경고가
+# 같은 R 트랙을 보게 해서, SL 미기재 작성자가 '승률만 표시되고 경고는 면제'되던
+# 비대칭을 막는다(근거·사례는 test_price_logic.py T14g~T14i).
 from notify import telegram  # noqa: E402
 
 rep = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=10.0,
@@ -104,13 +107,18 @@ rep = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=10
            author_whitelisted=0, mcap_rank=19, mcap_tier_icon="🥇",
            post_url="https://tv.com/g", post_age_minutes=100,
            author_self_wins=4, author_self_losses=2,
-           author_touched_n=6, author_untouched_expired=0)
-msg_a = telegram.render_alert("touch", "LINK", [dict(rep, author_self_neff=4.9)],
+           author_touched_n=6, author_untouched_expired=0, author_rank_min_neff=5.0)
+msg_a = telegram.render_alert("touch", "LINK", [dict(rep, author_self_neff_r=4.9)],
                               10.05 * 1400, 1400)
-msg_b = telegram.render_alert("touch", "LINK", [dict(rep, author_self_neff=5.0)],
+msg_b = telegram.render_alert("touch", "LINK", [dict(rep, author_self_neff_r=5.0)],
                               10.05 * 1400, 1400)
-check("I2a n_eff 4.9 → 🏹 미표시", "🏹" not in msg_a)
-check("I2b n_eff 5.0 → 🏹 표시", "🏹" in msg_b and "4승2패" in msg_b)
+check("I2a neff_r 4.9 → 🏹 미표시", "🏹" not in msg_a)
+check("I2b neff_r 5.0 → 🏹 표시", "🏹" in msg_b and "4승2패" in msg_b)
+# I2c: 승률축(neff_win)만 크고 R 표본이 없으면 표시하지 않는다 — 비대칭 차단의 핵심
+msg_c = telegram.render_alert(
+    "touch", "LINK", [dict(rep, author_self_neff=12.0, author_self_neff_r=0.0)],
+    10.05 * 1400, 1400)
+check("I2c neff_win 12 이어도 neff_r 0 이면 미표시", "🏹" not in msg_c)
 
 # ── C: 합의(confluence) 클러스터 — analytics/clustering.py (2026-07-26 신규) ──
 from analytics import clustering  # noqa: E402
