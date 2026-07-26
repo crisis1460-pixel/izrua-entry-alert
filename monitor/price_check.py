@@ -205,7 +205,7 @@ def run_once(now: float = None) -> dict:
         # 억제돼도 여기엔 반드시 잡힌다(방금 들어간 TP 근접도 감점의 효과 측정 등).
         obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
                "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
-               "suppressed_grade_tp_penalty_only": 0,
+               "suppressed_grade_tp_penalty_only": 0, "preview_dwell": 0,
                "ambiguous_magnified": 0, "ambiguous_unresolved": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
@@ -285,12 +285,20 @@ def run_once(now: float = None) -> dict:
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"
 
-                # 관찰 집계: 필터·중복 여부와 무관한 원(raw) 이벤트 발생 카운트
-                obs["touches_total" if touched else "previews_total"] += 1
+                # 이미 예고한 클러스터는 밴드에 머무는 동안 매 회차 여기 도달한다.
+                # 2026-07-26 감사 MAJOR-1: 예전엔 이 판정 '전에' previews_total 을 올려서
+                # 밴드 체류 시간이 예고 건수로 둔갑했다(하루 머물면 최대 720배 부풀림).
+                # 이제 '새로 발생한' 이벤트만 세고, 체류 회차는 별도 지표로 분리한다.
+                dup_preview = kind == "preview" and any(
+                    l["status"] == "previewed" for l in cluster)
 
-                if kind == "preview" and any(l["status"] == "previewed" for l in cluster):
-                    obs["suppressed_dup"] += 1
-                    continue  # 이미 예고한 클러스터
+                if not dup_preview:
+                    # 관찰 집계: 필터 통과 여부와 무관한 원(raw) 이벤트 1건
+                    obs["touches_total" if touched else "previews_total"] += 1
+
+                if dup_preview:
+                    obs["preview_dwell"] += 1   # 억제가 아니라 '밴드 체류 회차'
+                    continue
 
                 # 등급 재평가 (2026-07-26 감사: freeze 결함 수정) — calculate_grade 의
                 # 가격근접도(최대 20점)는 채점 시점 가격 기준이라, 수집 당시 등급을 그대로

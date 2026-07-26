@@ -98,7 +98,10 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     previews_total       INTEGER NOT NULL DEFAULT 0, -- 필터 무관 전체 예고 발생
     suppressed_grade     INTEGER NOT NULL DEFAULT 0, -- 등급 미달로 억제
     suppressed_cap       INTEGER NOT NULL DEFAULT 0, -- 코인당 일일 상한으로 억제
-    suppressed_dup       INTEGER NOT NULL DEFAULT 0, -- 이미 예고됨(중복) 억제
+    suppressed_dup       INTEGER NOT NULL DEFAULT 0, -- (사용 안 함) 2026-07-26 감사
+        -- MAJOR-1 이전에 '밴드 체류 회차'를 억제로 잘못 세던 자리. 과거 데이터
+        -- 해석용으로만 남기고 더는 증가하지 않는다 → preview_dwell 로 이관.
+    preview_dwell        INTEGER NOT NULL DEFAULT 0, -- 예고 밴드 체류 회차(억제 아님)
     suppressed_send_fail INTEGER NOT NULL DEFAULT 0, -- 필터는 통과했으나 텔레그램 발송 실패
     -- suppressed_grade 의 부분집합(중복 카운트 아님!) — 2026-07-26 목표거리 감점 도입
     -- 효과를 분리 측정하려는 사용자 결정. "등급 미달로 억제된 건" 중에서 "그 감점만
@@ -613,6 +616,7 @@ def stats(conn) -> dict:
 _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "suppressed_cap", "suppressed_dup", "suppressed_send_fail",
                      "suppressed_grade_tp_penalty_only",
+                     "preview_dwell",
                      # 동시터치(같은 1분봉에 TP·SL 동시 도달) 재검사 결과.
                      # magnified = 체결내역으로 실제 순서를 복원해 확정한 건,
                      # unresolved = 재검사에도 판별 못 해 보수적 miss 로 남은 건.

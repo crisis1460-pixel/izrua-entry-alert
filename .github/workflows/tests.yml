@@ -1,0 +1,66 @@
+name: tests
+
+# 2026-07-26 감사 MAJOR-3: push 에서 도는 잡이 secret-scan 하나뿐이라, 테스트가 깨진
+# 코드도 서버 측에서 아무 저항 없이 배포 경로를 통과했다. 실제로 같은 날 파일 경계를
+# 나눠 병렬 작업하던 중 한쪽이 배점을 바꾸자 반대쪽 테스트 14개가 red 가 됐는데
+# (로컬에서 우연히 잡음), CI 는 그 사실을 알지 못했다.
+#
+# data/ 커밋백은 하지 않는다 — 이 레포의 DB 라이터는 price-check.yml 하나뿐이라는
+# 불변식을 지켜야 한다(test_cycle.py W1 이 이를 검사한다).
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'data/**'          # 봇이 2분마다 커밋하는 상태 파일 — 테스트와 무관
+      - '**/*.md'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true   # 연속 push 시 최신 것만 (봇 커밋은 위에서 이미 제외)
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # 각 파일을 별도 프로세스로 실행한다. 테스트들이 settings.SETTINGS 를 전역으로
+      # 덮어쓰기 때문에(특히 db_path) 한 프로세스에 모으면 서로 오염된다 —
+      # 2026-07-26 감사에서 "파일별 독립 실행이 전제"임이 확인됐다.
+      # 하나가 실패해도 나머지를 마저 돌려 전체 그림을 보고 끝에 종합 판정한다.
+      - name: 테스트 7종
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set +e
+          FAILED=""
+          for t in test_extractor test_grading test_price_logic test_ranking \
+                   test_weekly_report test_cycle test_show_status; do
+            echo "::group::$t"
+            python "scripts/$t.py"
+            code=$?
+            echo "::endgroup::"
+            if [ $code -ne 0 ]; then
+              FAILED="$FAILED $t"
+              echo "::error::$t 실패 (exit $code)"
+            fi
+          done
+          if [ -n "$FAILED" ]; then
+            echo "실패한 테스트:$FAILED"
+            exit 1
+          fi
+          echo "테스트 7종 전부 통과"
+
+      - name: 비밀값 스캔
+        run: python scripts/check_secrets.py

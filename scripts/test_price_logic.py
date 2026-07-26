@@ -546,8 +546,12 @@ def _obs_row(day=None):
 
 row26 = _obs_row()
 check("T26 관찰집계 - 터치 raw 5건(필터 무관)", row26 is not None and row26["touches_total"] == 5)
-check("T26b 관찰집계 - 예고 raw 3건(필터 무관)", row26["previews_total"] == 3)
-check("T26c 관찰집계 - 중복예고 억제 1건", row26["suppressed_dup"] == 1)
+# 2026-07-26 감사 MAJOR-1 수정: previews_total 은 '새로 발생한 예고'만 센다.
+# 예전엔 이미 예고된 클러스터가 밴드에 머무는 동안 매 회차 +1 이라, 체류 시간이
+# 예고 건수로 둔갑했다(하루 머물면 최대 720배). 체류 회차는 preview_dwell 로 분리.
+check("T26b 관찰집계 - 예고 raw 2건(중복 회차 제외)", row26["previews_total"] == 2)
+check("T26c 관찰집계 - 밴드 체류 1회차(억제 아님)", row26["preview_dwell"] == 1)
+check("T26c2 폐기된 suppressed_dup 은 더 이상 증가하지 않음", row26["suppressed_dup"] == 0)
 check("T26d 관찰집계 - 일일상한 억제 3건", row26["suppressed_cap"] == 3)
 check("T26e 관찰집계 - 등급미달/발송실패는 아직 0건(T27/T28에서 검증)",
       row26["suppressed_grade"] == 0 and row26["suppressed_send_fail"] == 0
