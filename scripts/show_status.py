@@ -140,6 +140,27 @@ def print_observation(conn, days: int) -> None:
           f"{conv_total:>8}  {supp_total:<24}")
     print("  (전환율 = 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패)")
     print("   체류 = 예고 밴드에 머문 회차 — 억제가 아니라 관측 지표")
+    _print_bid_ask_pressure(conn)
+
+
+def _print_bid_ask_pressure(conn) -> None:
+    """터치 시점 호가 매수/매도 잔량비 최근 기록 (2026-07-26 카드 #19).
+    사후 상관분석용으로 쌓기만 하는 값이라 여기서도 '보여주기' 전용이다 —
+    구버전 DB(컬럼 없음)에서는 조용히 생략한다."""
+    try:
+        rows = db.get_recent_bid_ask_ratios(conn, limit=8)
+    except sqlite3.OperationalError:
+        return
+    if not rows:
+        return
+    vals = [r["touch_bid_ask_ratio"] for r in rows]
+    avg = sum(vals) / len(vals)
+    print()
+    print(f"  호가 매수/매도 잔량비 (최근 {len(rows)}건 터치, 평균 {avg:.2f} — 기록 전용)")
+    for r in rows:
+        oc = r["outcome"] or "미종결"
+        print(f"    {r['coin_symbol']:<8}{r['touch_bid_ask_ratio']:>6.2f}   {oc}")
+    print("   (>1 = 매수 잔량 우위. 알림·필터·등급에는 반영되지 않음)")
 
 
 # ── ② 파이프라인 현재 상태 ─────────────────────────────────────────

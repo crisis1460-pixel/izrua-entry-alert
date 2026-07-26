@@ -164,6 +164,14 @@ _OUTCOME_COLUMNS = {
     # 글 원문(제목+본문). 파서 개선 시 재수집 없이 재파싱해 오염값 자동 치유
     # (2026-07-23 SEI/SOL 서수오인 재발 후 추가 — reparse_all 참고)
     "raw_text": "TEXT",
+    # 만료 사유 (2026-07-26 카드 #5). 기존 시간경과 만료는 NULL 로 남고, 거래소
+    # 리스크 공지 등 외부 사유로 앞당겨 만료된 건만 값이 찬다 - 사후에 "왜 사라졌나"
+    # 를 구분할 수 있어야 만료 통계가 오염되지 않는다.
+    "expired_reason": "TEXT",
+    # 터치 시점 호가 매수/매도 압력 = total_bid_size / total_ask_size (2026-07-26 카드 #19).
+    # >1 이면 매수 잔량 우위. **순수 로깅 컬럼** - 알림·필터·등급 어디에도 쓰이지
+    # 않는다. 나중에 outcome 과의 상관을 사후 분석하기 위한 원천 데이터.
+    "touch_bid_ask_ratio": "REAL",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -315,7 +323,8 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
 
 
 def mark_touched(conn, touches: list, now: Optional[float] = None,
-                 usdt_krw: Optional[float] = None) -> None:
+                 usdt_krw: Optional[float] = None,
+                 bid_ask_ratio: Optional[float] = None) -> None:
     """touches: [(level_id, touch_price_krw|None, touched_at|None), ...].
 
     2026-07-24 감사 수정: 클러스터 상단 터치 시 하단 레벨(자기 엔트리 미도달)까지
@@ -326,7 +335,11 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
     2026-07-26 감사 major2: touched_at 은 감지 시각이 아니라 '실제 도달한 첫 캔들의
     종료 시각'(호출부 계산, 진행 중 캔들이면 미래일 수 있음)을 앵커로 받는다 —
     감지 시각 앵커면 터치 캔들 전체가 다음 회차 판정 필터(c_end<=touched_at)를
-    통과해 터치 이전 가격이 판정에 섞였다."""
+    통과해 터치 이전 가격이 판정에 섞였다.
+
+    bid_ask_ratio 는 터치 시점 호가 매수/매도 잔량비 스냅샷(2026-07-26 카드 #19).
+    **기록 전용** — 알림·필터·판정 어디에도 쓰이지 않는다. 실제 도달 터치에만
+    남긴다(섀도 터치는 그 레벨의 엔트리에 닿은 게 아니라 시점이 무의미)."""
     now = now or time.time()
     for lid, price, t_anchor in touches:
         if price is None:
@@ -336,8 +349,9 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
         else:
             conn.execute(
                 "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
-                "touch_usdt_krw=? WHERE id=? AND status IN ('watching','previewed')",
-                (t_anchor or now, price, usdt_krw, lid))
+                "touch_usdt_krw=?, touch_bid_ask_ratio=? "
+                "WHERE id=? AND status IN ('watching','previewed')",
+                (t_anchor or now, price, usdt_krw, bid_ask_ratio, lid))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────
@@ -571,6 +585,36 @@ def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
         (now, cutoff),
     )
     return cur.rowcount + cur2.rowcount
+
+
+def expire_levels_for_coin(conn, coin_symbol: str, reason: str,
+                           now: Optional[float] = None) -> int:
+    """한 코인의 '알림 대기' 레벨을 사유와 함께 즉시 만료. 반환: 만료 건수.
+    (2026-07-26 카드 #5 — 업비트 유의종목/거래지원 종료 공지 대응)
+
+    대상은 watching/previewed 뿐이다. 미종결 touched 를 건드리지 않는 이유:
+    ① 이미 알림이 나간 레벨이라 만료해도 '앞으로의 알림'을 막는 효과가 없고
+    ② 판정 진행 중인 표본을 status 변경으로 판정 대상(get_unresolved_touched)에서
+       빼버리면 승패가 조용히 유실돼 적중 DB 가 오염된다. 상장폐지로 시세 조회가
+       끊긴 건은 _judge_outcomes 의 기존 '판정불능 제외' 경로가 이미 처리한다.
+    outcome 이 이미 확정된 건도 당연히 손대지 않는다(불변 스냅샷 원칙)."""
+    now = now or time.time()
+    cur = conn.execute(
+        "UPDATE levels SET status='expired', expired_at=?, expired_reason=? "
+        "WHERE coin_symbol=? AND status IN ('watching','previewed')",
+        (now, reason, coin_symbol),
+    )
+    return cur.rowcount
+
+
+def get_recent_bid_ask_ratios(conn, limit: int = 10) -> list:
+    """최근 터치의 호가 매수/매도 잔량비 기록 (2026-07-26 카드 #19, 관찰 표시용).
+    조회 전용 — 어떤 판정에도 쓰이지 않는다."""
+    return [dict(r) for r in conn.execute(
+        "SELECT coin_symbol, touched_at, touch_bid_ask_ratio, outcome FROM levels "
+        "WHERE touch_bid_ask_ratio IS NOT NULL "
+        "ORDER BY touched_at DESC LIMIT ?", (limit,)
+    ).fetchall()]
 
 
 def count_alerts_today(conn, coin_symbol: str, day_kst: str, kind: Optional[str] = None) -> int:

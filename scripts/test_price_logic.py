@@ -23,6 +23,10 @@ _real_fetch_range_since = upbit.fetch_range_since  # 아래에서 price_check �
 
 TEST_DB = "cache/_test_price.db"
 settings.SETTINGS["db_path"] = TEST_DB
+# 2026-07-26 신규 외부 호출 2종(공지 폴링·호가 스냅샷)은 기본 OFF/스텁으로 두고
+# 전용 블록(AN*/OB*)에서만 켠다 — 안 그러면 아래 T1~T23 의 run_once 가 업비트
+# 공지·호가 API 를 실제로 때린다(이 테스트는 네트워크 없이 도는 것이 원칙).
+settings.SETTINGS["announcement_alert_enabled"] = False
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 db.init_db(TEST_DB)
@@ -64,6 +68,8 @@ _real_fetch_trades_window = upbit.fetch_trades_window  # BM-U1~ 에서 실물 �
 # 기존 T10(보수적 miss+ambiguous) 동작이 그대로 유지된다. BM 테스트가 값을 바꾼다.
 fake_trades = {"list": None}
 upbit.fetch_trades_window = lambda m, s, e, t, max_pages=4: fake_trades["list"]
+_real_fetch_orderbook = upbit.fetch_orderbook_ratio  # OB2~OB4 에서 실물 로직 검증용
+upbit.fetch_orderbook_ratio = lambda m, t: None  # 호가 스냅샷 기본 스텁 (OB* 에서 교체)
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
 from monitor import binance
@@ -1050,6 +1056,323 @@ _requests_mod.get = _bmu6_get
 _bmu6 = _real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
 _requests_mod.get = _orig_requests_get
 check("BM-U6 조회 실패는 예외 없이 None", _bmu6 is None)
+
+# ── AN1~AN10: 업비트 거래소 리스크 공지 즉시경보 (2026-07-26 카드 #5) ──────────
+# 네트워크 없이 검증한다 — announcements._fetch 를 가짜로 갈아끼우거나(엔드투엔드),
+# requests.get 을 가짜로 두고 실물 _fetch 를 돌린다(실패 격리).
+from monitor import announcements
+from datetime import timedelta as _td
+
+_AN_KST = _tz(_td(hours=9))
+_AN_KEYWORDS = settings.get("announcement_risk_keywords")
+_AN_EXCLUDE = settings.get("announcement_exclude_keywords")
+_real_an_fetch = announcements._fetch   # AN9 에서 실물 조회 로직을 검증하려고 보관
+
+
+def _notice(nid, title, ago_sec=600):
+    """업비트 공지 1건 흉내 (실측 응답 필드 그대로)."""
+    at = _dt.fromtimestamp(now - ago_sec, tz=_AN_KST).isoformat()
+    return {"id": nid, "uuid": str(nid), "category": "거래", "title": title,
+            "listed_at": at, "first_listed_at": at}
+
+
+def _an_level(coin, entry, key, status="watching", touched=False):
+    with db.connect(TEST_DB) as conn:
+        lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
+                  entry_usd=entry, sl_usd=None, tp_usd=None, rr=None, grade="B",
+                  score=60, author=f"AN_{key}", author_followers=100,
+                  author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇", post_url=f"https://tv.com/{key}",
+                  post_age_minutes=100, collected_at=now - 600)
+        lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], lv["post_url"])
+        db.upsert_level(conn, lv)
+        row = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (lv["signal_key"],)).fetchone()
+        if status != "watching":
+            conn.execute("UPDATE levels SET status=?, touched_at=? WHERE id=?",
+                         (status, (now - 300) if touched else None, row["id"]))
+        return row["id"]
+
+
+def _row(lid):
+    with db.connect(TEST_DB) as conn:
+        return dict(conn.execute(
+            "SELECT status, expired_reason, outcome FROM levels WHERE id=?",
+            (lid,)).fetchone())
+
+
+# AN1: 제목에서 심볼 추출 — 괄호 안 티커만, 날짜/한글 괄호는 무시
+check("AN1 심볼 추출(단일)",
+      announcements.extract_symbols("질리카(ZIL) 거래 유의 종목 지정 안내") == ["ZIL"])
+check("AN1 심볼 추출(날짜 괄호 무시)",
+      announcements.extract_symbols(
+          "토트넘홋스퍼(SPURS) 거래지원 종료 안내 (8/18 15:00)") == ["SPURS"])
+check("AN1 숫자 시작 심볼 허용 / 숫자만은 제외",
+      announcements.extract_symbols("원인치(1INCH) 거래 유의 종목 지정 안내 (2026)") == ["1INCH"])
+
+# AN2: 리스크 판정 — '지정 해제'(위험 해소)는 반드시 제외돼야 한다
+_is = lambda t: announcements.is_risk_title(t, _AN_KEYWORDS, _AN_EXCLUDE)
+check("AN2 유의종목 지정 = 리스크", _is("질리카(ZIL) 거래 유의 종목 지정 안내"))
+check("AN2 거래지원 종료 = 리스크", _is("알파쿼크(AQT) 거래지원 종료 안내 (8/3 15:00)"))
+check("AN2 '지정 해제'는 리스크 아님(오탐 방지 핵심)",
+      not _is("타이코(TAIKO) 거래 유의 종목 지정 해제 안내"))
+check("AN2 이벤트 종료 공지는 리스크 아님",
+      not _is("솔스티스(SLX) 거래지원 기념, 총 상금 이벤트! (이벤트 종료)"))
+check("AN2 일반 상장 공지는 리스크 아님", not _is("모포(MORPHO) KRW 마켓 디지털 자산 추가"))
+
+# AN3: 매칭 = 리스크 제목 × 추적 중 심볼 교집합
+_an_notices = [
+    _notice(9001, "질리카(ZIL) 거래 유의 종목 지정 안내"),
+    _notice(9002, "알파쿼크(AQT) 거래지원 종료 안내 (8/3 15:00)"),
+    _notice(9003, "타이코(TAIKO) 거래 유의 종목 지정 해제 안내"),
+    _notice(9004, "모포(MORPHO) KRW 마켓 디지털 자산 추가"),
+]
+_m = announcements.match_notices(_an_notices, ["ZIL", "TAIKO", "MORPHO"],
+                                 _AN_KEYWORDS, _AN_EXCLUDE)
+check("AN3 추적 심볼만 매칭(해제·상장 공지 제외)",
+      len(_m) == 1 and _m[0][1] == ["ZIL"])
+check("AN3 미추적 코인은 매칭 안 됨",
+      announcements.match_notices(_an_notices, ["BTC"], _AN_KEYWORDS, _AN_EXCLUDE) == [])
+
+# AN4: 오래된 공지는 제외 (기능 첫 가동 시 과거 공지 경보 폭탄 방지)
+_old = [_notice(9005, "질리카(ZIL) 거래 유의 종목 지정 안내", ago_sec=10 * 86400)]
+check("AN4 max_age 초과 공지 제외",
+      announcements.match_notices(_old, ["ZIL"], _AN_KEYWORDS, _AN_EXCLUDE,
+                                  max_age_sec=72 * 3600, now=now) == [])
+check("AN4 날짜 불명 공지도 제외(스키마 변경 시 폭탄 방지)",
+      announcements.match_notices([{"id": 9006, "title": "질리카(ZIL) 거래 유의 종목 지정 안내"}],
+                                  ["ZIL"], _AN_KEYWORDS, _AN_EXCLUDE,
+                                  max_age_sec=72 * 3600, now=now) == [])
+
+# AN5: 엔드투엔드 — 경보 1회 + 해당 코인 대기 레벨 즉시 만료(사유 기록)
+settings.SETTINGS["announcement_alert_enabled"] = True
+settings.SETTINGS["announcement_poll_interval_minutes"] = 0  # TTL 무시 - 매 호출 폴링
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM levels")
+    conn.execute("DELETE FROM meta WHERE key LIKE 'announcement%'")
+_zil_a = _an_level("ZIL", 0.012, "an_a")
+_zil_b = _an_level("ZIL", 0.011, "an_b", status="previewed")
+_keep = _an_level("LINK", 8.0, "an_keep")   # 무관한 코인은 그대로 살아 있어야 한다
+announcements._fetch = lambda timeout, per_page: _an_notices
+sent_messages.clear()
+with db.connect(TEST_DB) as conn:
+    r5 = announcements.check_announcements(conn, now, settings.get)
+check("AN5 경보 1회 발송", r5["alerted"] == 1 and len(sent_messages) == 1)
+check("AN5 경보 본문(대상·제목·만료건수)",
+      "업비트 리스크 공지" in sent_messages[0] and "ZIL" in sent_messages[0]
+      and "유의 종목 지정" in sent_messages[0] and "2건" in sent_messages[0])
+check("AN5 대기 레벨 즉시 만료 + 사유 기록",
+      r5["expired"] == 2
+      and _row(_zil_a)["status"] == "expired" and _row(_zil_b)["status"] == "expired"
+      and _row(_zil_a)["expired_reason"] == "upbit_notice:9001")
+check("AN5 무관한 코인 레벨은 보존", _row(_keep)["status"] == "watching")
+
+# AN6: 같은 공지 재폴링 → 중복 발송 없음 (meta 이력 기반)
+sent_messages.clear()
+with db.connect(TEST_DB) as conn:
+    r6 = announcements.check_announcements(conn, now + 60, settings.get)
+check("AN6 공지ID 기반 중복 발송 방지",
+      r6["alerted"] == 0 and not sent_messages and r6["expired"] == 0)
+
+# AN7: 미종결 터치 레벨은 만료하지 않는다(판정 표본 유실 방지) — 단 경보 대상엔 포함
+sent_messages.clear()
+_aqt_w = _an_level("AQT", 0.5, "an_w")                      # 대기 - 만료 대상
+_aqt_t = _an_level("AQT", 0.4, "an_t", status="touched", touched=True)  # 판정 중 - 보존
+with db.connect(TEST_DB) as conn:
+    r7 = announcements.check_announcements(conn, now + 120, settings.get)
+check("AN7 거래지원 종료 경보 발송", r7["alerted"] == 1 and "AQT" in sent_messages[0])
+check("AN7 대기 레벨만 만료, 판정 중 터치는 보존",
+      r7["expired"] == 1 and _row(_aqt_w)["status"] == "expired"
+      and _row(_aqt_t)["status"] == "touched" and _row(_aqt_t)["outcome"] is None)
+
+# AN8: 폴링 주기(meta TTL) — 주기 내에는 호출조차 하지 않는다
+settings.SETTINGS["announcement_poll_interval_minutes"] = 20
+_an_calls = []
+announcements._fetch = lambda timeout, per_page: (_an_calls.append(1), _an_notices)[1]
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "announcement_last_poll_at", str(now))
+    r8a = announcements.check_announcements(conn, now + 300, settings.get)      # 5분 뒤
+    r8b = announcements.check_announcements(conn, now + 21 * 60, settings.get)  # 21분 뒤
+check("AN8 TTL 내 미호출 / TTL 경과 후 호출",
+      r8a["polled"] is False and r8b["polled"] is True and len(_an_calls) == 1)
+
+# AN9: 조회 실패·이상 스키마 격리 — 예외 없이 조용히 0건 (실물 _fetch 로직 검증)
+announcements._fetch = _real_an_fetch   # 가짜 제거 → 실물 조회 로직으로 복귀
+def _an_boom(url, params=None, timeout=None):
+    raise RuntimeError("network down")
+_requests_mod.get = _an_boom
+_an_fail = announcements._fetch(5.0, 30)
+_requests_mod.get = _orig_requests_get
+check("AN9 조회 실패는 예외 없이 빈 목록", _an_fail == [])
+check("AN9 예상 밖 응답 스키마도 예외 없이 0건",
+      announcements._extract_notices({"success": False}) == []
+      and announcements._extract_notices(None) == []
+      and announcements._extract_notices("nope") == [])
+sent_messages.clear()
+_requests_mod.get = _an_boom
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "announcement_last_poll_at", "0")
+    r9 = announcements.check_announcements(conn, now + 10000, settings.get)
+_requests_mod.get = _orig_requests_get
+check("AN9 조회 실패 회차는 경보 없이 통과",
+      r9["alerted"] == 0 and not sent_messages)
+
+# AN10: run_once 훅 예외 격리 — 공지 감시가 어떻게 터지든 가격체크는 살아야 한다
+_an_real_check = announcements.check_announcements
+def _an_explode(conn, now_, cfg_get):
+    raise RuntimeError("공지 모듈 폭발")
+announcements.check_announcements = _an_explode
+fake["price"] = fake["low"] = fake["high"] = fake["candles"] = None
+try:
+    s10 = price_check.run_once(now + 11000)
+    _an_survived = True
+except Exception:
+    _an_survived = False
+announcements.check_announcements = _an_real_check
+settings.SETTINGS["announcement_alert_enabled"] = False
+check("AN10 공지 감시 예외가 회차를 죽이지 않음", _an_survived and isinstance(s10, dict))
+
+# AN11~AN13: 텔레그램 장애 시 경보 유실 방지 (2026-07-26 리뷰 지적)
+# 만료가 발송보다 먼저이므로, 발송이 실패하면 그 코인은 다음 폴링에서 활성 목록에
+# 없어 재매칭이 불가능하다 → 대기 큐(meta)가 유일한 복구 경로. 여기서 못박는다.
+import json as _json  # noqa: E402 - 대기 큐(meta) 원문 검증용
+settings.SETTINGS["announcement_alert_enabled"] = True
+settings.SETTINGS["announcement_poll_interval_minutes"] = 0
+announcements._fetch = lambda timeout, per_page: _an_notices
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM levels")
+    conn.execute("DELETE FROM meta WHERE key LIKE 'announcement%'")
+_zil_f = _an_level("ZIL", 0.013, "an_fail")   # watching 만 보유 - 가장 흔한 형태
+sent_messages.clear()
+telegram.send = lambda text: False            # 텔레그램 일시 장애
+with db.connect(TEST_DB) as conn:
+    r11 = announcements.check_announcements(conn, now, settings.get)
+    _an_pending_raw = db.get_meta(conn, "announcement_pending_alerts")
+check("AN11 발송 실패 - 레벨은 만료되지만 경보는 대기 큐에 보존",
+      r11["alerted"] == 0 and r11["expired"] == 1 and r11["pending"] == 1
+      and _row(_zil_f)["status"] == "expired"
+      and _an_pending_raw and "ZIL" in _an_pending_raw)
+
+# 텔레그램 복구 → 다음 회차에 재시도 발송. (이 시점 ZIL 은 이미 만료돼 활성 목록에
+# 없다 = 대기 큐가 없었다면 경보가 영원히 안 나가는 상황)
+telegram.send = lambda text: sent_messages.append(text) or True
+with db.connect(TEST_DB) as conn:
+    _an_no_active = "ZIL" not in announcements._active_symbols(conn)
+    r12 = announcements.check_announcements(conn, now + 120, settings.get)
+    _an_pending_after = db.get_meta(conn, "announcement_pending_alerts")
+check("AN12 복구 후 재시도 발송(비활성이라 재매칭은 불가한 상태)",
+      _an_no_active and r12["alerted"] == 1 and len(sent_messages) == 1
+      and "ZIL" in sent_messages[0] and _json.loads(_an_pending_after) == [])
+
+# AN13: 재시도로 나간 경보도 발송 이력에 적립된다 — 같은 코인 레벨이 새로 수집돼
+# 다시 활성이 돼도 같은 공지로 두 번 알리지 않는다.
+sent_messages.clear()
+_zil_new = _an_level("ZIL", 0.014, "an_again")
+with db.connect(TEST_DB) as conn:
+    r13a = announcements.check_announcements(conn, now + 240, settings.get)
+check("AN13 재시도 발송분도 중복 방지 이력에 적립",
+      r13a["alerted"] == 0 and not sent_messages and r13a["matched"] == 1)
+
+# AN14: 재시도 기한(TTL)이 지난 대기분은 폐기 — 무한 재시도로 남지 않는다
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "announcement_pending_alerts", _json.dumps(
+        [{"nid": 9099, "title": "낡은(OLD) 거래 유의 종목 지정 안내",
+          "symbols": ["OLD"], "expired": 1, "first_at": now}]))
+    r14 = announcements.check_announcements(
+        conn, now + settings.get("announcement_pending_ttl_hours") * 3600 + 60,
+        settings.get)
+    _an_pending_ttl = db.get_meta(conn, "announcement_pending_alerts")
+check("AN14 기한 초과 대기분 폐기(발송도 재시도도 없음)",
+      r14["alerted"] == 0 and not sent_messages
+      and _json.loads(_an_pending_ttl) == [])
+settings.SETTINGS["announcement_alert_enabled"] = False
+settings.SETTINGS["announcement_poll_interval_minutes"] = 20
+
+
+# ── OB1~OB6: 터치 시점 호가 매수/매도 압력 기록 (2026-07-26 카드 #19) ──────────
+# 카드 #18(REST ticker 의 acc_bid_volume/acc_ask_volume)은 2026-07-26 무인증 실측에서
+# 해당 필드가 응답에 없음을 확인해 폐기 → 호가 스냅샷 폴백을 채택. 아래 OB1 은 그
+# 실증 사실 자체를 회귀 테스트로 못박는다(다시 #18 로 돌아가려는 시도를 막는 기록).
+_REST_TICKER_KEYS = {
+    "market", "trade_date", "trade_time", "trade_date_kst", "trade_time_kst",
+    "trade_timestamp", "opening_price", "high_price", "low_price", "trade_price",
+    "prev_closing_price", "change", "change_price", "change_rate",
+    "signed_change_price", "signed_change_rate", "trade_volume", "acc_trade_price",
+    "acc_trade_price_24h", "acc_trade_volume", "acc_trade_volume_24h",
+    "highest_52_week_price", "highest_52_week_date", "lowest_52_week_price",
+    "lowest_52_week_date", "timestamp",
+}
+check("OB1 REST ticker 에는 매수/매도 분리 필드가 없다(카드 #18 폐기 근거)",
+      not {"acc_bid_volume", "acc_ask_volume"} & _REST_TICKER_KEYS)
+
+# OB2~OB4: fetch_orderbook_ratio 실물 로직 (가짜 requests.get, HTTP 없음)
+
+def _ob_resp(bid, ask):
+    return _FakeResp([{"market": "KRW-T", "total_bid_size": bid,
+                       "total_ask_size": ask, "orderbook_units": []}])
+
+_requests_mod.get = lambda url, params=None, timeout=None: _ob_resp(3.0, 1.5)
+_ob2 = _real_fetch_orderbook("KRW-T", 5.0)
+_requests_mod.get = lambda url, params=None, timeout=None: _ob_resp(0.0, 1.5)
+_ob3 = _real_fetch_orderbook("KRW-T", 5.0)
+_requests_mod.get = _an_boom
+_ob4 = _real_fetch_orderbook("KRW-T", 5.0)
+_requests_mod.get = _orig_requests_get
+check("OB2 잔량비 = total_bid_size / total_ask_size", _ob2 == 2.0)
+check("OB3 한쪽 잔량 0 이면 None(무의미·0나눗셈 방지)", _ob3 is None)
+check("OB4 조회 실패는 예외 없이 None", _ob4 is None)
+
+# OB5: 터치 확정 시 레벨 행에 기록된다 (예고 단계에서는 호출조차 없다)
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM levels")
+settings.SETTINGS["orderbook_pressure_enabled"] = True
+_ob_calls = []
+upbit.fetch_orderbook_ratio = lambda m, t: (_ob_calls.append(m), 1.75)[1]
+_obk = _an_level("OBK", 10.0, "ob_k")
+fake["candles"] = None
+fake["high"] = None
+fake["price"] = 10.0 * USDT_KRW * 1.005   # 예고 밴드 이내, 아직 미터치
+fake["low"] = None
+sent_messages.clear()
+price_check.run_once(now + 12000)
+_ob_preview_calls = len(_ob_calls)
+fake["price"] = 10.0 * USDT_KRW * 1.002
+fake["low"] = 9.90 * USDT_KRW             # 소급 저가가 엔트리 하향 터치
+price_check.run_once(now + 12100)
+with db.connect(TEST_DB) as conn:
+    _obrow = dict(conn.execute(
+        "SELECT status, touch_bid_ask_ratio FROM levels WHERE id=?", (_obk,)).fetchone())
+check("OB5 예고 단계에선 호가 호출 없음(비용 0)", _ob_preview_calls == 0)
+check("OB5 터치 확정 시 잔량비 기록",
+      _obrow["status"] == "touched" and _obrow["touch_bid_ask_ratio"] == 1.75
+      and _ob_calls == ["KRW-OBK"])
+
+# OB6: 호가 조회가 터져도 터치 처리는 정상 진행 (기록은 NULL) — 순수 로깅의 격리
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM levels")
+def _ob_explode(m, t):
+    raise RuntimeError("호가 폭발")
+upbit.fetch_orderbook_ratio = _ob_explode
+_obx = _an_level("OBX", 10.0, "ob_x")
+fake["price"] = 10.0 * USDT_KRW * 1.002
+fake["low"] = 9.90 * USDT_KRW
+price_check.run_once(now + 12200)
+with db.connect(TEST_DB) as conn:
+    _obxrow = dict(conn.execute(
+        "SELECT status, touched_at, touch_bid_ask_ratio FROM levels WHERE id=?",
+        (_obx,)).fetchone())
+upbit.fetch_orderbook_ratio = lambda m, t: None
+check("OB6 호가 실패해도 터치 처리 정상 + 기록만 NULL",
+      _obxrow["status"] == "touched" and _obxrow["touched_at"] is not None
+      and _obxrow["touch_bid_ask_ratio"] is None)
+
+# OB7: 관찰 조회 함수 (show_status 표시용) — 기록 전용 경로 확인
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE levels SET touch_bid_ask_ratio=2.5 WHERE id=?", (_obx,))
+    _obrecent = db.get_recent_bid_ask_ratios(conn, limit=5)
+check("OB7 최근 잔량비 조회",
+      len(_obrecent) == 1 and _obrecent[0]["coin_symbol"] == "OBX"
+      and _obrecent[0]["touch_bid_ask_ratio"] == 2.5)
 
 print()
 print("── 본알림 실제 렌더링 ──")

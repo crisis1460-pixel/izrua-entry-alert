@@ -21,7 +21,7 @@ from typing import Optional
 
 from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
 from config import settings
-from monitor import upbit
+from monitor import announcements, upbit
 from notify import telegram
 from storage import db
 
@@ -169,6 +169,18 @@ def run_once(now: float = None) -> dict:
         # 목적이라, 아래 "대상 없음" 조기 반환보다 먼저 돌아야 한다)
         if _check_collect_silence(conn, now, cfg_get):
             summary["collect_silence_alert"] = True
+
+        # 거래소 리스크 공지 감시 (카드 #5) — 유의종목/거래지원 종료를 감지해 경보 +
+        # 해당 코인 대기 레벨 만료. 비문서화 API 를 쓰므로 예외를 여기서 완전히
+        # 격리한다: 이 기능이 어떻게 실패하든 가격체크 회차는 계속 돌아야 한다.
+        # 위치는 만료·활성조회 '앞' — 이번 회차부터 위험 코인의 알림이 멈추도록.
+        try:
+            ann = announcements.check_announcements(conn, now, cfg_get)
+            if ann.get("alerted"):
+                summary["announcement_alerts"] = ann["alerted"]
+                summary["announcement_expired"] = ann["expired"]
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 공지 감시 실패(무시하고 진행): %s", e)
 
         expired = db.expire_old(conn, cfg_get("level_expiry_hours") * 3600, now)
         if expired:
@@ -397,7 +409,19 @@ def run_once(now: float = None) -> dict:
                                     t_anchor = c[1]
                                     break
                         touches.append((lv["id"], e_krw if reached else None, t_anchor))
-                    db.mark_touched(conn, touches, now, usdt_krw=usdt_krw)
+                    # 호가 매수/매도 압력 스냅샷 (카드 #19) — 실제 도달 터치가 있을
+                    # 때만 1콜. 순수 기록용이라 실패해도 그냥 NULL 로 남기고 진행한다
+                    # (알림·필터·판정에는 이 값이 어디에도 쓰이지 않는다).
+                    ratio = None
+                    if cfg_get("orderbook_pressure_enabled") and \
+                            any(p is not None for _id, p, _t in touches):
+                        try:
+                            ratio = upbit.fetch_orderbook_ratio(
+                                ticker, cfg_get("http_timeout_sec"))
+                        except Exception as e:  # noqa: BLE001 - 기록 실패 격리
+                            logger.warning("[체크] %s 호가 기록 실패(무시): %s", ticker, e)
+                    db.mark_touched(conn, touches, now, usdt_krw=usdt_krw,
+                                    bid_ask_ratio=ratio)
                 else:
                     for lid in ids:
                         db.mark_previewed(conn, lid, now)

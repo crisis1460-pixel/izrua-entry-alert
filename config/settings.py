@@ -116,6 +116,36 @@ SETTINGS = {
                                              # meta 키 보존기간 - 안 지우면 meta 테이블 무한증가
                                              # (2026-07-26 감사 minor, run_collect.py 가 정리)
 
+    # 업비트 거래소 리스크 공지 즉시경보 (2026-07-26 기획 카드 #5)
+    # 유의 종목 지정·거래지원 종료 공지를 감지해 추적 중인 코인이면 즉시 경보 +
+    # 대기 레벨 만료. 상세는 monitor/announcements.py 참고.
+    "announcement_alert_enabled": True,
+    # 폴링 주기 — 2분 주기 회차마다 부르지 않는다(meta TTL). 비문서화 API 라
+    # 예의상으로도, 무료 운영 원칙상으로도 하루 ~72콜 수준이 적당하다.
+    "announcement_poll_interval_minutes": 20,
+    "announcement_page_size": 30,        # 1페이지면 20분치 신규 공지를 충분히 덮는다
+    # 리스크 키워드 — 제목에 이 중 하나라도 있으면 후보
+    "announcement_risk_keywords": ["유의 종목", "유의종목", "거래지원 종료", "상장폐지"],
+    # 제외어 — 후보 중 이 단어가 있으면 리스크가 아니다. "거래 유의 종목 지정 해제
+    # 안내"(실측 제목)처럼 위험이 해소됐다는 공지가 키워드에 걸리기 때문. 이걸 빼면
+    # 안전해진 코인의 레벨을 도리어 만료시킨다.
+    "announcement_exclude_keywords": ["해제"],
+    # 이보다 오래된 공지는 무시 — 기능을 처음 켜는 회차에 과거 공지 수천 건이
+    # 한꺼번에 매칭돼 경보가 쏟아지는 것을 막는다. 다운타임(며칠)도 덮을 만큼 넉넉히.
+    "announcement_max_age_hours": 72,
+    # 발송 실패한 경보의 재시도 기한. 만료를 발송보다 먼저 하는 설계라, 텔레그램
+    # 장애로 못 보낸 경보는 대기 큐(meta)에 남겨 회차마다 재시도한다 — 레벨이 이미
+    # 만료돼 공지 재매칭으로는 되살릴 수 없기 때문(2026-07-26 리뷰 지적).
+    # 기한이 지나면 폐기: 며칠 늦은 리스크 공지는 소음이라 무한 재시도가 더 해롭다.
+    "announcement_pending_ttl_hours": 6,
+
+    # 호가 매수/매도 압력 기록 (2026-07-26 기획 카드 #19 — 폴백안 채택)
+    # 카드 #18(REST ticker 의 acc_bid_volume/acc_ask_volume 재활용)은 2026-07-26
+    # 무인증 실측에서 **해당 필드가 REST /v1/ticker 응답에 존재하지 않음**을 확인해
+    # 폐기했다(웹소켓 전용 필드). 대신 터치 확정 시에만 /v1/orderbook 1콜로 스냅샷.
+    # **순수 로깅** — 알림 본문·필터·등급 어디에도 반영하지 않는다(관찰기 동결 준수).
+    "orderbook_pressure_enabled": True,
+
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
     "universe_cache_path": "data/universe.json",

@@ -56,6 +56,43 @@ def fetch_volume_ranks(timeout: float) -> dict:
         return {}
 
 
+_ORDERBOOK_PACE_SEC = 0.12  # 초당 ~8콜 (한도 10의 80%) — 실측 헤더상 별도 그룹
+
+
+def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:
+    """호가 매수/매도 잔량비 = total_bid_size / total_ask_size. 실패 시 None.
+
+    왜 ticker 가 아니라 호가인가 (2026-07-26 실증): 기획 카드 #18 은 REST
+    /v1/ticker 의 acc_bid_volume/acc_ask_volume 를 재활용해 **API 호출 0회 증가**로
+    체결강도를 얻자는 안이었는데, 무인증 실측 결과 그 두 필드는 REST ticker 응답에
+    아예 없다(웹소켓 ticker 전용). 확인된 응답 키는 acc_trade_price/volume(_24h) 계열
+    뿐이라 매수·매도를 가를 방법이 없다 → 폴백 카드 #19 채택.
+
+    비용: 터치 확정 시에만 1콜. 터치는 레벨당 생애 1회뿐이라 호출량이 극소하고,
+    실측 `Remaining-Req` 헤더가 `group=orderbook; min=600; sec=9` 로 ticker/캔들과
+    레이트리밋 그룹이 분리돼 있어 판정용 예산을 전혀 갉아먹지 않는다.
+
+    **기록 전용** — 이 값은 알림 본문·필터·등급 어디에도 반영하지 않는다."""
+    try:
+        resp = requests.get(
+            f"{_BASE}/orderbook", params={"markets": market}, timeout=timeout
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return None
+        book = data[0]
+        bid = float(book.get("total_bid_size") or 0)
+        ask = float(book.get("total_ask_size") or 0)
+        time.sleep(_ORDERBOOK_PACE_SEC)
+        if ask <= 0 or bid <= 0:
+            return None     # 한쪽 잔량이 0 이면 비율이 무의미(또는 0 나눗셈)
+        return bid / ask
+    except Exception as e:  # noqa: BLE001 - 관찰 기록 실패가 터치 처리를 막으면 안 됨
+        logger.warning("[upbit] %s 호가 조회 실패: %s", market, e)
+        return None
+
+
 def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
     """52주 고가/저가 (KRW) — 주봉 52개의 최고 high / 최저 low. 실패 시 None.
     알림 발송 시에만 호출(회당 1콜)되므로 한도 부담 없음."""
