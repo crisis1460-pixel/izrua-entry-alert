@@ -236,7 +236,18 @@ def run_once(now: float = None) -> dict:
                     for lv in cluster:
                         e_krw = lv["entry_usd"] * usdt_krw if lv.get("entry_usd") else None
                         reached = e_krw is not None and eff_low <= e_krw
-                        touches.append((lv["id"], e_krw if reached else None))
+                        # 터치 앵커 = 실제 도달한 첫 캔들의 종료 시각 (2026-07-26 감사
+                        # major2: 감지 시각 앵커면 터치 캔들의 터치 이전 고가가 다음
+                        # 회차 판정에 섞이고, 소급 터치 구간이 영구 미판정이었다).
+                        # 진행 중 캔들이면 종료가 now 이후일 수 있음 — 판정부가
+                        # touched_at > now 인 행을 다음 회차로 미뤄 정합 유지.
+                        t_anchor = now
+                        if reached:
+                            for c in candles or []:
+                                if c[3] <= e_krw:
+                                    t_anchor = c[1]
+                                    break
+                        touches.append((lv["id"], e_krw if reached else None, t_anchor))
                     db.mark_touched(conn, touches, now, usdt_krw=usdt_krw)
                 else:
                     for lid in ids:
@@ -291,6 +302,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
             db.record_ret(conn, lv["id"], "ret_72h", ret_pct)
 
     for lv in db.get_unresolved_touched(conn):
+        if lv["touched_at"] > now:
+            continue  # 터치 캔들이 아직 진행 중 — 완성 후(다음 회차) 판정
         window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
         elapsed = now - lv["touched_at"]
         ticker = lv["ticker"]
@@ -333,7 +346,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
         ambiguous = False
         candles = get_range(ticker, 40) or []
         for (c_start, c_end, c_high, c_low) in candles:
-            if c_end <= lv["touched_at"]:
+            # 진행 중 캔들(c_end>now)은 제외 — 터치 이전 가격이 남아 있을 수 있고
+            # 15분봉 폴백에선 최대 15분치가 섞인다 (2026-07-26 감사 major2)
+            if c_end <= lv["touched_at"] or c_end > now:
                 continue
             tp_hit = tp_krw > 0 and c_high >= tp_krw
             sl_hit = sl_krw > 0 and c_low <= sl_krw

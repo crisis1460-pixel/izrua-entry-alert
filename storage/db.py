@@ -242,14 +242,19 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
 
 def mark_touched(conn, touches: list, now: Optional[float] = None,
                  usdt_krw: Optional[float] = None) -> None:
-    """touches: [(level_id, touch_price_krw|None), ...].
+    """touches: [(level_id, touch_price_krw|None, touched_at|None), ...].
 
     2026-07-24 감사 수정: 클러스터 상단 터치 시 하단 레벨(자기 엔트리 미도달)까지
     같은 기준가로 판정되던 편향 제거 — price=None 인 레벨은 '섀도 터치'(재알림
     방지용 상태 전이만, touched_at 없음 → 판정·통계에서 제외)로 처리하고,
-    도달 레벨은 자기 entry_krw(지정가 체결 모델)를 기준가로 저장한다."""
+    도달 레벨은 자기 entry_krw(지정가 체결 모델)를 기준가로 저장한다.
+
+    2026-07-26 감사 major2: touched_at 은 감지 시각이 아니라 '실제 도달한 첫 캔들의
+    종료 시각'(호출부 계산, 진행 중 캔들이면 미래일 수 있음)을 앵커로 받는다 —
+    감지 시각 앵커면 터치 캔들 전체가 다음 회차 판정 필터(c_end<=touched_at)를
+    통과해 터치 이전 가격이 판정에 섞였다."""
     now = now or time.time()
-    for lid, price in touches:
+    for lid, price, t_anchor in touches:
         if price is None:
             conn.execute(
                 "UPDATE levels SET status='touched' "
@@ -258,7 +263,7 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
             conn.execute(
                 "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
                 "touch_usdt_krw=? WHERE id=? AND status IN ('watching','previewed')",
-                (now, price, usdt_krw, lid))
+                (t_anchor or now, price, usdt_krw, lid))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────

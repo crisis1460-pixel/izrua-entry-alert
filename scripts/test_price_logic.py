@@ -257,6 +257,27 @@ price_check.run_once(now + 700)
 o18 = outcome_of(lid18)
 check("T18 오염 방어선 - 불량 tp/sl 무시·미종결", o18["outcome"] is None)
 
+# T19: 터치 앵커 - TP 스윕과 터치가 같은(진행 중) 캔들에서 난 급락에서, 캔들 고가
+#      (터치 이전 가격)가 판정에 못 섞이고 touched_at 이 캔들 종료시각으로 앵커됨
+with db.connect(TEST_DB) as conn:
+    lv19 = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long", entry_usd=10.0,
+                sl_usd=9.0, tp_usd=12.0, rr=2.0, grade="B", score=60, author="A_t19",
+                author_followers=1, author_hit_rate=None, author_hit_count=None,
+                author_whitelisted=False, mcap_rank=50, mcap_tier_icon="🥇",
+                post_url="https://tv.com/t19", post_age_minutes=10, collected_at=now)
+    lv19["signal_key"] = db.make_signal_key("LINK", 10.0, "A_t19", lv19["post_url"])
+    db.upsert_level(conn, lv19)
+fake["price"] = 10.1 * USDT_KRW
+fake["candles"] = [(now + 740, now + 800, 12.5 * USDT_KRW, 9.9 * USDT_KRW)]
+price_check.run_once(now + 780)   # 캔들 진행 중(end 800 > 780)에 터치 감지
+price_check.run_once(now + 900)   # 캔들 완성 후에도 터치 캔들은 판정 제외
+with db.connect(TEST_DB) as conn:
+    r19 = conn.execute("SELECT outcome, touched_at FROM levels WHERE signal_key=?",
+                       (lv19["signal_key"],)).fetchone()
+check("T19 터치캔들 고가 미오염 + 종료시각 앵커",
+      r19["outcome"] is None and abs(r19["touched_at"] - (now + 800)) < 1e-6)
+fake["candles"] = None
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
