@@ -308,8 +308,19 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
         t_rate = lv.get("touch_usdt_krw")
         base_eff = base * (usdt_krw / t_rate) if t_rate else base
 
-        tp_krw = (lv.get("tp_usd") or 0) * usdt_krw
-        sl_krw = (lv.get("sl_usd") or 0) * usdt_krw
+        # 오염 방어선(2026-07-26 감사 major1): 방향·크기 sanity 위반 tp/sl 은 '없음' 취급.
+        # raw_text 없는 구세대 행은 reparse/업서트 자동치유가 닿지 않아(ALGO tp=1.0 사례)
+        # 서수 오인 값이 판정까지 흘러올 수 있다 — extractor 크기 규칙(0.25x~4x)과 동일 기준.
+        entry_usd = lv.get("entry_usd") or 0
+        tp_usd = lv.get("tp_usd") or 0
+        sl_usd = lv.get("sl_usd") or 0
+        if lv.get("direction") == "long" and entry_usd > 0:
+            if tp_usd and not (entry_usd < tp_usd <= entry_usd * 4):
+                tp_usd = 0
+            if sl_usd and not (entry_usd * 0.25 <= sl_usd < entry_usd):
+                sl_usd = 0
+        tp_krw = tp_usd * usdt_krw
+        sl_krw = sl_usd * usdt_krw
 
         def _r(resolve_krw):
             if sl_krw <= 0 or entry_krw <= sl_krw:

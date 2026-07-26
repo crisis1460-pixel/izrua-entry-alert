@@ -249,6 +249,14 @@ with db.connect(TEST_DB) as conn:
     after = conn.execute("SELECT tp_usd FROM levels WHERE id=?", (lid12,)).fetchone()
 check("T17 불변스냅샷 - touched 레벨 tp 유지", abs(after["tp_usd"] - 14.0) < 1e-9)
 
+# T18: 오염 방어선 - 서수 오인 tp(=1.0)·엔트리 위 sl 은 '없음' 취급 → 즉시 가짜 판정 방지
+#      (방어선 없으면 tp_krw=1400 < 현재가라 스냅샷 폴백이 즉시 가짜 hit 을 기록한다)
+lid18 = add_touched("LINK", 10.0, 15.0, 1.0, 3600, "t18")
+fake["price"] = 10.5 * USDT_KRW; fake["low"] = 10.2 * USDT_KRW; fake["high"] = 10.8 * USDT_KRW
+price_check.run_once(now + 700)
+o18 = outcome_of(lid18)
+check("T18 오염 방어선 - 불량 tp/sl 무시·미종결", o18["outcome"] is None)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
