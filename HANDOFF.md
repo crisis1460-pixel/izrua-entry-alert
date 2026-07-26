@@ -69,7 +69,8 @@ check_secrets), `ALERT_BOT_PLAN.md`·`ACCURACY_DB_PLAN.md`(확정 기획서 — 
 
 ## 5. 검증 이력 (신뢰 기준선)
 
-- 테스트: `scripts/test_extractor.py` 25/25, `scripts/test_price_logic.py` 27/27 — **push 전 필수 실행**
+- 테스트 3종: `scripts/test_extractor.py` 25/25, `scripts/test_price_logic.py` 30/30,
+  `scripts/test_ranking.py` 15개 — **push 전 필수 실행** (2026-07-26 T18~20·랭킹 추가)
 - 전수감사 3회(멀티에이전트): 1차 15건 + 2차 major3/minor2 전부 수정 완료, critical 0 수렴
 - 실전 버그 이력(회귀 테스트 있음): TP 서수 오인("TP1:"의 1을 가격으로), 20xx 가격을 연도로
   삭제, 터치 이전 캔들이 판정 오염, collect 큐 기아, 커밋백 abort로 재시도 사망
@@ -94,9 +95,9 @@ check_secrets), `ALERT_BOT_PLAN.md`·`ACCURACY_DB_PLAN.md`(확정 기획서 — 
 **사용자 액션 대기**: ① 업비트 구 API 키 폐기 확인(업비트 웹) ② upbit_bot 폴더 완전삭제 승인
 **관찰 후 진행**: ③ 알림량 필터 조정 — 합의된 순서: 이미-터치 무알림 → C→B → 3→2건/일
 **고도화 백로그** (ACCURACY_DB_PLAN 2단계, 리서치 완료 상태):
-- 보수적 기대값 랭킹 E_LB = mean_w(R) − 1.28·std_w(R)/√n_eff (소표본 자동 하향)
-- 베이지안 수축: 워쳐 적중률을 사전분포 Beta(m·p+1, m(1−p)+1), m=10 → 자연 졸업
-- 최신성 가중 w=0.5^(경과일/90), n_eff 기반 게이트(현행 raw n≥5 → n_eff≥5)
+- ~~E_LB·베이지안 수축·최신성 가중~~ → **구현됨(2026-07-26)**: `analytics/ranking.py`
+  (카드 확정: R NULL 은 2트랙, prior 강도 m_eff=min(10,워쳐표본), 노출은 주간 리포트만,
+  알림은 게이트 교체(raw n≥5→n_eff≥5)만. 상세: izrua_company/dev_a/sprint01_ELB설계.md)
 - 주간 텔레그램 리포트(터치 N건 → 승/패/진행, 작성자 순위)
 - E_LB 지속 음수 작성자 역신호 태깅(Finfluencers: 56%가 anti-skilled)
 - 동시터치 ambiguous 건 하위 타임프레임 재검사(Bar Magnifier 방식)

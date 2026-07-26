@@ -39,6 +39,13 @@ SETTINGS = {
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
     "alert_max_per_coin_per_day": 3,     # 코인당 하루 알림 상한
 
+    # 작성자 랭킹 (ACCURACY_DB_PLAN 2단계, 2026-07-26 카드 확정 — 표시·리포트용, 필터 미사용)
+    "rank_half_life_days": 90,           # 최신성 가중 반감기 (w=0.5^(경과일/90))
+    "rank_z": 1.28,                      # E_LB 80% 단측 신뢰하한 계수
+    "rank_prior_m": 10,                  # 워쳐 prior 최대 강도 (m_eff=min(m, 워쳐표본))
+    "rank_min_neff": 5,                  # 자체 승률 표시·랭킹 등재 게이트 (raw n≥5 대체)
+    "rank_grade_neff": 30,               # 등급 부여 게이트 (3단계, 향후)
+
     # 네트워크
     "http_timeout_sec": 10.0,
 

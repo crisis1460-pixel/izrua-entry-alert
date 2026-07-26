@@ -132,7 +132,11 @@ def _author_block(rep: dict) -> list:
     # 자체 성적은 별도 줄 (이모지로 윗줄과 시작 위치 정렬). C안 함축 표기로 한 줄 유지
     # (2026-07-24 사용자 확정: "승률67% (4승2패) 터치율67%").
     self_line = None
-    if wins + losses >= _SELF_STATS_MIN_N:
+    # 게이트: 주입된 n_eff(최신성 가중 유효표본, 2026-07-26 카드 확정) 우선,
+    # 미주입이면 raw 폴백 (렌더러 단독 호출 테스트 호환)
+    _neff = rep.get("author_self_neff")
+    _gate_n = _neff if _neff is not None else wins + losses
+    if _gate_n >= _SELF_STATS_MIN_N:
         rate = wins / (wins + losses) * 100
         self_line = f"🏹 승률{rate:.0f}% ({wins}승{losses}패)"
         # 터치율 병기 (선택편향 처방, ACCURACY_DB_PLAN — 표본 5건↑일 때만)

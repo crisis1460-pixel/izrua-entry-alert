@@ -277,14 +277,32 @@ def get_unresolved_touched(conn) -> list:
     ).fetchall()]
 
 
-def get_ret_pending(conn) -> list:
+def get_ret_pending(conn, now: Optional[float] = None) -> list:
     """24h/72h 수익률 기록 대상 — 종결 여부와 무관 (2026-07-24 감사 수정:
-    조기 종결 건도 수익률은 계속 기록해야 데이터셋에 생존편향이 안 박힘)."""
+    조기 종결 건도 수익률은 계속 기록해야 데이터셋에 생존편향이 안 박힘).
+
+    2026-07-26 감사 minor5: 기록 가능 시한(24h+6h / 72h+6h 허용오차)을 이미 넘긴
+    행은 제외 — 구세대 결손 행이 매 회차 영구 선택되며 시세조회 티커 목록을
+    좀비로 불리던 문제."""
+    now = now or time.time()
     return [dict(r) for r in conn.execute(
         "SELECT id, ticker, touched_at, touch_price_krw, touch_usdt_krw, entry_usd, "
         "ret_24h, ret_72h FROM levels WHERE touched_at IS NOT NULL "
-        "AND (ret_24h IS NULL OR ret_72h IS NULL)"
+        "AND ((ret_24h IS NULL AND touched_at >= ?) "
+        "  OR (ret_72h IS NULL AND touched_at >= ?))",
+        (now - 30 * 3600, now - 78 * 3600)
     ).fetchall()]
+
+
+def get_author_outcome_rows(conn, author: Optional[str]) -> list:
+    """작성자의 종결 표본 원천 행 — analytics.ranking 계산용 (작성자 통계는 저장하지
+    않고 매번 집계, ACCURACY_DB_PLAN 원천 보존 원칙). 섀도 터치는 자동 제외."""
+    if not author:
+        return []
+    return [dict(r) for r in conn.execute(
+        "SELECT outcome, r_multiple, touched_at, author_hit_rate, author_hit_count "
+        "FROM levels WHERE author=? AND outcome IS NOT NULL AND touched_at IS NOT NULL",
+        (author,)).fetchall()]
 
 
 def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
@@ -336,7 +354,14 @@ def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
         "WHERE status IN ('watching','previewed') AND collected_at < ?",
         (now, cutoff),
     )
-    return cur.rowcount
+    # 섀도 터치(재알림 방지용 전이만, 판정·통계 제외)도 수명이 다하면 만료 —
+    # 안 하면 영구 잔류하며 stats() 의 touched 집계를 오염 (2026-07-26 감사 minor8)
+    cur2 = conn.execute(
+        "UPDATE levels SET status='expired', expired_at=? "
+        "WHERE status='touched' AND touched_at IS NULL AND collected_at < ?",
+        (now, cutoff),
+    )
+    return cur.rowcount + cur2.rowcount
 
 
 def count_alerts_today(conn, coin_symbol: str, day_kst: str, kind: Optional[str] = None) -> int:

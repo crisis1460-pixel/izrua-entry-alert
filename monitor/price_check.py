@@ -18,6 +18,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+from analytics import ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
 from config import settings
 from monitor import upbit
 from notify import telegram
@@ -85,7 +86,7 @@ def run_once(now: float = None) -> dict:
 
         levels = db.get_active_levels(conn, direction="long")
         unresolved = db.get_unresolved_touched(conn)  # 적중판정 대상 (활성과 별개)
-        ret_pending = db.get_ret_pending(conn)        # 24/72h 수익률 기록 대상 (종결 무관)
+        ret_pending = db.get_ret_pending(conn, now)   # 24/72h 수익률 기록 대상 (종결 무관)
         if not levels and not unresolved and not ret_pending:
             _save_last_check(conn, now)
             logger.info("[체크] 활성/판정/수익률 대상 레벨 없음")
@@ -214,6 +215,12 @@ def run_once(now: float = None) -> dict:
                         lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
                         lv["author_touched_n"] = st["touched"]
                         lv["author_untouched_expired"] = st["untouched_expired"]
+                        # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →
+                        # n_eff≥5. 최신성 가중 유효표본 — 데이터가 젊은 동안은 raw 동일)
+                        hl = cfg_get("rank_half_life_days")
+                        lv["author_self_neff"] = ranking.effective_n([
+                            ranking.recency_weight(now, r["touched_at"], hl)
+                            for r in db.get_author_outcome_rows(conn, lv.get("author"))])
                     # 52주 고저 + 김프는 발송 확정건에만 조회 (회당 업비트 1콜 + 바이낸스 1콜)
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
@@ -293,7 +300,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
 
     # ── 24h/72h 수익률 — 종결 여부 무관 + 도과 6시간 허용오차 안에서만 기록
     #    (다운타임 뒤 70시간짜리 값이 '24h'로 오라벨되느니 NULL 이 낫다 — 감사 수정)
-    for lv in db.get_ret_pending(conn):
+    for lv in db.get_ret_pending(conn, now):
         current = prices.get(lv["ticker"])
         base = lv.get("touch_price_krw")
         if not current or not base or not lv.get("touched_at"):
@@ -318,8 +325,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get) -> int:
         if not current or not usdt_krw or entry_krw <= 0:
             if elapsed > window_sec + 14 * 86400:
                 conn.execute(
-                    "UPDATE levels SET status='expired' WHERE id=? AND outcome IS NULL",
-                    (lv["id"],))
+                    "UPDATE levels SET status='expired', expired_at=? "
+                    "WHERE id=? AND outcome IS NULL", (now, lv["id"]))
                 logger.info("[적중판정] %s 시세 조회 불가 지속 - 판정불능 제외", ticker)
             continue
 
