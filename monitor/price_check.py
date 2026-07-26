@@ -18,7 +18,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from analytics import ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
+from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
 from config import settings
 from monitor import upbit
 from notify import telegram
@@ -84,25 +84,33 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
 
 
 def _build_clusters(levels: list, band_pct: float) -> list:
-    """엔트리 내림차순 greedy 병합. 반환: [ [level,...](entry 내림차순), ... ]"""
-    with_entry = [l for l in levels if l.get("entry_usd")]
-    with_entry.sort(key=lambda l: l["entry_usd"], reverse=True)
-    clusters, used = [], set()
-    for lv in with_entry:
-        if lv["id"] in used:
-            continue
-        top = lv["entry_usd"]
-        group = [l for l in with_entry
-                 if l["id"] not in used and l["entry_usd"] >= top * (1 - band_pct / 100.0)]
-        for g in group:
-            used.add(g["id"])
-        clusters.append(group)
-    return clusters
+    """엔트리 내림차순 greedy 병합. 반환: [ [level,...](entry 내림차순), ... ]
+
+    2026-07-26 리팩터: 규칙 본체는 analytics.clustering.build_clusters 로 옮겨
+    정본(canonical)을 그쪽 하나로 통일했다(주간 리포트 쪽 confluence 집계와 동일
+    정의 보장 — 예전엔 이 함수와 클러스터링 모듈에 같은 규칙이 두 곳 있었다).
+    실시간 경로는 window_sec 제약이 필요 없으므로(항상 '지금 동시에 살아있는'
+    레벨만 넘어옴) 시간 인자 없이 위임한다 — 동작은 이전과 완전히 동일
+    (scripts/test_price_logic.py 클러스터 회귀 테스트로 증명)."""
+    return clustering.build_clusters(levels, band_pct)
 
 
 def _rep(cluster: list) -> dict:
     """대표 레벨 = 등급점수 최고 (필터/표시 기준)."""
     return max(cluster, key=lambda l: l.get("score") or 0)
+
+
+def _tp_distance_penalty(direction: str, entry, target) -> float:
+    """'목표 거리 감점' 폭(양수)만 돌려준다 — 관찰집계의 되돌림 판정 전용.
+
+    2026-07-26 사용자 결정: 감점이 없었으면 알림이 나갔을 억제 건수를 기록한다.
+    최초엔 규칙을 여기 복제했으나(당시 grading.py 를 다른 개발자가 편집 중),
+    같은 날 배점표가 grading.TP_DISTANCE_BANDS 로 단일화되면서 위임으로 정리했다 —
+    출처가 하나뿐이라 드리프트 자체가 발생할 수 없다."""
+    from collector.grading import tp_distance_points  # 순환 import 방지 지연 로드
+    # has_rr=True → 감점 구간(<5%)만 반환하고 SL 미기재 글의 대체 가점은 제외한다.
+    # (이 함수의 용도는 '감점 폭 역산' 하나뿐)
+    return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
 def run_once(now: float = None) -> dict:
@@ -159,10 +167,17 @@ def run_once(now: float = None) -> dict:
         min_grade = cfg_get("alert_min_grade")
         daily_cap = cfg_get("alert_max_per_coin_per_day")
         day = _day_kst(now)
+        # 관찰 집계(스프린트5) — 알림 발송과 무관하게 조용히 누적만 한다. 필터로
+        # 억제돼도 여기엔 반드시 잡힌다(방금 들어간 TP 근접도 감점의 효과 측정 등).
+        obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
+               "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
+               "suppressed_grade_tp_penalty_only": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
 
-        from collector.grading import meets_min_grade, regrade_current  # 순환 import 방지 지연 로드
+        # 순환 import 방지 지연 로드. grade_from_score 는 grading.py 를 고치지 않고
+        # 이미 있는 순수 함수를 읽기 전용으로 재사용하는 용도(TP 감점 되돌림 판정).
+        from collector.grading import grade_from_score, meets_min_grade, regrade_current
         from monitor import market_sentiment
 
         # 시장 심리(BTC.D/ALT.S/F&G)는 실제로 알림을 보낼 때만 1회 지연 조회
@@ -235,7 +250,11 @@ def run_once(now: float = None) -> dict:
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"
 
+                # 관찰 집계: 필터·중복 여부와 무관한 원(raw) 이벤트 발생 카운트
+                obs["touches_total" if touched else "previews_total"] += 1
+
                 if kind == "preview" and any(l["status"] == "previewed" for l in cluster):
+                    obs["suppressed_dup"] += 1
                     continue  # 이미 예고한 클러스터
 
                 # 등급 재평가 (2026-07-26 감사: freeze 결함 수정) — calculate_grade 의
@@ -255,10 +274,22 @@ def run_once(now: float = None) -> dict:
                 # 소진해 정작 본알림이 영구 소실되던 문제 — 예고는 클러스터당 1회라
                 # 자체 상한이 이미 있음)
                 send_ok = meets_min_grade(rep.get("grade") or "D", min_grade)
+                if not send_ok:
+                    obs["suppressed_grade"] += 1
+                    # suppressed_grade 의 부분집합(중복 카운트 아님) - TP 거리 감점만
+                    # 되돌린 점수였다면 min_grade 를 통과했을 건. 방금 들어간 목표거리
+                    # 감점의 억제 효과를 분리 측정하려는 관찰 지표(2026-07-26 결정).
+                    tp_penalty = _tp_distance_penalty(
+                        rep.get("direction"), rep.get("entry_usd"), rep.get("tp_usd"))
+                    if tp_penalty > 0:
+                        reverted_grade = grade_from_score((rep.get("score") or 0) + tp_penalty)
+                        if meets_min_grade(reverted_grade, min_grade):
+                            obs["suppressed_grade_tp_penalty_only"] += 1
                 if send_ok and kind == "touch" and \
                         db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
                     logger.info("[체크] %s 일일 본알림 상한 도달 - 억제", coin)
                     send_ok = False
+                    obs["suppressed_cap"] += 1
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -290,6 +321,7 @@ def run_once(now: float = None) -> dict:
                         summary["touches" if touched else "previews"] += 1
                     else:
                         summary["suppressed"] += 1
+                        obs["suppressed_send_fail"] += 1
                 else:
                     summary["suppressed"] += 1
 
@@ -325,6 +357,10 @@ def run_once(now: float = None) -> dict:
         # ── 적중 판정 (ACCURACY_DB_PLAN 1단계 — 조용한 누적, 표시·필터 무관) ──
         summary["resolved"] = _judge_outcomes(
             conn, prices, usdt_krw, _get_range, now, cfg_get)
+
+        # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
+        db.bump_daily_stats(conn, day, **obs)
+        db.prune_daily_stats(conn, now)
 
         _save_last_check(conn, now)
 

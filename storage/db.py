@@ -14,8 +14,11 @@ import hashlib
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+_KST = timezone(timedelta(hours=9))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS levels (
@@ -63,6 +66,28 @@ CREATE INDEX IF NOT EXISTS idx_alerts_day ON alerts_log(coin_symbol, day_kst);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- 관찰 집계 (스프린트5 "알림량 관찰기" — 조용히 누적만, 발송 없음).
+-- 신규 수집 건수(levels.collected_at)와 발송 건수(alerts_log)는 이미 원본이 있어
+-- 여기 중복 저장하지 않고 조회 시점에 집계한다(get_observation_report). 여기엔
+-- 다른 곳엔 없는 값 — 필터 억제 전 '원(raw) 이벤트'와 억제 사유별 건수만 쌓는다.
+-- 보존기간 60일(prune_daily_stats) — 하루 1행이라 자연히 가벼움.
+CREATE TABLE IF NOT EXISTS daily_stats (
+    day_kst              TEXT PRIMARY KEY,          -- YYYY-MM-DD (KST)
+    touches_total        INTEGER NOT NULL DEFAULT 0, -- 필터 무관 전체 터치 발생(클러스터 단위)
+    previews_total       INTEGER NOT NULL DEFAULT 0, -- 필터 무관 전체 예고 발생
+    suppressed_grade     INTEGER NOT NULL DEFAULT 0, -- 등급 미달로 억제
+    suppressed_cap       INTEGER NOT NULL DEFAULT 0, -- 코인당 일일 상한으로 억제
+    suppressed_dup       INTEGER NOT NULL DEFAULT 0, -- 이미 예고됨(중복) 억제
+    suppressed_send_fail INTEGER NOT NULL DEFAULT 0, -- 필터는 통과했으나 텔레그램 발송 실패
+    -- suppressed_grade 의 부분집합(중복 카운트 아님!) — 2026-07-26 목표거리 감점 도입
+    -- 효과를 분리 측정하려는 사용자 결정. "등급 미달로 억제된 건" 중에서 "그 감점만
+    -- 되돌리면 alert_min_grade 를 통과했을 건"만 별도 표시한다. suppressed_grade 는
+    -- 이 값을 포함한 채로 그대로 유지(둘 다 봐야 "감점 때문에 억제 vs 원래도 미달"이
+    -- 갈린다).
+    suppressed_grade_tp_penalty_only INTEGER NOT NULL DEFAULT 0,
+    updated_at           REAL
 );
 """
 
@@ -452,3 +477,92 @@ def stats(conn) -> dict:
         "expired": n("status='expired'"),
         "total": conn.execute("SELECT COUNT(*) AS n FROM levels").fetchone()["n"],
     }
+
+
+# ── 관찰 집계 (스프린트5 알림량 관찰기, 2026-07-26) ──────────────────────
+# "알림이 많다/적다"를 감이 아니라 숫자로 보기 위한 조용한 누적. 알림 발송과
+# 무관하게 매 가격체크 회차(monitor.price_check.run_once)가 하루 1행을 갱신한다.
+
+_DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
+                     "suppressed_cap", "suppressed_dup", "suppressed_send_fail",
+                     "suppressed_grade_tp_penalty_only")
+
+
+def bump_daily_stats(conn, day_kst: str, **deltas) -> None:
+    """관찰 집계 증분 반영(회차당 1회 호출 권장 — 여러 클러스터분을 합산해서 넘긴다).
+    deltas 키는 _DAILY_STATS_COLS 중 일부만 넘겨도 된다(나머지는 0 취급).
+    전부 0이면 쓰기 자체를 생략한다(불필요한 커밋 소음 방지)."""
+    vals = {c: int(deltas.get(c, 0)) for c in _DAILY_STATS_COLS}
+    if not any(vals.values()):
+        return
+    conn.execute(
+        f"""INSERT INTO daily_stats (day_kst, {', '.join(_DAILY_STATS_COLS)}, updated_at)
+            VALUES (?, {', '.join('?' for _ in _DAILY_STATS_COLS)}, ?)
+            ON CONFLICT(day_kst) DO UPDATE SET
+              {', '.join(f'{c} = {c} + excluded.{c}' for c in _DAILY_STATS_COLS)},
+              updated_at = excluded.updated_at""",
+        (day_kst, *[vals[c] for c in _DAILY_STATS_COLS], time.time()),
+    )
+
+
+def prune_daily_stats(conn, now: Optional[float] = None, keep_days: int = 60) -> int:
+    """보존기간(기본 60일) 넘은 관찰집계 삭제 — DB 무한 증가 방지. 반환: 삭제 행 수."""
+    now = now or time.time()
+    cutoff_day = datetime.fromtimestamp(now - keep_days * 86400, tz=_KST).strftime("%Y-%m-%d")
+    cur = conn.execute("DELETE FROM daily_stats WHERE day_kst < ?", (cutoff_day,))
+    return cur.rowcount
+
+
+def get_daily_stats(conn, days: int = 30) -> list:
+    """최근 N일 관찰집계 원본 행(날짜 내림차순). 화면 표시는 get_observation_report 권장."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM daily_stats ORDER BY day_kst DESC LIMIT ?", (days,)
+    ).fetchall()]
+
+
+def get_collected_counts_by_day(conn, days: int = 30) -> dict:
+    """일자별(KST) 신규 수집 건수 — levels.collected_at 원본을 그대로 집계
+    (별도 저장 없음, ACCURACY_DB_PLAN 원천 보존 원칙과 동일 취지)."""
+    rows = conn.execute(
+        "SELECT strftime('%Y-%m-%d', collected_at, 'unixepoch', '+9 hours') AS d, "
+        "COUNT(*) AS n FROM levels GROUP BY d ORDER BY d DESC LIMIT ?", (days,)
+    ).fetchall()
+    return {r["d"]: r["n"] for r in rows}
+
+
+def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
+    """일자별 실제 발송 알림 건수(예고+본알림 합계) — 기존 alerts_log 재활용,
+    중복 집계 없음."""
+    rows = conn.execute(
+        "SELECT day_kst, COUNT(*) AS n FROM alerts_log GROUP BY day_kst "
+        "ORDER BY day_kst DESC LIMIT ?", (days,)
+    ).fetchall()
+    return {r["day_kst"]: r["n"] for r in rows}
+
+
+def get_observation_report(conn, days: int = 30) -> list:
+    """관찰기 판단용 통합 뷰 — 일자별 [수집/터치/예고/발송/억제사유] 한 줄 요약.
+    이번 스프린트는 '쌓기'까지가 범위라 아직 어디서도 호출하지 않지만, 다음
+    스프린트의 주간 리포트 노출을 위해 조회 함수만 미리 준비해 둔다."""
+    collected = get_collected_counts_by_day(conn, days)
+    sent = get_alerts_sent_by_day(conn, days)
+    stats_rows = get_daily_stats(conn, days)
+    by_day = {r["day_kst"]: r for r in stats_rows}
+    all_days = sorted(set(collected) | set(sent) | set(by_day), reverse=True)[:days]
+    out = []
+    for d in all_days:
+        s = by_day.get(d, {})
+        out.append({
+            "day_kst": d,
+            "collected": collected.get(d, 0),
+            "touches_total": s.get("touches_total", 0),
+            "previews_total": s.get("previews_total", 0),
+            "alerts_sent": sent.get(d, 0),
+            "suppressed_grade": s.get("suppressed_grade", 0),
+            "suppressed_cap": s.get("suppressed_cap", 0),
+            "suppressed_dup": s.get("suppressed_dup", 0),
+            "suppressed_send_fail": s.get("suppressed_send_fail", 0),
+            # suppressed_grade 의 부분집합(합산 대상 아님) - TP 거리 감점 효과 분리용
+            "suppressed_grade_tp_penalty_only": s.get("suppressed_grade_tp_penalty_only", 0),
+        })
+    return out

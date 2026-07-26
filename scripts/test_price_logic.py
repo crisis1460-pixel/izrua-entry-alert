@@ -14,6 +14,7 @@ from config import settings
 from storage import db
 from monitor import price_check, upbit
 from notify import telegram
+from analytics import clustering
 
 _real_fetch_range_since = upbit.fetch_range_since  # 아래에서 price_check 테스트용으로
                                                     # upbit.fetch_range_since 를 몽키패치
@@ -494,20 +495,12 @@ with db.connect(TEST_DB) as conn:
     s23d = price_check._check_collect_silence(conn, now, settings.get)
 check("T23d 최근 24h 내 수집 있음 - 정상(무경고)", s23d is False and not sent_messages)
 
-# T24: 목표 거리 감점 (2026-07-26 A안) — 초근접 TP 는 감점돼 알림에서 빠진다
-from collector.grading import calculate_grade as _cg  # noqa: E402
-_g_close, _s_close, _ = _cg(500, "long", 100.0, None, 101.5, 100.0)   # TP +1.5%
-_g_far, _s_far, _ = _cg(500, "long", 100.0, None, 110.0, 100.0)       # TP +10%
-check("T24 초근접 TP 감점 (-6점)", abs((_s_far - _s_close) - 6) < 1e-9)
-check("T24b 감점으로 등급 하락", _g_close == "D" and _g_far == "C")
-# 중간 구간(2~3%: -4 / 3~5%: -2)과 5%↑ 무감점
-_, _s_25, _ = _cg(500, "long", 100.0, None, 102.5, 100.0)
-_, _s_40, _ = _cg(500, "long", 100.0, None, 104.0, 100.0)
-check("T24c 구간별 감점", abs((_s_far - _s_25) - 4) < 1e-9 and abs((_s_far - _s_40) - 2) < 1e-9)
-# 숏 방향도 대칭 적용 (long 전용 버그 방지)
-_, _s_short_close, _ = _cg(500, "short", 100.0, None, 98.5, 100.0)
-_, _s_short_far, _ = _cg(500, "short", 100.0, None, 90.0, 100.0)
-check("T24d 숏 대칭", abs((_s_short_far - _s_short_close) - 6) < 1e-9)
+# T24(목표 거리 감점 단독 검증)는 scripts/test_grading.py 로 이관됐다 —
+# 2026-07-26 등급 배점 재조정으로 "SL 없음 + TP +10%" 픽스처가 더 이상 '감점 0
+# 기준선'이 아니게 됐고(대체 가점 +20이 붙음), T24b 의 기대값("SL 없고 TP +10% 인
+# 글은 C 가 한계")은 이번 결정으로 없애기로 한 규칙 그 자체라 무효가 됐다.
+# 배점표 검증은 test_grading.py G2/G6/G7c 가 담당한다.
+
 # T25: 텔레그램 HTML 안전성 — 렌더 결과에 이스케이프 안 된 '<' 가 있으면
 #      parse_mode=HTML 발송이 400 으로 실패한다(2026-07-26 주간리포트 첫 발송 실패 원인)
 import re as _re  # noqa: E402
@@ -524,6 +517,264 @@ check("T25 알림 렌더 HTML 안전",
       not _unescaped_lt(telegram.render_alert("touch", "LINK", [_rep25], 14000.0, 1400)))
 check("T25b 급감경고 HTML 안전",
       not _unescaped_lt(telegram.render_collect_silence_alert(24, 9.0)))
+
+# ── T26~T28: 관찰 집계 (스프린트5 "알림량 관찰기") ────────────────────
+# 지금까지(T1~T22) 실제로 발생한 원시 이벤트를 손계산해 절대값으로 검증한다.
+# touches_total: T4(LINK 8.30 클러스터 터치) + T6(7.50 직터치) + T7(7.00, 상한억제돼도
+#                raw 이벤트로는 터치) + T19(캔들 앵커 검증용 신규 LINK 10.0, 상한억제)
+#                + T20(수집전 캔들 차단 검증용 신규 LINK 9.5, 상한억제) = 5
+#                (T8~T18/T21은 add_touched() 로 곧장 'touched' 상태로 꽂아 활성
+#                레벨 루프를 타지 않는다 — 재채점/집계 대상이 아니라 raw 카운트 무관)
+# previews_total: T2(LINK 예고) + T3(중복 예고 시도) + T22(EGLD 재채점 예고) = 3
+# suppressed_dup: T3 하나(이미 예고된 클러스터 재시도)
+# suppressed_cap: T7 + T19 + T20 = 3건(모두 일일상한 2건을 이미 채운 LINK)
+# suppressed_grade / suppressed_send_fail 은 이 구간엔 발생 안 함(T27/T28에서 별도 검증)
+obs_day = price_check._day_kst(now)
+
+
+def _obs_row(day=None):
+    with db.connect(TEST_DB) as conn:
+        rows = db.get_daily_stats(conn, days=60)
+    return next((r for r in rows if r["day_kst"] == (day or obs_day)), None)
+
+
+row26 = _obs_row()
+check("T26 관찰집계 - 터치 raw 5건(필터 무관)", row26 is not None and row26["touches_total"] == 5)
+check("T26b 관찰집계 - 예고 raw 3건(필터 무관)", row26["previews_total"] == 3)
+check("T26c 관찰집계 - 중복예고 억제 1건", row26["suppressed_dup"] == 1)
+check("T26d 관찰집계 - 일일상한 억제 3건", row26["suppressed_cap"] == 3)
+check("T26e 관찰집계 - 등급미달/발송실패는 아직 0건(T27/T28에서 검증)",
+      row26["suppressed_grade"] == 0 and row26["suppressed_send_fail"] == 0
+      and row26["suppressed_grade_tp_penalty_only"] == 0)
+
+# T27: 등급 미달(재채점해도 D)로 억제되는 경우 - 방금 들어간 TP 근접도 감점 효과를
+# 재는 핵심 지표라 별도로 정확히 검증한다. followers=1(+1) / SL 없음(rr 미계산,+0) /
+# 근접도 abs<2%(+20) / TP+0.5%로 초근접 감점(-6) / 완결성 has_entry+target(+20, has_stop
+# 없어 +10 없음) = 35점 -> D. min_grade='C' 라 필터 탈락.
+# 이 케이스는 감점(-6)을 되돌리면 41점 -> C가 돼 min_grade('C')를 통과한다 - 즉
+# "TP 감점 때문에 억제된" 표본이라 suppressed_grade_tp_penalty_only 도 함께 +1돼야 함
+# (2026-07-26 사용자 결정: 감점 효과를 분리 측정).
+with db.connect(TEST_DB) as conn:
+    lv27 = dict(coin_symbol="ZGRD", ticker="KRW-ZGRD", direction="long",
+                entry_usd=5.0, sl_usd=None, tp_usd=5.025, rr=None, grade="B", score=60,
+                author="Auth27", author_followers=1, author_hit_rate=None,
+                author_hit_count=None, author_whitelisted=False, mcap_rank=190,
+                mcap_tier_icon="🥉", post_url="https://tv.com/u27", post_age_minutes=10,
+                collected_at=now - 600)
+    lv27["signal_key"] = db.make_signal_key("ZGRD", 5.0, "Auth27", "u27")
+    db.upsert_level(conn, lv27)
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 5.0 * USDT_KRW * 0.999  # entry 대비 -0.1% - 터치 + 근접도 만점권
+sent_before27 = len(sent_messages)
+price_check.run_once(now + 1310)
+row27 = _obs_row()
+check("T27 등급미달 - 무알림", len(sent_messages) == sent_before27)
+check("T27b 관찰집계 - 터치 raw +1(5→6), 등급미달 억제 +1",
+      row27["touches_total"] == 6 and row27["suppressed_grade"] == 1)
+check("T27c 관찰집계 - TP감점 되돌리면 통과했을 건 +1 (suppressed_grade 의 부분집합)",
+      row27["suppressed_grade_tp_penalty_only"] == 1)
+
+# T27d: 대조군 - TP 자체가 없어(has_target 없음) 애초에 목표거리 감점이 적용되지
+# 않은 등급미달 건. suppressed_grade 는 늘지만 tp_penalty_only 는 늘면 안 된다
+# (부분집합이지 suppressed_grade 와 항상 같이 움직이는 게 아님을 증명).
+# followers=1(+1) / rr 없음(target 없어 계산불가,+0) / 근접도 abs<2%(+20) / TP감점
+# 없음(target 없어 스킵,+0) / 완결성 has_entry만(+8) = 29점 -> D, 되돌릴 감점이 없다.
+with db.connect(TEST_DB) as conn:
+    lv27d = dict(coin_symbol="ZBAD", ticker="KRW-ZBAD", direction="long",
+                 entry_usd=3.0, sl_usd=2.8, tp_usd=None, rr=None, grade="B", score=60,
+                 author="Auth27d", author_followers=1, author_hit_rate=None,
+                 author_hit_count=None, author_whitelisted=False, mcap_rank=190,
+                 mcap_tier_icon="🥉", post_url="https://tv.com/u27d", post_age_minutes=10,
+                 collected_at=now - 600)
+    lv27d["signal_key"] = db.make_signal_key("ZBAD", 3.0, "Auth27d", "u27d")
+    db.upsert_level(conn, lv27d)
+fake["price"] = 3.0 * USDT_KRW * 0.999
+price_check.run_once(now + 1315)
+row27d = _obs_row()
+check("T27e 대조군 - TP 없는 등급미달은 suppressed_grade 만 +1, tp_penalty_only 불변",
+      row27d["suppressed_grade"] == 2 and row27d["suppressed_grade_tp_penalty_only"] == 1)
+
+# T28: 필터는 통과했지만 텔레그램 발송 자체가 실패하는 경우 - 등급미달과는 다른
+# 사유로 별도 집계돼야 한다(둘 다 합치면 "왜 안 갔는지"를 못 가른다).
+with db.connect(TEST_DB) as conn:
+    lv28 = dict(coin_symbol="ZSND", ticker="KRW-ZSND", direction="long",
+                entry_usd=10.0, sl_usd=9.4, tp_usd=11.5, rr=2.4, grade="B", score=62,
+                author="Auth28", author_followers=5000, author_hit_rate=0.67,
+                author_hit_count=12, author_whitelisted=False, mcap_rank=19,
+                mcap_tier_icon="🥇", post_url="https://tv.com/u28", post_age_minutes=2000,
+                collected_at=now - 600)
+    lv28["signal_key"] = db.make_signal_key("ZSND", 10.0, "Auth28", "u28")
+    db.upsert_level(conn, lv28)
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 10.0 * USDT_KRW * 0.999  # 터치 + 등급 통과권(S) - 발송만 실패시킴
+_prev_send = telegram.send
+telegram.send = lambda text: False
+sent_before28 = len(sent_messages)
+price_check.run_once(now + 1320)
+telegram.send = _prev_send
+row28 = _obs_row()
+check("T28 발송실패 - 메시지 미기록", len(sent_messages) == sent_before28)
+check("T28b 관찰집계 - 터치 raw +1(7→8), 발송실패 억제 +1", row28["touches_total"] == 8
+      and row28["suppressed_send_fail"] == 1)
+check("T28c 발송실패는 등급미달과 별도 집계(등급미달/TP감점 카운트 불변)",
+      row28["suppressed_grade"] == 2 and row28["suppressed_grade_tp_penalty_only"] == 1)
+
+# ── T29: 관찰 집계 DB 함수 단위 검증 (임시 DB, 손계산·프로덕션 DB 미접근) ──────
+TEST_DB29 = "cache/_test_obs.db"
+if os.path.exists(TEST_DB29):
+    os.remove(TEST_DB29)
+db.init_db(TEST_DB29)
+from datetime import datetime as _dt29, timezone as _tz29, timedelta as _td29  # noqa: E402
+_KST29 = _tz29(_td29(hours=9))
+
+
+def _kst_ts(y, m, d, hh=12):
+    return _dt29(y, m, d, hh, 0, tzinfo=_KST29).timestamp()
+
+
+with db.connect(TEST_DB29) as conn:
+    db.bump_daily_stats(conn, "2026-07-20", touches_total=3, suppressed_grade=1)
+    db.bump_daily_stats(conn, "2026-07-20", previews_total=2, suppressed_grade=1)  # 누적 확인
+    db.bump_daily_stats(conn, "2026-07-19", touches_total=1)
+    rows29 = db.get_daily_stats(conn, days=60)
+r20 = next(r for r in rows29 if r["day_kst"] == "2026-07-20")
+check("T29 관찰DB - 같은 날 재호출은 누적(교체 아님)", r20["touches_total"] == 3
+      and r20["suppressed_grade"] == 2 and r20["previews_total"] == 2)
+
+with db.connect(TEST_DB29) as conn:
+    db.bump_daily_stats(conn, "2026-07-18")  # 델타 전부 0
+    rows29b = db.get_daily_stats(conn, days=60)
+check("T29b 전부 0인 델타는 행을 만들지 않음(쓰기 생략)",
+      not any(r["day_kst"] == "2026-07-18" for r in rows29b))
+
+with db.connect(TEST_DB29) as conn:
+    conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+                 "collected_at) VALUES ('c1','X','KRW-X','long','watching', ?)",
+                 (_kst_ts(2026, 7, 20),))
+    conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+                 "collected_at) VALUES ('c2','X','KRW-X','long','watching', ?)",
+                 (_kst_ts(2026, 7, 20, 23),))
+    conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+                 "collected_at) VALUES ('c3','X','KRW-X','long','watching', ?)",
+                 (_kst_ts(2026, 7, 19),))
+    db.record_alert(conn, "X", "touch", [1], "2026-07-20", now=_kst_ts(2026, 7, 20))
+    db.record_alert(conn, "X", "preview", [1], "2026-07-20", now=_kst_ts(2026, 7, 20))
+    db.record_alert(conn, "X", "touch", [1], "2026-07-19", now=_kst_ts(2026, 7, 19))
+    collected29 = db.get_collected_counts_by_day(conn, days=60)
+    sent29 = db.get_alerts_sent_by_day(conn, days=60)
+check("T29c 일자별 신규수집 건수(KST 경계, 원본 재사용)",
+      collected29.get("2026-07-20") == 2 and collected29.get("2026-07-19") == 1)
+check("T29d 일자별 발송 건수(alerts_log 재사용, 중복저장 없음)",
+      sent29.get("2026-07-20") == 2 and sent29.get("2026-07-19") == 1)
+
+with db.connect(TEST_DB29) as conn:
+    report29 = db.get_observation_report(conn, days=60)
+rep20 = next(r for r in report29 if r["day_kst"] == "2026-07-20")
+check("T29e 통합 조회함수 - 수집/발송/집계 필드 결합 정합",
+      rep20["collected"] == 2 and rep20["alerts_sent"] == 2
+      and rep20["touches_total"] == 3 and rep20["suppressed_grade"] == 2)
+
+with db.connect(TEST_DB29) as conn:
+    db.bump_daily_stats(conn, "2020-01-01", touches_total=9)
+    removed29 = db.prune_daily_stats(conn, now=time.time(), keep_days=60)
+    remaining29 = {r["day_kst"] for r in db.get_daily_stats(conn, days=999)}
+check("T29f 보존기간(60일) 초과분 삭제", removed29 >= 1 and "2020-01-01" not in remaining29)
+check("T29g 보존기간 이내 최근 데이터는 유지", "2026-07-20" in remaining29)
+os.remove(TEST_DB29)
+
+# ── T30~T31: 클러스터 로직 리팩터 동등성 (monitor.price_check → analytics.clustering) ──
+# 개발자A가 analytics/clustering.py 에 build_clusters() 를 만들며 같은 병합 규칙이
+# 두 곳에 생겼다 — price_check._build_clusters 가 그쪽으로 위임하도록 리팩터하고,
+# "리팩터 전 알고리즘의 스냅샷"과 결과가 100% 같은지 여러 케이스로 증명한다.
+
+
+def _golden_build_clusters(levels, band_pct):
+    """리팩터 전 monitor/price_check.py `_build_clusters` 원본 그대로의 스냅샷(회귀
+    기준선). 리팩터 후 구현이 이 결과와 한 글자도 다르면 안 된다(알림 트리거 로직)."""
+    with_entry = [l for l in levels if l.get("entry_usd")]
+    with_entry.sort(key=lambda l: l["entry_usd"], reverse=True)
+    clusters, used = [], set()
+    for lv in with_entry:
+        if lv["id"] in used:
+            continue
+        top = lv["entry_usd"]
+        group = [l for l in with_entry
+                 if l["id"] not in used and l["entry_usd"] >= top * (1 - band_pct / 100.0)]
+        for g in group:
+            used.add(g["id"])
+        clusters.append(group)
+    return clusters
+
+
+def _lv30(i, entry):
+    return dict(id=i, entry_usd=entry)
+
+
+_cases30 = [
+    ([], 1.0),
+    ([_lv30(1, 100.0)], 1.0),
+    ([_lv30(1, 100.0), _lv30(2, 99.5), _lv30(3, 98.0), _lv30(4, 97.9), _lv30(5, None)], 1.0),
+    ([_lv30(1, 100.0), _lv30(2, 99.0), _lv30(3, 98.0)], 0.5),   # 전부 별개 클러스터
+    ([_lv30(1, 100.0), _lv30(2, 99.0), _lv30(3, 98.0)], 2.5),   # 전부 한 클러스터
+    ([_lv30(1, 100.0), _lv30(2, 99.0)], 1.0),                    # 정확히 경계값(99.0=100*0.99)
+    ([_lv30(1, 50.0), _lv30(2, 50.0), _lv30(3, 50.0)], 0.01),    # 동일 entry 다건
+    ([_lv30(i, 100.0 - i * 0.3) for i in range(1, 21)], 1.2),    # 20건 연쇄 병합
+]
+_all_match30 = True
+for _lv_list, _band in _cases30:
+    _got = [[l["id"] for l in c] for c in price_check._build_clusters(_lv_list, _band)]
+    _want = [[l["id"] for l in c] for c in _golden_build_clusters(_lv_list, _band)]
+    if _got != _want:
+        _all_match30 = False
+check("T30 클러스터 리팩터 - 모든 케이스에서 원본 알고리즘과 완전 동일", _all_match30)
+
+_calls31 = []
+_orig_bc = clustering.build_clusters
+clustering.build_clusters = lambda *a, **kw: (_calls31.append(1) or _orig_bc(*a, **kw))
+price_check._build_clusters([_lv30(1, 10.0)], 1.0)
+clustering.build_clusters = _orig_bc
+check("T31 price_check._build_clusters 가 analytics.clustering.build_clusters 로 실제 위임"
+      "(재구현 아님)", len(_calls31) == 1)
+
+# ── T32: TP 거리 감점 폭 로컬 재현 함수가 실제 grading.py 와 계속 일치하는지 교차검증 ──
+# price_check._tp_distance_penalty 는 collector/grading.py 를 건드리지 않으려고
+# 감점 규칙(2%/-6, 3%/-4, 5%/-2)을 로컬에 복제했다(2026-07-26). 개발자A 가 같은 날
+# grading.py 의 등급 배점을 재조정 중이라 드리프트(값이 벌어짐) 위험이 있는데,
+# 이 테스트가 실제 calculate_grade() 결과와 매번 대조해 드리프트를 즉시 잡아준다
+# (거리별 점수차 = target 을 아주 멀리(감점 0) 뒀을 때와의 점수 차이).
+from collector.grading import calculate_grade as _cg32  # noqa: E402
+
+
+def _score32(tp_pct):
+    """감점 폭만 순수하게 분리하기 위한 픽스처 — SL 을 반드시 둔다.
+
+    2026-07-26 등급 배점 재조정 후, SL 없는 글에는 목표거리 '대체 가점'이 붙어
+    (5%↑ 구간) 점수차로 감점만 역산할 수 없게 됐다. SL 을 목표거리의 1/10 로 두면
+    rr=10 으로 고정돼 R:R·완결성·근접도 항이 전부 불변 → 점수차 = 감점 폭뿐."""
+    target = 100.0 * (1 + tp_pct / 100.0)
+    sl = 100.0 - (target - 100.0) / 10.0
+    return _cg32(500, "long", 100.0, sl, target, 100.0)[1]
+
+
+_far_score32 = _score32(8.0)  # 감점 0 기준선 (5%↑ 이라 감점 없음)
+
+
+def _actual_penalty32(entry, target):
+    tp_pct = (target - entry) / entry * 100.0
+    return _far_score32 - _score32(tp_pct)
+
+
+for _tp_pct32 in (0.5, 1.99, 2.0, 2.5, 2.99, 3.0, 4.0, 4.99, 5.0, 8.0):
+    _target32 = 100.0 * (1 + _tp_pct32 / 100.0)
+    _want32 = _actual_penalty32(100.0, _target32)
+    _got32 = price_check._tp_distance_penalty("long", 100.0, _target32)
+    check(f"T32 TP거리감점 로컬재현 일치 (tp_pct={_tp_pct32}%)", abs(_got32 - _want32) < 1e-9)
+
+check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
+      price_check._tp_distance_penalty("long", None, 105.0) == 0
+      and price_check._tp_distance_penalty("long", 100.0, None) == 0)
+check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
+      - _actual_penalty32(100.0, 101.5)) < 1e-9)  # 숏 -1.5% == 롱 +1.5% 와 감점 대칭
 
 print()
 print("── 본알림 실제 렌더링 ──")
