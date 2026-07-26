@@ -147,6 +147,109 @@ reset_meta()
 check("C13 SystemExit 도 격리",
       run_cycle.maybe_collect(TEST_DB, now=NOON_KST, collect_runner=die) == "failed")
 
+# ── G1~G9: 수집 정체(last_collect_at staleness) 감시 (2026-07-26 과제3) ──────
+# 기존 monitor/price_check.py 의 _check_collect_silence(신규 행 유무 - 결과 신호)와
+# 다른 신호(meta.last_collect_at 갱신 여부 - 구조 신호)를 본다. 여기선 run_cycle.py
+# 신설분(maybe_alert_collect_stale)만 검증한다.
+STALE_DB = "cache/_test_collect_stale.db"
+if os.path.exists(STALE_DB):
+    os.remove(STALE_DB)
+db.init_db(STALE_DB)
+
+_orig_send_g = telegram.send
+_sent_g = {"n": 0}
+telegram.send = lambda text: (_sent_g.__setitem__("n", _sent_g["n"] + 1) or True)
+
+check("G1 신규 DB(last_collect_at 없음)는 경고 안 함(최초 수집 전은 정상 상태)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NOON_KST) == "skipped"
+      and _sent_g["n"] == 0)
+
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_LAST_COLLECT, "0")
+check("G1b last_collect_at='0' 센티널(reset_meta 관례)도 이력없음과 동일 취급",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NOON_KST) == "skipped"
+      and _sent_g["n"] == 0)
+
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_LAST_COLLECT, str(NOON_KST - 1 * HOUR))
+check("G2 임계(12h) 이내 갱신이면 경고 안 함",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NOON_KST) == "skipped"
+      and _sent_g["n"] == 0)
+
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_LAST_COLLECT, str(NOON_KST - 13 * HOUR))
+check("G3 임계(12h) 초과하면 경고 발송(ok)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NOON_KST) == "ok"
+      and _sent_g["n"] == 1)
+
+check("G4 같은 날 재확인은 중복 억제(skipped, 추가 발송 없음)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NOON_KST + HOUR) == "skipped"
+      and _sent_g["n"] == 1)
+
+NEXT_DAY_KST = NOON_KST + 24 * HOUR
+check("G5 다음 날에도 여전히 정체 중이면 다시 경고(하루 1회 한도가 리셋됨)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "ok"
+      and _sent_g["n"] == 2)
+
+telegram.send = _orig_send_g
+
+# G6: 발송 실패(False 반환)는 failed - warned_date 를 기록하지 않아 다음 회차 재시도
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_LAST_COLLECT, str(NEXT_DAY_KST - 20 * HOUR))
+    db.set_meta(conn, run_cycle.META_COLLECT_STALE_WARNED, "1970-01-01")  # 재시도 대상으로
+_orig_send_g2 = telegram.send
+telegram.send = lambda text: False
+check("G6 발송 실패(False 반환)는 failed",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed")
+
+
+def _send_boom_g(_text):
+    raise ConnectionError("telegram down")
+
+
+telegram.send = _send_boom_g
+check("G7 발송 중 예외도 격리(failed, 예외 전파 없음)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed")
+telegram.send = _orig_send_g2
+
+# G8~G9: DB 접근 예외 격리 (다른 단계와 동일한 부분 실패 격리 원칙 - storage/db.py 는
+# 수정 금지라 모듈 속성 교체만으로 재현한다, D16~D18 과 동일한 기법)
+_orig_get_meta_g = db.get_meta
+
+
+def _get_meta_boom_stale(conn, key, default=None):
+    if key == run_cycle.META_LAST_COLLECT:
+        raise RuntimeError("meta read boom")
+    return _orig_get_meta_g(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_stale
+check("G8 DB 조회 실패도 격리(failed, 예외 전파 없음)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed")
+db.get_meta = _orig_get_meta_g
+
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_COLLECT_STALE_WARNED, "1970-01-01")  # 재발송 대상으로 되돌림
+telegram.send = lambda text: (_sent_g.__setitem__("n", _sent_g["n"] + 1) or True)
+_orig_set_meta_g = db.set_meta
+
+
+def _set_meta_boom_stale(conn, key, value):
+    if key == run_cycle.META_COLLECT_STALE_WARNED:
+        raise RuntimeError("meta write boom")
+    return _orig_set_meta_g(conn, key, value)
+
+
+db.set_meta = _set_meta_boom_stale
+_sent_before_g9 = _sent_g["n"]
+check("G9 발송 후 meta 기록 실패도 격리(발송은 됐지만 상태는 failed)",
+      run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed"
+      and _sent_g["n"] == _sent_before_g9 + 1)
+db.set_meta = _orig_set_meta_g
+telegram.send = _orig_send_g2
+
+os.remove(STALE_DB)
+
 # ── R1~R6: 주간 리포트 주기·시간대 ────────────────────────────────────
 reset_meta()
 check("R1 이력 없으면 즉시 due(첫 회차 발송)", due_report(NOON_KST)[0] is True)
@@ -187,6 +290,40 @@ reset_meta()
 check("R9 발송 예외도 격리(failed)",
       run_cycle.maybe_weekly_report(TEST_DB, now=NOON_KST, report_runner=rboom) == "failed")
 
+# ── R10~R11: 리포트 DB 접근 예외 격리 (2026-07-26 과제1 — 감사 minor 조치) ──────
+# 주기판정 조회/meta 기록도 DB 접근이라 실패할 수 있다 - try 밖에 있으면 run_cycle
+# 전체(1단계 가격체크 결과의 커밋백 포함)까지 죽는다. db.get_meta/set_meta 를 일시
+# 교체해 재현한다(storage/db.py 수정 금지 - D16~D18 과 동일한 모듈 속성 교체 기법).
+reset_meta()
+_orig_get_meta_r = db.get_meta
+
+
+def _get_meta_boom_report(conn, key, default=None):
+    if key in (run_cycle.META_LAST_REPORT, run_cycle.META_LAST_REPORT_FAIL):
+        raise RuntimeError("meta read boom")
+    return _orig_get_meta_r(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_report
+check("R10 리포트 주기판정 DB 조회 실패도 격리(failed, 예외 전파 없음)",
+      run_cycle.maybe_weekly_report(TEST_DB, now=NOON_KST, report_runner=lambda: True) == "failed")
+db.get_meta = _orig_get_meta_r
+
+reset_meta()
+_orig_set_meta_r = db.set_meta
+
+
+def _set_meta_boom_report(conn, key, value):
+    if key in (run_cycle.META_LAST_REPORT, run_cycle.META_LAST_REPORT_FAIL):
+        raise RuntimeError("meta write boom")
+    return _orig_set_meta_r(conn, key, value)
+
+
+db.set_meta = _set_meta_boom_report
+check("R11 리포트 meta 기록 실패도 격리(발송은 됐어도 상태는 failed)",
+      run_cycle.maybe_weekly_report(TEST_DB, now=NOON_KST, report_runner=lambda: True) == "failed")
+db.set_meta = _orig_set_meta_r
+
 # ── X1~X4: run_cycle 통합(부분 실패 격리·순서) ────────────────────────
 reset_meta()
 order = []
@@ -225,6 +362,29 @@ r = run_cycle.run_cycle(now=NOON_KST, price_runner=lambda: None,
                         collect_runner=boom, report_runner=lambda: False)
 check("X4 종료코드는 가격체크만 반영(수집·리포트 실패는 경고)",
       r["price_check"] == "ok" and r["collect"] == "failed" and r["weekly_report"] == "failed")
+
+# ── X5: 3·4단계 DB 접근이 죽어도 회차 전체(1단계 결과 포함)는 살아남는다 ───────
+# (2026-07-26 과제1 통합검증) - 2단계(수집)는 이번 과제 범위 밖이라 건드리지 않도록
+# 관련 meta 키만 콕 집어 예외를 주입한다(전체를 patch 하면 무관한 기존 이슈가 섞임).
+reset_meta()
+_orig_get_meta_x5 = db.get_meta
+
+
+def _get_meta_boom_34(conn, key, default=None):
+    if key in (run_cycle.META_LAST_SNAPSHOT, run_cycle.META_LAST_REPORT,
+               run_cycle.META_LAST_REPORT_FAIL):
+        raise RuntimeError("meta boom (3·4단계 전용)")
+    return _orig_get_meta_x5(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_34
+r_x5 = run_cycle.run_cycle(now=NOON_KST, price_runner=lambda: {"ok": 1},
+                           collect_runner=lambda t: None, report_runner=lambda: True)
+db.get_meta = _orig_get_meta_x5
+check("X5 스냅샷·리포트 meta 조회가 죽어도 가격체크 결과·회차 자체는 살아남는다",
+      r_x5["price_check"] == "ok" and r_x5["collect"] == "ok"
+      and r_x5["collect_stale_alert"] == "skipped"
+      and r_x5["author_snapshot"] == "failed" and r_x5["weekly_report"] == "failed")
 
 # ── W1: 라이터 단일화 불변식 — data/ 를 커밋하는 워크플로는 1개뿐 ─────
 wf_dir = Path(__file__).resolve().parent.parent / ".github" / "workflows"
@@ -485,6 +645,35 @@ settings.SETTINGS["tv_block_alert_daily_limit"] = _orig_alert_limit
 os.remove(TEST_DB4)
 
 
+# ── D19~D20: 차단경보 meta 키 정리 (2026-07-26 과제2 — 감사 minor 조치) ───────
+TEST_DB5 = "cache/_test_block_alert_prune.db"
+if os.path.exists(TEST_DB5):
+    os.remove(TEST_DB5)
+db.init_db(TEST_DB5)
+
+with db.connect(TEST_DB5) as conn:
+    db.set_meta(conn, "tv_block_alert_count_2026-07-01", "1")   # 오래됨 - 삭제 대상
+    db.set_meta(conn, "tv_block_alert_count_2026-07-18", "1")   # cutoff 이전 - 삭제 대상
+    db.set_meta(conn, "tv_block_alert_count_2026-07-19", "1")   # cutoff 당일 - 보존(경계)
+    db.set_meta(conn, "tv_block_alert_count_2026-07-20", "1")   # 최근 - 보존
+    db.set_meta(conn, "tv_block_alert_count_2026-07-26", "2")   # 오늘 - 보존
+    db.set_meta(conn, "other_unrelated_key", "keep me")          # 무관 키 - 항상 보존
+    n_pruned = run_collect._prune_tv_block_alert_meta(conn, "2026-07-26", 7)
+
+with db.connect(TEST_DB5) as conn:
+    remaining = {r["key"] for r in conn.execute(
+        "SELECT key FROM meta WHERE key LIKE 'tv_block_alert_count_%'").fetchall()}
+    other_kept = db.get_meta(conn, "other_unrelated_key")
+
+check("D19 보존기간(7일) 이전 차단경보 키만 정리(경계일 07-19 는 보존)", n_pruned == 2)
+check("D19b 남은 키는 경계일 이후 + 오늘만",
+      remaining == {"tv_block_alert_count_2026-07-19", "tv_block_alert_count_2026-07-20",
+                    "tv_block_alert_count_2026-07-26"})
+check("D20 무관 meta 키는 건드리지 않음", other_kept == "keep me")
+
+os.remove(TEST_DB5)
+
+
 # ── S1~S5: 작성자 주간 스냅샷 (2026-07-26 — 역신호 태깅 선행 인프라) ──
 SNAP_DB = "cache/_test_snapshot.db"
 if os.path.exists(SNAP_DB):
@@ -531,6 +720,39 @@ def _snap_boom(*_a, **_k):
 check("S5b 스냅샷 실패 격리",
       run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 400 * 3600,
                                       snapshot_runner=_snap_boom) == "failed")
+
+# ── S6~S7: 스냅샷 DB 접근 예외 격리 (2026-07-26 과제1 — 감사 minor 조치) ────────
+# meta 조회/기록도 DB 접근이라 실패할 수 있다 - try 밖에 있으면 run_cycle 전체(1단계
+# 가격체크 결과의 커밋백 포함)까지 죽는다. db.get_meta/set_meta 를 일시 교체해
+# 재현한다(storage/db.py 수정 금지 - D16~D18 과 동일한 모듈 속성 교체 기법).
+_orig_get_meta_s = db.get_meta
+
+
+def _get_meta_boom_snap(conn, key, default=None):
+    if key == run_cycle.META_LAST_SNAPSHOT:
+        raise RuntimeError("meta read boom")
+    return _orig_get_meta_s(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_snap
+check("S6 스냅샷 meta 조회 실패도 격리(예외 전파 없이 failed)",
+      run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 500 * 3600) == "failed")
+db.get_meta = _orig_get_meta_s
+
+_orig_set_meta_s = db.set_meta
+
+
+def _set_meta_boom_snap(conn, key, value):
+    if key == run_cycle.META_LAST_SNAPSHOT:
+        raise RuntimeError("meta write boom")
+    return _orig_set_meta_s(conn, key, value)
+
+
+db.set_meta = _set_meta_boom_snap
+check("S7 스냅샷 meta 기록 실패도 격리(스냅샷 자체는 저장되고 상태만 failed)",
+      run_cycle.maybe_author_snapshot(SNAP_DB, now=NOON_KST + 600 * 3600) == "failed")
+db.set_meta = _orig_set_meta_s
+
 settings.SETTINGS["db_path"] = TEST_DB
 if os.path.exists(SNAP_DB):
     os.remove(SNAP_DB)

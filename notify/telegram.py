@@ -315,6 +315,24 @@ def render_collect_silence_alert(window_hours: float, baseline_avg_per_day: floa
     return "\n".join(lines)
 
 
+def render_collect_stale_alert(elapsed_hours: float, threshold_hours: float) -> str:
+    """meta.last_collect_at 이 임계시간 이상 갱신되지 않은 '수집 단계 정지' 경고
+    (2026-07-26 과제3, scripts/run_cycle.py 신설). render_collect_silence_alert(신규
+    수집 0건 - 결과 신호, 수집기가 살아있어도 새 글이 없으면 울릴 수 있음)와 잡는
+    고장 원인이 다르다 - 이건 '수집 단계 자체가 실행/성공했는가'를 보는 구조적 신호.
+    2026-07-23~26 rebase 오류로 수집분이 조용히 전량 폐기된 3일 장애가 계기(당시
+    last_collect_at 이 갱신되지 않은 채 멈춰 있었을 것). 하루 1회 중복방지는
+    호출부(run_cycle.py)의 meta 가 담당 - 이 함수는 순수 렌더링만."""
+    lines = [
+        _SEP,
+        "🚨 <b>[수집 단계 정지 경고]</b>",
+        f"마지막 수집 성공 후 {elapsed_hours:.1f}시간 경과 (임계 {threshold_hours:.0f}시간)",
+        "run_cycle.py 의 수집 단계가 계속 실패했거나 회차 자체가 멈췄을 수 있습니다.",
+        _SEP,
+    ]
+    return "\n".join(lines)
+
+
 def render_tv_block_alert(reason) -> str:
     """TradingView 확정 차단(403/429/캡차/1020) 감지 즉시 경고 (2026-07-26 과제2).
     수집 급감 경고(24시간 0건 지속)보다 먼저 울리는 빠른 신호 - render_alert 와

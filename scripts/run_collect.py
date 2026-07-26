@@ -80,6 +80,11 @@ def _check_deletions(conn, timeout: float) -> int:
 
 
 # ── TradingView 확정 차단 즉시 알림 (2026-07-26 과제2) ─────────────────
+# 날짜별 카운터 meta 키 접두사 - 경보 발송(_maybe_alert_block)과 정리
+# (_prune_tv_block_alert_meta) 양쪽에서 공유해 접두사가 어긋날 일이 없게 한다.
+_TV_BLOCK_ALERT_KEY_PREFIX = "tv_block_alert_count_"
+
+
 def _maybe_alert_block(conn, now: float) -> None:
     """이번 수집 주기 중 확정 차단(403/429/캡차/1020)이 감지됐으면 하루 상한 내에서
     즉시 경고. 수집 급감 경고(24시간 뒤에야 울림)보다 빠른 신호 - 단 사용자가
@@ -91,14 +96,34 @@ def _maybe_alert_block(conn, now: float) -> None:
     limit = settings.get("tv_block_alert_daily_limit")
     if limit <= 0:
         return
-    sent_today = int(db.get_meta(conn, "tv_block_alert_count_" + day, "0") or "0")
+    sent_today = int(db.get_meta(conn, _TV_BLOCK_ALERT_KEY_PREFIX + day, "0") or "0")
     if sent_today >= limit:
         return
     text = telegram.render_tv_block_alert(reason)
     if telegram.send(text):
-        db.set_meta(conn, "tv_block_alert_count_" + day, str(sent_today + 1))
+        db.set_meta(conn, _TV_BLOCK_ALERT_KEY_PREFIX + day, str(sent_today + 1))
         logger.warning("[차단경보] 확정 차단(%s) 감지 - 경고 발송(오늘 %d/%d회)",
                        reason, sent_today + 1, limit)
+
+
+def _prune_tv_block_alert_meta(conn, day: str, keep_days: int) -> int:
+    """날짜별 차단경보 카운터(tv_block_alert_count_YYYY-MM-DD) meta 키 정리
+    (2026-07-26 과제2 - 감사 minor). 날짜가 지나도 옛 키가 안 지워지면 meta
+    테이블이 무한 증가한다. storage/db.py 에 범용 prune 헬퍼를 새로 얹지 않고
+    (개발자 A 병렬 작업 중 - 파일 경계 원칙) 이 파일 안에서 직접 SQL로 해결한다.
+
+    LIKE 대신 substr 두 번으로 접두사를 자른다 - 접두사 안에 '_' 가 있어 LIKE
+    패턴으로 쓰면 SQL 와일드카드(임의 1글자)로 해석돼 의도보다 헐겁게 매칭된다.
+    남은 부분은 ISO 날짜(YYYY-MM-DD)라 사전식 문자열 비교가 곧 시간순 비교와
+    같다(storage.db.prune_daily_stats 와 동일한 컷오프 계산 방식). 매 수집
+    회차 가볍게 수행. 반환: 삭제한 키 개수."""
+    cutoff = (datetime.fromisoformat(day) - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+    prefix_len = len(_TV_BLOCK_ALERT_KEY_PREFIX)
+    cur = conn.execute(
+        "DELETE FROM meta WHERE substr(key, 1, ?) = ? AND substr(key, ?) < ?",
+        (prefix_len, _TV_BLOCK_ALERT_KEY_PREFIX, prefix_len + 1, cutoff),
+    )
+    return cur.rowcount
 
 
 def main() -> int:
@@ -215,7 +240,13 @@ def main() -> int:
 
         # 확정 차단 감지 시 즉시 경보(과제2) - 위 심볼 루프 도중 차단으로 조기 종료
         # 됐어도 hard_block_detected() 는 주기 내내 유지되므로 여기서 잡힌다.
-        _maybe_alert_block(conn, time.time())
+        now_block = time.time()
+        _maybe_alert_block(conn, now_block)
+
+        # 차단경보 meta 키 정리(과제2, 2026-07-26 감사 minor) - 날짜별 카운터가 영영
+        # 안 지워지는 문제 방지. 매 수집 회차 가볍게 수행(비용 무시할 수준).
+        _prune_tv_block_alert_meta(conn, _day_kst(now_block),
+                                   settings.get("tv_block_alert_meta_keep_days"))
 
         # 글 삭제 감지(과제1) - 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
         # 차단 쿨다운 중이면 요청 자체가 즉시 생략되므로(circuit breaker) 이 호출도

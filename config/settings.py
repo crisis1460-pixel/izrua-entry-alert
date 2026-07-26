@@ -96,6 +96,14 @@ SETTINGS = {
     "collect_silence_min_baseline_avg": 0.5,  # 직전 평균 일일 수집이 이 미만이면 원래 조용한
                                                # 기간으로 보고 오탐 처리(경고 생략)
 
+    # 수집 단계 정지(meta.last_collect_at staleness) 감시 (2026-07-26 과제3 - 감사 minor)
+    # collect_silence 와 신호가 다르다: 저건 '신규 행이 있는가'(결과물) 를 보므로 수집기가
+    # 살아있어도 새 글이 없으면 위양성이 날 수 있고, 반대로 '수집 단계 자체가 안 도는'
+    # 고장(meta 갱신 정지)은 못 잡는다. 07-23~26 rebase 오류로 수집이 조용히 전량 폐기된
+    # 3일 장애가 계기 - 이 값이 있었으면 last_collect_at 정체로 더 빨리 잡혔을 것.
+    # 수집 주기(4h)의 3배 - 실패 백오프(30분) 몇 번 겹쳐도 오탐 안 나게 여유를 둔다.
+    "last_collect_stale_hours": 12,
+
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 - 백로그 구현)
     "deletion_check_daily_limit": 5,        # 하루 1회(수집 주기 중 1번)만 순환 확인,
                                              # 이 건수만큼만 - TradingView 부담/차단 위험 억제
@@ -104,6 +112,9 @@ SETTINGS = {
 
     # TradingView 차단 감지 즉시 알림 (2026-07-26 과제2 - 수집 급감 24h 경보보다 빠른 신호)
     "tv_block_alert_daily_limit": 1,        # 하루 최대 1회만 - 사용자는 알림 과다를 싫어함
+    "tv_block_alert_meta_keep_days": 7,     # 날짜별 카운터(tv_block_alert_count_YYYY-MM-DD)
+                                             # meta 키 보존기간 - 안 지우면 meta 테이블 무한증가
+                                             # (2026-07-26 감사 minor, run_collect.py 가 정리)
 
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",

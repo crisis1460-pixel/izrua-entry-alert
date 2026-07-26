@@ -55,6 +55,7 @@ except Exception:
     pass
 
 from config import settings
+from notify import telegram
 from storage import db
 
 logger = logging.getLogger("alert.cycle")
@@ -65,6 +66,11 @@ META_LAST_REPORT = "last_weekly_report_at"
 META_LAST_REPORT_FAIL = "last_weekly_report_fail_at"
 
 KST = timezone(timedelta(hours=9))
+
+
+def _day_kst(now: float) -> str:
+    return datetime.fromtimestamp(now, KST).strftime("%Y-%m-%d")
+
 
 # 수집 하드 타임아웃 — 잡 timeout(20분)보다 넉넉히 짧게 잡아, 수집이 멈춰도
 # 커밋백 단계가 반드시 실행되도록 한다.
@@ -183,6 +189,86 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     return "ok"
 
 
+# ── 수집 단계 정지(last_collect_at staleness) 감시 (2026-07-26 과제3 — 감사 minor) ──
+#
+# 기존 monitor/price_check.py 의 _check_collect_silence(읽기 전용, 이 파일에서 수정
+# 안 함)는 "최근 collect_silence_window_hours 동안 신규 수집(levels.collected_at) 0건"을
+# 본다 - 이건 결과물 신호라 '수집기는 살아있는데 마침 새 글이 없는' 정상 상황에도
+# 위양성으로 울릴 수 있고, 반대로 '수집 단계 자체가 실행되지 않는'(meta.last_collect_at
+# 이 갱신되지 않는) 고장은 못 잡는다 - collected_at 이 예전 값 그대로여도 창 밖이면
+# 그냥 조용하다. 실제로 2026-07-23~26 rebase 오류로 수집분이 조용히 전량 폐기되는
+# 3일 장애가 있었다 - 그 동안 last_collect_at 자체가 정체돼 있었을 것이므로, 이
+# 감시는 결과물이 아니라 '수집 단계가 실행/성공했는가'를 직접 보는 구조적 신호다.
+# 서로 다른 실패 모드를 잡으므로 기존 감시를 대체하지 않고 나란히 둔다.
+
+META_COLLECT_STALE_WARNED = "collect_stale_warned_date"
+
+
+def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
+    """meta.last_collect_at 이 last_collect_stale_hours 이상 갱신되지 않으면 하루
+    1회 경고. 반환 "skipped" | "ok" | "failed".
+
+    신규 DB(수집을 한 번도 안 함 - last_collect_at 미존재)에서는 울리지 않는다:
+    최초 수집 전은 고장이 아니라 정상 초기 상태라 여기서 경보를 내면 첫 회차부터
+    오탐이 된다. 이 체크 자체도 다른 단계와 동일한 부분 실패 격리 원칙을 따른다 -
+    DB 조회/발송/meta 기록 중 무엇이 실패해도 예외를 밖으로 던지지 않는다."""
+    now = time.time() if now is None else now
+    try:
+        with db.connect(db_path) as conn:
+            last = db.get_meta(conn, META_LAST_COLLECT)
+            warned_day = db.get_meta(conn, META_COLLECT_STALE_WARNED)
+    except BaseException as e:  # noqa: BLE001 - 감시 자체가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 정체 감시 조회 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::수집 정체 감시 조회 실패 - {type(e).__name__}")
+        return "failed"
+
+    # "0" 문자열(테스트 reset_meta 등의 리셋 센티널)도 "이력 없음"과 동일 취급해야
+    # 하므로, 존재 여부가 아니라 다른 due 판정(_meta_float)과 동일하게 float 변환
+    # 결과의 참거짓으로 판단한다 - 문자열 "0"은 참(존재)이지만 수치 0.0은 거짓이다.
+    try:
+        last_ts = float(last) if last else 0.0
+    except (TypeError, ValueError):
+        last_ts = 0.0  # 손상값도 "이력 없음"과 동일 취급 - 다음 성공 수집이 자연 치유
+    if not last_ts:
+        return "skipped"  # 신규 DB - 최초 수집 전 정상 상태(고장 아님)
+
+    day = _day_kst(now)
+    if warned_day == day:
+        return "skipped"  # 오늘 이미 경고함 - 중복 방지(collect_silence 와 동일 패턴)
+
+    threshold_hours = settings.get("last_collect_stale_hours")
+    elapsed = now - last_ts
+    if elapsed < threshold_hours * 3600:
+        return "skipped"
+
+    text = telegram.render_collect_stale_alert(elapsed / 3600, threshold_hours)
+    try:
+        sent = telegram.send(text)
+    except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 정체 경고 발송 실패: %s: %s", type(e).__name__, e)
+        sent = False
+    if not sent:
+        print("::warning::수집 정체 경고 발송 실패")
+        return "failed"
+
+    try:
+        with db.connect(db_path) as conn:
+            db.set_meta(conn, META_COLLECT_STALE_WARNED, day)
+    except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 정체 경고 meta 기록 실패(발송 자체는 완료): %s: %s",
+                     type(e).__name__, e)
+        return "failed"
+
+    logger.warning("[정체감시] 수집 정체 경고 발송(%.1fh 미갱신)", elapsed / 3600)
+    return "ok"
+
+
 # ── 작성자 주간 스냅샷 (2026-07-26 사용자 결정 — 역신호 태깅 선행 인프라) ──
 #
 # 왜 별도 훅인가: 역신호 판정 규칙이 "n_eff>=5 이면서 E_LB<0 이 2주 연속"인데,
@@ -226,8 +312,19 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
     if not enabled:
         return "skipped"
 
-    with db.connect(db_path) as conn:
-        last = db.get_meta(conn, META_LAST_SNAPSHOT)
+    # 2026-07-26 감사 minor 조치(과제1): meta 조회도 DB 접근이라 잠금/디스크 오류로
+    # 실패할 수 있다 - try 밖에 있으면 여기서 난 예외가 run_cycle 전체(1단계 가격체크
+    # 결과의 커밋백 포함)까지 끌고 내려간다. 다른 DB 접근과 동일하게 격리한다.
+    try:
+        with db.connect(db_path) as conn:
+            last = db.get_meta(conn, META_LAST_SNAPSHOT)
+    except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("작성자 스냅샷 주기 판정 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::작성자 스냅샷 주기 판정 실패 - {type(e).__name__}")
+        return "failed"
+
     try:
         last_ts = float(last) if last else 0.0
     except (TypeError, ValueError):
@@ -247,8 +344,19 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
         print(f"::warning::작성자 스냅샷 실패 - {type(e).__name__}")
         return "failed"
 
-    with db.connect(db_path) as conn:
-        db.set_meta(conn, META_LAST_SNAPSHOT, str(now))
+    # 스냅샷 저장(save_author_snapshot)은 이미 끝났다 - 여기서 meta 기록만 실패해도
+    # 스냅샷 자체를 무효로 되돌리지 않는다(다음 회차가 재시도해도 덮어쓰기라 무해).
+    try:
+        with db.connect(db_path) as conn:
+            db.set_meta(conn, META_LAST_SNAPSHOT, str(now))
+    except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("작성자 스냅샷 meta 기록 실패(스냅샷 %d명 저장은 완료): %s: %s",
+                     n, type(e).__name__, e)
+        print(f"::warning::작성자 스냅샷 meta 기록 실패 - {type(e).__name__}")
+        return "failed"
+
     logger.info("작성자 주간 스냅샷 저장: %d명 (%s)", n, db.week_kst(now))
     return "ok"
 
@@ -268,10 +376,21 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     if not enabled:
         return "skipped"
 
-    with db.connect(db_path) as conn:
-        due, reason = report_due(conn, now,
-                                 settings.get("weekly_report_interval_hours") * 3600,
-                                 settings.get("weekly_report_retry_minutes") * 60)
+    # 2026-07-26 감사 minor 조치(과제1): 주기 판정 DB 조회도 try 안으로 - 아래
+    # 발송/meta 기록과 동일한 격리 원칙(예외가 run_cycle 까지 전파되면 1단계
+    # 가격체크 결과의 커밋백까지 연쇄로 죽을 수 있다).
+    try:
+        with db.connect(db_path) as conn:
+            due, reason = report_due(conn, now,
+                                     settings.get("weekly_report_interval_hours") * 3600,
+                                     settings.get("weekly_report_retry_minutes") * 60)
+    except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("주간 리포트 주기 판정 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::주간 리포트 주기 판정 실패 - {type(e).__name__}")
+        return "failed"
+
     if force:
         due, reason = True, "강제 발송(force)"
     if not due:
@@ -287,13 +406,21 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
         logger.error("주간 리포트 실패: %s: %s", type(e).__name__, e)
         sent = False
     if not sent:
-        _mark(db_path, META_LAST_REPORT, META_LAST_REPORT_FAIL, now, success=False)
         print(f"::warning::주간 리포트 발송 실패 - "
               f"{settings.get('weekly_report_retry_minutes')}분 후 재시도")
+
+    # meta 기록도 DB 접근 - 여기서 실패해도(잠금/디스크 등) 위 발송 결과 자체는 이미
+    # 확정됐으니 사이클을 죽이지 않고 failed 로만 남긴다(다음 회차가 재시도).
+    try:
+        _mark(db_path, META_LAST_REPORT, META_LAST_REPORT_FAIL, now, success=sent)
+    except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("주간 리포트 meta 기록 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::주간 리포트 meta 기록 실패 - {type(e).__name__}")
         return "failed"
 
-    _mark(db_path, META_LAST_REPORT, META_LAST_REPORT_FAIL, now, success=True)
-    return "ok"
+    return "ok" if sent else "failed"
 
 
 # ── 회차 ────────────────────────────────────────────────────────────
@@ -325,6 +452,9 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
 
     collect_status = maybe_collect(db_path, now=now, force=force_collect,
                                    enabled=collect_enabled, collect_runner=collect_runner)
+    # 수집 정체(last_collect_at staleness) 감시(과제3) — maybe_collect 직후에 둬서
+    # 이번 회차의 갱신 결과를 바로 반영한 상태로 판정한다.
+    collect_stale_status = maybe_alert_collect_stale(db_path, now=now)
     # 작성자 주간 스냅샷 — 발송이 없어 조용하고, 리포트 ON/OFF 와 무관하게 계속 쌓인다
     snapshot_status = maybe_author_snapshot(db_path, now=now)
 
@@ -336,9 +466,10 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
         enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
         report_runner=report_runner)
 
-    logger.info("회차 완료: 가격체크=%s 수집=%s 스냅샷=%s 주간리포트=%s",
-                price_status, collect_status, snapshot_status, report_status)
+    logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 주간리포트=%s",
+                price_status, collect_status, collect_stale_status, snapshot_status, report_status)
     return {"price_check": price_status, "collect": collect_status,
+            "collect_stale_alert": collect_stale_status,
             "author_snapshot": snapshot_status,
             "weekly_report": report_status, "summary": price_summary}
 
