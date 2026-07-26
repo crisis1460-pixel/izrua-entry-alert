@@ -255,8 +255,13 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
 
     collect_status = maybe_collect(db_path, now=now, force=force_collect,
                                    enabled=collect_enabled, collect_runner=collect_runner)
-    report_status = maybe_weekly_report(db_path, now=now, force=force_report,
-                                        enabled=report_enabled, report_runner=report_runner)
+    # 자동 발송 스위치(settings.weekly_report_auto_send)가 꺼져 있으면 정기 발송을
+    # 하지 않는다 — 2026-07-26 사용자 결정. --force-report 는 여전히 동작한다
+    # (수동으로 지금 보고 싶을 때). 리포트가 쓰는 데이터·계산은 전부 그대로 쌓인다.
+    report_status = maybe_weekly_report(
+        db_path, now=now, force=force_report,
+        enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
+        report_runner=report_runner)
 
     logger.info("회차 완료: 가격체크=%s 수집=%s 주간리포트=%s",
                 price_status, collect_status, report_status)

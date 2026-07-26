@@ -22,6 +22,10 @@ from scripts import run_cycle
 
 TEST_DB = "cache/_test_cycle.db"
 settings.SETTINGS["db_path"] = TEST_DB
+# 운영 기본값은 자동발송 OFF(2026-07-26 사용자 결정)지만, 아래 R7~X4 는 리포트 발송
+# 경로 자체(주기 판정·실패 백오프·부분 실패 격리)를 검증하는 테스트라 ON 을 전제로 한다.
+# 스위치 동작 자체는 마지막 R14 가 ON/OFF 를 오가며 따로 검증한다.
+settings.SETTINGS["weekly_report_auto_send"] = True
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 db.init_db(TEST_DB)
@@ -227,4 +231,46 @@ writers = [p.name for p in wf_dir.glob("*.yml")
 check("W1 data/ 커밋 백 워크플로는 price-check.yml 하나뿐", writers == ["price-check.yml"])
 
 os.remove(TEST_DB)
+
+# ── R14: 주간 리포트 자동발송 OFF (2026-07-26 사용자 결정) ──────────────
+# 데이터·계산 절차는 유지하되 정기 발송만 끈다. --force-report 는 여전히 동작.
+_sent_flag = {"n": 0}
+
+
+def _spy_report():
+    _sent_flag["n"] += 1
+    return True
+
+
+import os as _os14  # noqa: E402
+
+# 주기 meta 를 지운 새 DB 로 시작해야 "발송할 때가 됐는지" 판정이 깨끗하다
+if _os14.path.exists(TEST_DB):
+    _os14.remove(TEST_DB)
+db.init_db(TEST_DB)
+
+settings.SETTINGS["weekly_report_auto_send"] = False
+_r14 = run_cycle.run_cycle(now=NOON_KST, collect_enabled=False,
+                           price_runner=lambda: {"ok": 1}, report_runner=_spy_report)
+check("R14 자동발송 OFF - 정기 회차에서 리포트 미발송",
+      _r14["weekly_report"] == "skipped" and _sent_flag["n"] == 0)
+
+_r14b = run_cycle.run_cycle(now=NOON_KST, collect_enabled=False, force_report=True,
+                            price_runner=lambda: {"ok": 1}, report_runner=_spy_report)
+check("R14b OFF 여도 --force-report 는 발송",
+      _r14b["weekly_report"] == "ok" and _sent_flag["n"] == 1)
+
+# 스위치를 켜면 정기 발송이 재개되는지 (meta 초기화 후 확인)
+if _os14.path.exists(TEST_DB):
+    _os14.remove(TEST_DB)
+db.init_db(TEST_DB)
+settings.SETTINGS["weekly_report_auto_send"] = True
+_sent_flag["n"] = 0
+_r14c = run_cycle.run_cycle(now=NOON_KST, collect_enabled=False,
+                            price_runner=lambda: {"ok": 1}, report_runner=_spy_report)
+check("R14c 스위치 ON 이면 정기 발송 재개",
+      _r14c["weekly_report"] == "ok" and _sent_flag["n"] == 1)
+settings.SETTINGS["weekly_report_auto_send"] = False
+
+
 sys.exit(0 if ok else 1)

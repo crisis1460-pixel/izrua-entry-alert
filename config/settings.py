@@ -50,6 +50,12 @@ SETTINGS = {
     "rank_grade_neff": 30,               # 등급 부여 게이트 (3단계, 향후)
 
     # 주간 성적 리포트 (2026-07-26: 외부 크론 등록 없이 가격체크 회차가 흡수)
+    # 2026-07-26 사용자 결정: **자동 발송은 끈다**(샘플을 보고 알림으로 받을 가치가
+    # 없다고 판단). 단 데이터 축적·계산 절차는 전부 유지한다 — 적중 판정, ret_24h,
+    # daily_stats, E_LB/수축승률/합의/베이스라인 계산 모두 그대로 쌓이고, 보고 싶을 때는
+    # `python scripts/run_weekly_report.py` 로 즉시 볼 수 있다. 나중에 다시 받고 싶으면
+    # 이 값만 True 로 되돌리면 된다(주기 판정 meta 는 그대로라 바로 재개됨).
+    "weekly_report_auto_send": False,
     "weekly_report_interval_hours": 168,   # 발송 주기 (7일)
     "weekly_report_retry_minutes": 60,     # 발송 실패 시 재시도 백오프
     "weekly_report_kst_hour_from": 9,      # 이 시각 이후에만 발송 (새벽 발송 방지)
