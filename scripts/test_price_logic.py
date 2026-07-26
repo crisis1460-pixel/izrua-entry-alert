@@ -376,8 +376,11 @@ msg_i = tg.render_alert("touch", "LINK", [dict(_asym)], 8.35 * USDT_KRW, USDT_KR
 check("T14i 지표 미주입(구버전 경로)은 보수적 미표시 - 예전 raw 폴백이 그 구멍이었다",
       "승률" not in msg_i)
 
-# T14c~T14e: 역신호 경고 줄 (2026-07-27) — 워쳐 적중률·⭐⭐ 가 "믿을 만한 작성자"로
-# 읽히는데 자체 표본은 정반대인 실제 사례(@mastercrypto2020) 대응. 억제가 아니라 표기.
+# T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
+# 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
+# 넘겨서, 행이 늘면 정작 봐야 할 타점·가격이 밀린다. 지표는 계속 쌓이고 show_status
+# 작성자 성적 섹션과 주간 리포트에서 본다. 여기서는 "지표를 주입해도 알림 본문은
+# 불변"임을 못 박아, 나중에 누가 무심코 되살리지 않게 한다.
 _anti = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
              grade="B", score=62, author="AntiSignal", author_followers=None,
              author_hit_rate=0.66, author_hit_count=64, author_whitelisted=True,
@@ -387,21 +390,17 @@ _anti = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
              author_self_neff_r=8.0, author_rank_min_neff=5.0)
 msg_c = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=-0.92)],
                         8.35 * USDT_KRW, USDT_KRW)
-check("T14c 역신호 후보 - E_LB 음수·표본 충족 시 경고 줄",
-      "🔻 역신호 후보 — 자체 기대손익 -0.92R (표본 8)" in msg_c
-      and "📊 평균 적중률: 66% (워쳐 64건)" in msg_c)   # 확정 양식은 그대로 유지
+check("T14c 역신호 지표를 주입해도 알림 본문엔 안 나온다",
+      "역신호" not in msg_c and "-0.92R" not in msg_c)
+check("T14c2 확정 양식(워쳐 적중률·자체 승률)은 그대로 유지",
+      "📊 평균 적중률: 66% (워쳐 64건)" in msg_c and "🏹 승률25% (2승6패)" in msg_c)
 
 msg_d = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=0.85)],
                         8.35 * USDT_KRW, USDT_KRW)
-check("T14d E_LB 양수면 경고 없음", "역신호" not in msg_d)
-
-msg_e = tg.render_alert("touch", "LINK",
-                        [dict(_anti, author_self_e_lb=-1.5, author_self_neff_r=2.0)],
-                        8.35 * USDT_KRW, USDT_KRW)
-check("T14e 표본 미달(neff_r<게이트)이면 경고 없음", "역신호" not in msg_e)
-
-# T14f: 주입 미포함(렌더러 단독 호출·구버전 경로)이면 조용히 생략 — 기존 출력 불변
-check("T14f 역신호 지표 미주입 시 기존 출력 그대로", "역신호" not in msg_a)
+check("T14d E_LB 부호와 무관하게 본문 불변", "역신호" not in msg_d)
+check("T14e 지표 유무로 줄 수가 달라지지 않는다",
+      msg_c.count("\n") == msg_d.count("\n") == msg_a.count("\n"))
+check("T14f 지표 미주입 경로도 동일", "역신호" not in msg_a)
 
 # ── 2026-07-24 감사 수정 검증 ──────────────────────────────────
 # T15: 여러 캔들에 걸쳐 TP 먼저 → SL 나중이면 순서대로 hit (뭉개면 가짜 ambiguous였음)

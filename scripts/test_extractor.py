@@ -158,6 +158,37 @@ if no_price_ok:
     ok += 1
 TOTAL_EXTRA += 1
 
-TOTAL = len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES) + len(WINDOW_CASES)
+# 2026-07-27 사다리형 목표(_LADDER) — 신규 소스 실사 중 발견.
+# "TARGETS: 7.15 - 7.45 - 7.85 - 8.25" 같은 나열을 범위로 오인하면 tps[0][-1] 이
+# 두 번째 목표를 집어 TP1 이 약 2배로 부풀려진다(ETC +4.7% → +9.1% 실측).
+# 같은 하이픈이 ENTRY 줄에서는 진짜 범위라, 둘을 구분하는지가 핵심이다.
+LADDER_CASES = [
+    ("사다리 목표 - 첫 값이 TP1",
+     "$ETC/USDT LONG\nENTRY: 6.81 - 6.85\nTARGETS: 7.15 - 7.45 - 7.85 - 8.25\nSTOP LOSS: 6.25",
+     7.0, {"entry": 6.83, "sl": 6.25, "tp": 7.15}),
+    ("사다리 목표 - 소수 자릿수가 섞인 표기",
+     "$AERO LONG\nENTRY: 0.4080 - 0.4100\nTARGETS: 0.43 - 0.45 - 0.4750 - 0.50\nSTOP LOSS: 0.37",
+     0.41, {"entry": 0.409, "sl": 0.37, "tp": 0.43}),
+    # 값이 2개뿐인 진짜 범위는 종전대로 상단 — 사다리 판정이 과잉 적용되면 안 된다
+    ("목표가 진짜 범위면 종전대로 상단",
+     "Entry: 100\nTarget: 110 - 120\nSL: 95", 100.0,
+     {"entry": 100.0, "sl": 95.0, "tp": 120.0}),
+    # 엔트리 범위 뒤에 다른 라벨의 숫자가 이어져도 나열로 오인하지 않는다
+    # (숫자 사이에 글자가 끼면 _LADDER 는 매칭되지 않는다)
+    ("엔트리 범위는 나열로 오인하지 않음",
+     "Entry: 6.81 - 6.85\nStop Loss: 6.25\nTarget: 7.50", 6.8,
+     {"entry": 6.83, "sl": 6.25, "tp": 7.5}),
+]
+for desc, text, price, exp in LADDER_CASES:
+    r = parse_setup(text, current_price=price)
+    passed = r is not None and all(
+        r.get(k) is not None and _close(r[k], v) for k, v in exp.items())
+    print(("✅" if passed else "❌"), desc)
+    print(f"    → {r}")
+    if passed:
+        ok += 1
+
+TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
+         + len(WINDOW_CASES) + len(LADDER_CASES))
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)

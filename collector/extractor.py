@@ -27,11 +27,13 @@ _ENTRY_LABEL = re.compile(
 _SL_LABEL = re.compile(
     r"(stop\s*loss|stop|sl|손절가?|손절|스탑|스톱)\s*[:=]?\s*", re.I,
 )
-# "target(?!s)": "Take-Profit Targets:" 같은 복수형 섹션 헤더에서 "target"만 매칭돼
-# 그 뒤 실제 "TP1: 5.298" 라벨을 건너뛰고 엉뚱한 위치를 가리키는 것을 막는다
-# (2026-07-23 실전 발견 — 아래 _ORDINAL_LABEL 설명 참고).
+# 복수형 "TARGETS:" 도 받는다 (2026-07-27). 예전엔 `target(?!s)` 로 복수형을 배제했는데,
+# "Take-Profit Targets:" 헤더가 매칭돼 그 뒤 "TP1: 5.298" 대신 라벨 번호를 가리키던
+# 2026-07-23 사고 방어였다. 그 근본 원인은 이후 _ORDINAL_LABEL(서수 제거)이 없앴고,
+# 배제를 유지하면 "TARGETS: 7.15 - 7.45 - …" 형태를 쓰는 소스에서 목표가가 통째로
+# None 이 된다. INJ 재현 케이스가 test_extractor.py 에 남아 회귀를 막는다.
 _TP_LABEL = re.compile(
-    r"(take\s*profit|target(?!s)|tp\d?|목표가?|목표|타겟\s*\d?|익절가?)\s*[:=]?\s*", re.I,
+    r"(take\s*profit|targets?|tp\d?|목표가?|목표|타겟\s*\d?|익절가?)\s*[:=]?\s*", re.I,
 )
 
 # 실전 버그(2026-07-23): "TP1: 5.298 / TP2: 5.420 / TP3: 5.560" 처럼 다중 목표가를
@@ -61,6 +63,15 @@ _NUM = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]*\.[0-9]+|[0-9]+)"
 # 범위: 0.45 - 0.48 / 12,000~12,500
 _RANGE = re.compile(_NUM + r"\s*[-–~〜]\s*" + _NUM)
 _SINGLE = re.compile(_NUM)
+
+# 사다리형 나열: "7.15 - 7.45 - 7.85 - 8.25" 처럼 같은 구분자로 3개 이상 이어지는 목록
+# (2026-07-27 신규 소스 실사 중 발견). 같은 하이픈이 ENTRY 줄에서는 '범위'인데 TARGETS
+# 줄에서는 '나열'이라, _RANGE 로만 보면 두 번째 값을 범위 상단으로 오인한다.
+# 실측 왜곡: ETC 첫 목표 +4.7% → +9.1%, AERO +5.1% → +10.0% (약 2배).
+# 적중 판정("TP1 도달=승")과 TP 거리 배점이 모두 첫 목표를 전제하므로 나열이면 맨 앞
+# 값을 취해야 한다. 숫자 사이에 구분자만 허용한다 — 사이에 글자가 끼면
+# ("6.81 - 6.85\nSTOP LOSS: 6.25") 매칭되지 않아 진짜 범위를 나열로 오인하지 않는다.
+_LADDER = re.compile(_NUM + r"(?:[ \t]*[-–~〜/][ \t]*" + _NUM + r"){2,}")
 
 # 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
@@ -140,12 +151,22 @@ def _grab_after(label_pat, text: str) -> list:
     """라벨 뒤 짧은 창(30자) 안에서 첫 숫자(또는 범위)를 검색해 수집. 범위면 [lo, hi].
     '맨 앞 고정'이 아니라 검색으로 하는 이유: 라벨과 숫자 사이에 '가', 'around', '@',
     통화기호 등 잡토큰이 끼는 경우가 흔하기 때문. 단, 창을 짧게 잡아 무관한 숫자를
-    끌어오지 않는다(가장 왼쪽 숫자만 채택)."""
+    끌어오지 않는다(가장 왼쪽 숫자만 채택).
+
+    사다리형 나열("7.15 - 7.45 - 7.85")은 범위보다 먼저 판정해 **맨 앞 값 하나만**
+    돌려준다(_LADDER 주석 참고). 호출부가 tp 를 `[-1]`(범위면 상단)로 꺼내므로,
+    나열을 범위로 넘기면 두 번째 목표가 TP1 자리에 앉는다."""
     out = []
     for m in label_pat.finditer(text):
         window = text[m.end(): m.end() + 30]
+        lad = _LADDER.search(window)
         rng = _RANGE.search(window)
         sng = _SINGLE.search(window)
+        if lad and (not sng or lad.start() <= sng.start()):
+            first = _to_float(lad.group(1))
+            if first:
+                out.append([first])   # 길이 1 = 호출부의 [-1]/[0] 이 같은 값
+                continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
         if rng and (not sng or rng.start() <= sng.start()):
             lo, hi = _to_float(rng.group(1)), _to_float(rng.group(2))
