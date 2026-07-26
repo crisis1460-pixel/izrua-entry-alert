@@ -1401,6 +1401,39 @@ check("OB7 최근 잔량비 조회",
       len(_obrecent) == 1 and _obrecent[0]["coin_symbol"] == "OBX"
       and _obrecent[0]["touch_bid_ask_ratio"] == 2.5)
 
+# ── EX1~EX4: 만료 기준은 '수집 시각'이 아니라 '게시 시각' (2026-07-27 실전 발견) ──
+# 수집 게이트가 "7일 이내 글만"이어도 만료가 수집 기준이면, 6.9일 된 글이 거기서
+# 7일을 더 살아 최대 14일까지 알림을 낸다. 실전 사례: XTZ 가 수집 당시 6.6일 →
+# DB 체류 4.0일 → 게시 10.5일 만에 터치 본알림(활성 33건 중 5건이 7일 초과 상태).
+# 두 게이트가 같은 시간축을 봐야 "7일 이내 글만, 게시 7일까지만"이 성립한다.
+_EXPIRY = 168 * 3600
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM levels")
+
+    def _add_exp(sym, age_min, collected_ago_h, status="watching"):
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,"
+            " status, collected_at, post_age_minutes) VALUES (?,?,?,'long',1.0,?,?,?)",
+            (f"exp-{sym}", sym, f"KRW-{sym}", status,
+             now - collected_ago_h * 3600, age_min))
+        return conn.execute("SELECT last_insert_rowid() AS id").fetchone()[0]
+
+    _ex_old = _add_exp("EXOLD", 6.6 * 1440, 4 * 24)     # 게시 10.6일 (구 기준 생존)
+    _ex_fresh = _add_exp("EXFRESH", 0, 4 * 24)          # 게시 4일 (양 기준 생존)
+    _ex_null = _add_exp("EXNULL", None, 4 * 24)         # 구세대 결측 → 수집 기준 폴백
+    _ex_shadow = _add_exp("EXSHADOW", 6.6 * 1440, 4 * 24, status="touched")
+
+    db.expire_old(conn, _EXPIRY, now)
+    _ex_st = {r[0]: r[1] for r in conn.execute(
+        "SELECT id, status FROM levels WHERE id IN (?,?,?,?)",
+        (_ex_old, _ex_fresh, _ex_null, _ex_shadow)).fetchall()}
+
+check("EX1 게시 7일 초과(수집은 4일 전)는 만료 - 수집 기준이면 생존했을 건",
+      _ex_st[_ex_old] == "expired")
+check("EX2 게시 4일은 생존(과잉 만료 없음)", _ex_st[_ex_fresh] == "watching")
+check("EX3 post_age 결측 구세대는 수집 기준 폴백으로 생존", _ex_st[_ex_null] == "watching")
+check("EX4 섀도 터치도 게시 기준으로 만료", _ex_st[_ex_shadow] == "expired")
+
 # ── 체인(카드3): 이 파일에서 그동안 resolve_outcome 을 거쳐 쌓인 실제 판정
 #    (T8/T9/T10/T11/T13/T15/BM1~BM8 등, run_once/_judge_outcomes 정상 경로로
 #    종결된 전체 표본)이 통째로 하나의 유효한 해시체인을 이루는지 확인한다 —
