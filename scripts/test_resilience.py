@@ -6,6 +6,7 @@ import hashlib
 import os
 import sys
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1050,10 +1051,24 @@ check("M3: data/ 충돌 감지 시 조용히 덮지 않고 ::error:: 로 사람�
 check("M3: 충돌 시 어느 커밋이 끼어들었는지 로그에 남긴다(git log BASE..REMOTE -- data/)",
       'git log --oneline "$BASE"..."$REMOTE" -- data/' in _pc_yml_card2
       or 'git log --oneline "$BASE".."$REMOTE" -- data/' in _pc_yml_card2)
+# 2026-07-27 저녁 갱신: 가드가 '변경 여부'에서 '변경 주체'로 바뀌면서 주석 문구도
+# 바뀌었다. 특정 낱말이 아니라 **판단 근거가 문서화돼 있는지**를 본다.
 check("M3: '무조건 ours 승리가 아닌 이유' 주석이 명시적으로 남아있다",
-      "무조건 ours" in _pc_yml_card2 and "직접 push" in _pc_yml_card2)
+      "무조건 ours" in _pc_yml_card2 and "유실" in _pc_yml_card2)
 check("M3: 안전할 때만 reset --hard 로 최신 origin 을 따라간다",
       'git reset -q --hard "$REMOTE"' in _pc_yml_card2)
+# 2026-07-27 저녁 수리: 가드가 '변경 여부'가 아니라 '변경 주체'를 본다.
+# 최초 설계는 "concurrency 가 직렬화하니 base 이후 data 변경은 사람뿐"이라고
+# 전제했는데 실측이 반박했다 — 수집 회차(6~10분) 동안 2분 트리거가 밀려 쌓였다가
+# 한꺼번에 풀리며 봇 회차끼리 겹쳤고(19:45:57·19:46:42 커밋 45초 간격),
+# 그 구간에서만 실패가 나 4시간마다 실패 메일 + 회차 유실이 생겼다.
+check("M3: 끼어든 data 커밋의 '작성자'를 판별한다(봇 경합 vs 사람 개입)",
+      "%an" in _pc_yml_card2 and "grep -v '^izrua-bot$'" in _pc_yml_card2)
+check("M3: 봇 자신의 선행 회차면 중단하지 않고 진행한다",
+      "::notice::" in _pc_yml_card2 and "정상 경합" in _pc_yml_card2)
+check("M3: 봇이 아닌 주체면 종전대로 중단한다(사람 개입 방어는 유지)",
+      'if [ -n "$OTHERS" ]; then' in _pc_yml_card2
+      and "::error::" in _pc_yml_card2 and "exit 1" in _pc_yml_card2)
 check("M3: data/ 를 스냅샷과 정확히 동기화한다(삭제 포함 - 감사 덤프 정리 되살아남 방지)",
       "shutil.rmtree(dst)" in _pc_yml_card2 and "shutil.copytree(snap, dst)" in _pc_yml_card2)
 check("M3: 여전히 이 잡 하나만 data/ 를 커밋한다(W1 불변식 - git add data/ 유지)",
@@ -1117,6 +1132,18 @@ telegram.send = lambda text, urgency="high": (_gap_sent.append(text), True)[1]
 settings.SETTINGS["price_check_gap_alert_minutes"] = 120
 
 _now_gap = time.time()
+# KST 자정 경계 가드 (2026-07-27 저녁 실전 발견 — 오늘 세 번째 같은 유형).
+# G1~G4 는 기준 시각에서 최대 +4.2시간(120초 + 130분 + 121분)까지 앞으로 밀며
+# 검사하는데, _check_price_check_gap 의 중복 억제는 **KST 날짜** 게이트다.
+# 기준이 저녁이면 G3(경보 발송)과 G4(재차 초과) 사이에 날짜가 바뀌어 게이트가
+# 풀리고, 억제돼야 할 G4 가 두 번째 경보를 보내 실패한다(19시 통과 → 21시 실패로
+# 재현). 오늘 남은 시간이 5시간 미만이면 그만큼 뒤로 당겨 전 구간을 같은 KST
+# 날짜에 넣는다 — 검사 대상 로직과 무관한 시계 문제라 기준 시각만 옮긴다.
+_KST_TZ = timezone(timedelta(hours=9))
+_gap_day_end = datetime.fromtimestamp(_now_gap, _KST_TZ).replace(
+    hour=23, minute=59, second=59, microsecond=0).timestamp()
+if _gap_day_end - _now_gap < 5 * 3600:
+    _now_gap -= 5 * 3600 - (_gap_day_end - _now_gap)
 
 # G1: 최초 회차(직전 기록 없음) - 비교 대상이 없으니 경보도 meta 기록도 없다
 with db.connect(TEST_DB_GAP) as conn:
