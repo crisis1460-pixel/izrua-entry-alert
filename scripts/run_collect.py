@@ -43,21 +43,53 @@ def _day_kst(now: float) -> str:
 
 
 # ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
+# 하루 총 요청 캡 (2026-07-27, 개발자B, 교차감사 m-A6 확정) ───────────────
+# 왜 '게이트'가 아니라 '요청 수'를 세는가:
+#   진전 게이트(last_deletion_check_day - n_checked>0 일 때만 set, 아래 함수 하단
+#   주석 참고)는 "그날 최소 1건이라도 확정 판정이 나왔는가"만 본다. 전원 판정
+#   보류(None)면 게이트가 안 걸려 다음 "수집 회차"(4시간마다, 하루 최대 6회)마다
+#   재시도한다 - 그런데 그 재시도 한 번마다 최대 deletion_check_daily_limit(5)건의
+#   실제 TradingView 요청을 태운다. 하루 예산 산식이 원래 "1회·최대 5요청"이었던
+#   전제가 "6회차 × 5요청 = 최대 30요청/일"로 불어난다(수집 루프 앞단에 있어 403
+#   기아를 앞당길 수 있다는 것도 양측 확증). 게이트를 "요청 성공 여부"가 아니라
+#   "요청을 시도했는가"로 되돌리면 m-A2(원래 회귀 - 전원 보류 시 영구 0건)가
+#   재발하므로, 게이트는 그대로 두고 완전히 별도 축인 '요청 총량'만 하루 단위로
+#   하드 캡한다(설정값이 아니라 모듈 상수 - 사용자가 설정을 올려도 이 캡은
+#   못 넘게 하는 것이 목적이라 settings 로 노출하지 않는다).
+_DELETION_CHECK_REQ_COUNT_KEY_PREFIX = "deletion_check_req_count_"
+_DELETION_CHECK_DAILY_REQUEST_CAP = 10  # 6회차×5요청(=30) 시나리오를 이 아래로 강제
+_DELETION_CHECK_REQ_META_KEEP_DAYS = 3  # 이 캡은 '오늘'만 보므로 며칠치만 남기면 충분
+
+
 def _check_deletions(conn, timeout: float) -> int:
     """종결된 레벨의 post_url 생존을 하루 상한만큼 확인. 반환: 삭제 확정 건수.
     하루 1회만 수행(수집이 4시간마다 도는 것과 별개로 - meta 로 날짜 게이트),
-    확인 건수는 settings.deletion_check_daily_limit 로 제한한다(비용 방어)."""
+    확인 건수는 settings.deletion_check_daily_limit 로 제한한다(비용 방어).
+
+    2026-07-27 수리(개발자B, 교차감사 m-A6 확정): 위 '진전 게이트'만으로는 전원
+    판정 보류(None)가 이어지는 날 하루 최대 6회차 × 5요청 = 30요청까지 재시도가
+    증폭될 수 있다(모듈 상수 설명 참고). 여기서는 그 재시도들이 하루 총
+    _DELETION_CHECK_DAILY_REQUEST_CAP 건을 넘지 않도록 별도로 카운트·차단한다."""
     now = time.time()
     day = _day_kst(now)
     if db.get_meta(conn, "last_deletion_check_day") == day:
         return 0
-    limit = settings.get("deletion_check_daily_limit")
+
+    req_count_key = _DELETION_CHECK_REQ_COUNT_KEY_PREFIX + day
+    used_today = int(db.get_meta(conn, req_count_key, "0") or "0")
+    remaining_budget = _DELETION_CHECK_DAILY_REQUEST_CAP - used_today
+    if remaining_budget <= 0:
+        logger.info("[삭제확인] 하루 요청 캡(%d) 소진 - 오늘은 더 시도하지 않음(진전 게이트와 별개)",
+                    _DELETION_CHECK_DAILY_REQUEST_CAP)
+        return 0
+
+    limit = min(settings.get("deletion_check_daily_limit"), remaining_budget)
     recheck_sec = settings.get("deletion_recheck_after_days") * 86400
     candidates = db.get_deletion_check_candidates(conn, limit, recheck_sec)
     if not candidates:
         db.set_meta(conn, "last_deletion_check_day", day)
         return 0
-    n_deleted = n_checked = 0
+    n_deleted = n_checked = n_requests = 0
     blocked = False
     for i, cand in enumerate(candidates):
         if tradingview.is_blocked():
@@ -68,6 +100,7 @@ def _check_deletions(conn, timeout: float) -> int:
         if i > 0:
             time.sleep(1.0)  # 상세 방문과 동일한 페이싱 원칙(모듈 sleep 계약 준수)
         result = tradingview.check_post_deleted(cand["post_url"], timeout)
+        n_requests += 1  # 결과가 None 이어도 실제 요청은 나갔으므로 캡에는 반영한다
         if result is None:
             continue  # 판정 보류 - deleted_checked_at 갱신 안 함, 다음 순번에 재확인
         db.mark_deletion_checked(conn, cand["id"], result, now)
@@ -75,6 +108,8 @@ def _check_deletions(conn, timeout: float) -> int:
         if result:
             n_deleted += 1
             logger.info("[삭제확인] 삭제 확정: id=%s author=%s", cand["id"], cand.get("author"))
+    if n_requests:
+        db.set_meta(conn, req_count_key, str(used_today + n_requests))
     # 2026-07-26 실전 버그 수리: 차단으로 중도 break 했을 때도 게이트를 set 해버려서,
     # "0건 확인"인데 하루 게이트가 소진되고 후보(그날 26건)가 통째로 다음날로
     # 밀리는 사고가 있었다. 로그 문구("다음 회차로 연기")대로, 차단 시엔 게이트를
@@ -147,24 +182,35 @@ def _maybe_alert_block(conn, now: float) -> None:
                        reason, sent_today + 1, limit)
 
 
+def _prune_daily_counter_meta_by_prefix(conn, prefix: str, day: str, keep_days: int) -> int:
+    """접두사_YYYY-MM-DD 형태 날짜별 카운터 meta 키 정리 공통 구현(내부 헬퍼).
+
+    LIKE 대신 substr 두 번으로 접두사를 자른다 - 접두사 안에 '_' 가 있어 LIKE
+    패턴으로 쓰면 SQL 와일드카드(임의 1글자)로 해석돼 의도보다 헐겁게 매칭된다.
+    남은 부분은 ISO 날짜(YYYY-MM-DD)라 사전식 문자열 비교가 곧 시간순 비교와
+    같다(storage.db.prune_daily_stats 와 동일한 컷오프 계산 방식). 반환: 삭제한
+    키 개수."""
+    cutoff = (datetime.fromisoformat(day) - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+    prefix_len = len(prefix)
+    cur = conn.execute(
+        "DELETE FROM meta WHERE substr(key, 1, ?) = ? AND substr(key, ?) < ?",
+        (prefix_len, prefix, prefix_len + 1, cutoff),
+    )
+    return cur.rowcount
+
+
 def _prune_tv_block_alert_meta(conn, day: str, keep_days: int) -> int:
     """날짜별 차단경보 카운터(tv_block_alert_count_YYYY-MM-DD) meta 키 정리
     (2026-07-26 과제2 - 감사 minor). 날짜가 지나도 옛 키가 안 지워지면 meta
     테이블이 무한 증가한다. storage/db.py 에 범용 prune 헬퍼를 새로 얹지 않고
     (개발자 A 병렬 작업 중 - 파일 경계 원칙) 이 파일 안에서 직접 SQL로 해결한다.
 
-    LIKE 대신 substr 두 번으로 접두사를 자른다 - 접두사 안에 '_' 가 있어 LIKE
-    패턴으로 쓰면 SQL 와일드카드(임의 1글자)로 해석돼 의도보다 헐겁게 매칭된다.
-    남은 부분은 ISO 날짜(YYYY-MM-DD)라 사전식 문자열 비교가 곧 시간순 비교와
-    같다(storage.db.prune_daily_stats 와 동일한 컷오프 계산 방식). 매 수집
+    2026-07-27 - 삭제확인 요청캡(_DELETION_CHECK_REQ_COUNT_KEY_PREFIX) 정리에도
+    같은 SQL 이 필요해져 공통부를 _prune_daily_counter_meta_by_prefix 로 뽑았다.
+    이 함수는 그 얇은 래퍼로 남긴다 - scripts/test_cycle.py(다른 세션 소유)가 이
+    이름·시그니처(conn, day, keep_days)를 직접 호출하므로 변경 금지. 매 수집
     회차 가볍게 수행. 반환: 삭제한 키 개수."""
-    cutoff = (datetime.fromisoformat(day) - timedelta(days=keep_days)).strftime("%Y-%m-%d")
-    prefix_len = len(_TV_BLOCK_ALERT_KEY_PREFIX)
-    cur = conn.execute(
-        "DELETE FROM meta WHERE substr(key, 1, ?) = ? AND substr(key, ?) < ?",
-        (prefix_len, _TV_BLOCK_ALERT_KEY_PREFIX, prefix_len + 1, cutoff),
-    )
-    return cur.rowcount
+    return _prune_daily_counter_meta_by_prefix(conn, _TV_BLOCK_ALERT_KEY_PREFIX, day, keep_days)
 
 
 # ── 글 1건 → 레벨 저장 (입력원 공통 경로) ──────────────────────────────
@@ -491,6 +537,13 @@ def main() -> int:
         # 안 지워지는 문제 방지. 매 수집 회차 가볍게 수행(비용 무시할 수준).
         _prune_tv_block_alert_meta(conn, _day_kst(now_block),
                                    settings.get("tv_block_alert_meta_keep_days"))
+
+        # 삭제확인 요청캡 meta 키 정리(2026-07-27, 개발자B, 교차감사 m-A6) - 위와
+        # 동일한 이유로 날짜별 카운터가 무한 증가하지 않게 함께 정리한다(공통 SQL은
+        # _prune_daily_counter_meta_by_prefix 로 공유 - 위 함수 docstring 참고).
+        _prune_daily_counter_meta_by_prefix(conn, _DELETION_CHECK_REQ_COUNT_KEY_PREFIX,
+                                            _day_kst(now_block),
+                                            _DELETION_CHECK_REQ_META_KEEP_DAYS)
 
         # 마지막 확정 (2026-07-27 M1). 컨텍스트 종료 시에도 커밋되지만 명시한다 —
         # _maybe_alert_block 은 '발송 성공 후' 카운터를 올리므로, 발송과 커밋 사이에

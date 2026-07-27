@@ -147,9 +147,22 @@ jobs:
           # 돈다(예전처럼 "5회 루프 + 마지막 1회 별도 블록"으로 코드를 중복시키지
           # 않는다 - reset --hard 가 매 시도 시작을 항상 깨끗하게 만들어주므로
           # 별도 처리가 필요 없다).
+          # 2026-07-27 수리(개발자B, 교차감사 m-A4 확정): fetch 도 push 와 같은 방식으로
+          # 가드한다. set -e 아래에서 fetch 가 실패하면(네트워크 순단 등, exit 128)
+          # 그 즉시 스크립트 전체가 죽어 6회 재시도가 첫 판에 통째로 증발한다 - 예전
+          # (commit-then-rebase 시절) 구조는 pull 실패를 `|| { ...; continue; }` 로
+          # 흡수했었는데, 이번 M3 구조 전환 때 그 방어가 빠진 채 회귀했다(A 실측 재현).
+          # REMOTE/BASE 는 fetch 성공 이후에만 갱신 - 실패한 시도에서 이전 루프의
+          # REMOTE/BASE 값을 건드리면 다음 시도가 잘못된 기준점으로 비교하게 된다.
           DELAYS=(3 5 8 13 21)
           for i in 0 1 2 3 4 5; do
-            git fetch -q origin main
+            if ! git fetch -q origin main; then
+              echo "::warning::git fetch 실패(네트워크 순단 추정, 시도 $((i+1))/6) - REMOTE/BASE 갱신 없이 재시도"
+              if [ $i -lt 5 ]; then
+                sleep "${DELAYS[$i]}"
+              fi
+              continue
+            fi
             REMOTE="$(git rev-parse origin/main)"
 
             # ⚠️ 왜 무조건 ours(우리 스냅샷) 승리가 아닌가:
@@ -171,6 +184,14 @@ jobs:
             # data/ 는 base 이후 무변경(순수 경합이거나 첫 시도) - 로컬을 최신
             # origin 으로 맞추고 그 위에 스냅샷을 다시 얹는다. reset --hard 는 이전
             # 재시도에서 push 에 실패해 남은 로컬 커밋도 함께 정리해준다.
+            #
+            # ⚠️ 불변식(2026-07-27 수리, 개발자B, 교차감사 m-A8 확정): 이 reset --hard
+            # 는 data/ 밖의 **추적 파일**에 대한 이번 회차 중 변경도 함께, 조용히
+            # 되돌린다 - 위 스냅샷/복원은 data/ 만 다루므로 data/ 밖 변경은 애초에
+            # 스냅샷에 없어 되살아나지 않는다. 지금은 "회차 실행" 스텝(python
+            # scripts/run_cycle.py)의 산출물이 전부 data/ 밑이라 잠복해 있을
+            # 뿐이다 - 이 잡의 파이썬 실행이 data/ 밖 추적 파일을 수정하게 되면
+            # 이 스텝이 그 변경을 조용히 버린다. 산출물은 반드시 data/ 밑에 둘 것.
             git reset -q --hard "$REMOTE"
             BASE="$REMOTE"
 

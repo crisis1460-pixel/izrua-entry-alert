@@ -452,6 +452,109 @@ check("수리4 시나리오E: 삭제 확정 0건(그 1건은 생존 판정=False
 
 
 # ══════════════════════════════════════════════════════════════════
+# m-A6(2026-07-27, 개발자B, 교차감사 확정) — 삭제확인 '보류 재시도'가 하루
+# 6회차 × 5요청 = 최대 30요청까지 증폭되던 문제. 진전 게이트(위 수리4)는 그대로
+# 두고, 완전히 별도 축인 '하루 총 요청 수' 를 모듈 상수 캡으로 별도 제한한다.
+# ══════════════════════════════════════════════════════════════════
+TEST_DB_DEL_CAP = "cache/_test_resilience_delcap.db"
+if os.path.exists(TEST_DB_DEL_CAP):
+    os.remove(TEST_DB_DEL_CAP)
+db.init_db(TEST_DB_DEL_CAP)
+with db.connect(TEST_DB_DEL_CAP) as conn:
+    for i in range(30):
+        _insert_touched(conn, f"capkey{i}")
+
+settings.SETTINGS["deletion_check_daily_limit"] = 5
+settings.SETTINGS["deletion_recheck_after_days"] = 30
+tradingview.is_blocked = lambda: False
+tradingview.check_post_deleted = lambda url, timeout: None  # 전원 보류 - 게이트 미소진 재현
+
+_cap_day = run_collect._day_kst(time.time())
+_cap_req_key = run_collect._DELETION_CHECK_REQ_COUNT_KEY_PREFIX + _cap_day
+
+# F1~F2: 캡(10) 이내에서는 회차를 반복해도(전원 보류라 게이트 미소진) 매번 요청이
+# 실제로 나가고, 누적 요청 수가 정확히 쌓인다(5요청 × 2회차 = 10, 캡에 정확히 도달).
+with db.connect(TEST_DB_DEL_CAP) as conn:
+    run_collect._check_deletions(conn, timeout=5.0)
+    used_after_1 = int(db.get_meta(conn, _cap_req_key, "0"))
+check("m-A6-F1: 1회차 후 요청 카운터가 5(=deletion_check_daily_limit)로 기록됨",
+      used_after_1 == 5)
+
+with db.connect(TEST_DB_DEL_CAP) as conn:
+    run_collect._check_deletions(conn, timeout=5.0)
+    used_after_2 = int(db.get_meta(conn, _cap_req_key, "0"))
+check("m-A6-F2: 2회차(게이트 미소진 - 여전히 전원 보류) 후 누적 10(=캡)에 정확히 도달",
+      used_after_2 == 10)
+
+# F3: 캡 소진 이후 3회차는 TradingView 요청을 아예 시도하지 않는다(하루 총량 방어).
+_cap_calls = {"n": 0}
+
+
+def _cap_check_post_deleted(url, timeout):
+    _cap_calls["n"] += 1
+    return None
+
+
+tradingview.check_post_deleted = _cap_check_post_deleted
+with db.connect(TEST_DB_DEL_CAP) as conn:
+    n_cap3 = run_collect._check_deletions(conn, timeout=5.0)
+    used_after_3 = int(db.get_meta(conn, _cap_req_key, "0"))
+check("m-A6-F3: 캡 도달 후 회차는 check_post_deleted 를 단 한 번도 호출하지 않는다"
+      "(요청 자체를 시도 안 함 - 게이트가 아니라 요청 수로 막힘)",
+      _cap_calls["n"] == 0)
+check("m-A6-F3b: 캡 도달 후엔 확인 0건, 카운터도 그대로(10에서 불변)",
+      n_cap3 == 0 and used_after_3 == 10)
+
+# F4: 캡 안에서는(진전 게이트와 무관하게) 정상적으로 판정이 이뤄진다 - 캡 자체가
+# 기능을 막는 게 아니라 '보류 재시도의 총량'만 막는다는 것을 확인(회귀 방지).
+TEST_DB_DEL_CAP2 = "cache/_test_resilience_delcap2.db"
+if os.path.exists(TEST_DB_DEL_CAP2):
+    os.remove(TEST_DB_DEL_CAP2)
+db.init_db(TEST_DB_DEL_CAP2)
+with db.connect(TEST_DB_DEL_CAP2) as conn:
+    for i in range(3):
+        _insert_touched(conn, f"capok{i}")
+tradingview.check_post_deleted = lambda url, timeout: False  # 전부 생존 판정(진전 있음)
+_cap4_req_key = (run_collect._DELETION_CHECK_REQ_COUNT_KEY_PREFIX
+                 + run_collect._day_kst(time.time()))
+with db.connect(TEST_DB_DEL_CAP2) as conn:
+    n_cap4 = run_collect._check_deletions(conn, timeout=5.0)
+    used_cap4 = db.get_meta(conn, _cap4_req_key, "0")
+    gate_cap4 = db.get_meta(conn, "last_deletion_check_day")
+check("m-A6-F4: 캡 이내 + 진전 있음 - 기존 게이트 동작(하루 1회 소진)은 그대로",
+      gate_cap4 is not None)
+check("m-A6-F4b: 요청 카운터도 정상 증가(3건)", used_cap4 == "3")
+
+# F5: 날짜별 요청캡 meta 키가 오래되면 정리된다(무한 증가 방지 - 위 _prune_tv_block_alert_meta
+# 패턴과 동일한 SQL 을 공유하는 _prune_daily_counter_meta_by_prefix 로 검증).
+TEST_DB_DEL_PRUNE = "cache/_test_resilience_delcap_prune.db"
+if os.path.exists(TEST_DB_DEL_PRUNE):
+    os.remove(TEST_DB_DEL_PRUNE)
+db.init_db(TEST_DB_DEL_PRUNE)
+_dcp = run_collect._DELETION_CHECK_REQ_COUNT_KEY_PREFIX
+with db.connect(TEST_DB_DEL_PRUNE) as conn:
+    db.set_meta(conn, _dcp + "2026-07-01", "5")   # 오래됨 - 삭제 대상
+    db.set_meta(conn, _dcp + "2026-07-23", "5")   # cutoff 이전 - 삭제 대상
+    db.set_meta(conn, _dcp + "2026-07-24", "5")   # cutoff 당일 - 보존(경계, keep_days=3)
+    db.set_meta(conn, _dcp + "2026-07-27", "5")   # 오늘 - 보존
+    db.set_meta(conn, "other_unrelated_key2", "keep")
+    n_pruned_del = run_collect._prune_daily_counter_meta_by_prefix(
+        conn, _dcp, "2026-07-27", run_collect._DELETION_CHECK_REQ_META_KEEP_DAYS)
+with db.connect(TEST_DB_DEL_PRUNE) as conn:
+    remaining_del = {r["key"] for r in conn.execute(
+        "SELECT key FROM meta WHERE key LIKE ?", (_dcp + "%",)).fetchall()}
+    other_kept_del = db.get_meta(conn, "other_unrelated_key2")
+check("m-A6-F5: keep_days(3) 경계 이전 요청캡 키만 정리(경계일 07-24 는 보존)",
+      n_pruned_del == 2)
+check("m-A6-F5b: 남은 키는 경계일 이후 + 오늘만, 무관 키는 항상 보존",
+      remaining_del == {_dcp + "2026-07-24", _dcp + "2026-07-27"} and other_kept_del == "keep")
+
+os.remove(TEST_DB_DEL_CAP)
+os.remove(TEST_DB_DEL_CAP2)
+os.remove(TEST_DB_DEL_PRUNE)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 수리5: notify/telegram.send() - 재시도(429/5xx/타임아웃), 토큰 마스킹, urgency
 # ══════════════════════════════════════════════════════════════════
 from notify import telegram
@@ -956,6 +1059,46 @@ check("M3: data/ 를 스냅샷과 정확히 동기화한다(삭제 포함 - 감�
 check("M3: 여전히 이 잡 하나만 data/ 를 커밋한다(W1 불변식 - git add data/ 유지)",
       "git add data/" in _pc_yml_card2)
 
+# 2026-07-27 수리(개발자B, 교차감사 m-A4 확정) — fetch 실패 가드. set -e 아래에서
+# fetch 가 실패(exit 128)하면 재시도 루프 자체가 첫 판에 증발하던 회귀를
+# push 와 동일한 방식(백오프 후 continue)으로 흡수했는지 텍스트로 검사한다.
+# 실제 "원격 불가 → 재시도 지속 → 복구 후 성공" 시나리오는 스크래치패드 임시
+# 저장소(가짜 git fetch 셔틀)로 별도 재현·검증 완료(레포 밖이라 여기선 텍스트만).
+check("m-A4: fetch 를 if ! git fetch 로 감싸 실패를 즉사시키지 않는다",
+      'if ! git fetch -q origin main; then' in _pc_yml_card2)
+check("m-A4: fetch 실패 시 REMOTE 는 그 반복에서 갱신되지 않는다"
+      "(REMOTE 대입이 fetch 가드 성공 분기 안에서만 일어남)",
+      'fi\n            REMOTE="$(git rev-parse origin/main)"' in _pc_yml_card2)
+check("m-A4: fetch 실패 시에도 push 실패와 동일한 백오프 배열(DELAYS)로 sleep 후 재시도",
+      _pc_yml_card2.count('sleep "${DELAYS[$i]}"') >= 2)
+check("m-A4: fetch 실패는 ::warning:: 으로 남기되(치명은 아님) 잡을 죽이지 않는다",
+      "git fetch 실패" in _pc_yml_card2 and "::warning::git fetch 실패" in _pc_yml_card2)
+_fetch_guard_block = _pc_yml_card2.split('if ! git fetch -q origin main; then')[1].split(
+    'REMOTE="$(git rev-parse origin/main)"')[0]
+check("m-A4: fetch 실패 분기는 continue 로 루프 맨 앞(다음 fetch 시도)으로 돌아간다",
+      "continue" in _fetch_guard_block)
+check("m-A4: fetch 가드는 마지막 시도(i=5)에서 sleep 을 생략하고 그대로 빠져나가"
+      " 기존 최종 ::error::+exit 1 경로에 자연 합류한다(별도 종료 코드 없음)",
+      "exit 1" not in _fetch_guard_block and "exit 0" not in _fetch_guard_block)
+
+
+# ══════════════════════════════════════════════════════════════════
+# m-A8(2026-07-27, 개발자B, 교차감사 확정) — reset --hard 불변식 주석.
+# 코드 변경은 없다(과제 정의상 주석뿐) - 이 reset --hard 가 data/ 밖 추적 파일의
+# 회차 중 변경을 무음으로 버린다는 사실이 스냅샷/reset 부근에 명시돼 있는지만
+# 확인한다.
+# ══════════════════════════════════════════════════════════════════
+check("m-A8: reset --hard 직전에 'data/ 밖 추적 파일' 불변식 경고 주석이 있다",
+      "data/ 밖" in _pc_yml_card2 and "추적 파일" in _pc_yml_card2)
+check("m-A8: '조용히 버린다'는 문구로 무음 손실 위험을 명시한다",
+      "조용히 버린다" in _pc_yml_card2)
+check("m-A8: '산출물은 반드시 data/ 밑에' 원칙이 문구로 못박혀 있다",
+      "산출물은 반드시 data/ 밑에" in _pc_yml_card2)
+_reset_hard_idx = _pc_yml_card2.find('git reset -q --hard "$REMOTE"')
+_invariant_idx = _pc_yml_card2.find("data/ 밖")
+check("m-A8: 불변식 주석이 reset --hard 실행 줄보다 앞(주변)에 위치한다",
+      0 <= _invariant_idx < _reset_hard_idx)
+
 
 # ══════════════════════════════════════════════════════════════════
 # 카드2 과제2(2026-07-27): 가격체크 회차 자체 정지(공백) 감시
@@ -1397,6 +1540,55 @@ check("카드14-T4d: 소문자 일반단어는 코인으로 오인하지 않는�
 check("카드14-T4e: 숫자-only 는 base 가 아니다(리스크 문구가 진짜 티커를 못 가림)",
       tgs.match_symbol("Buy ETH now. Risk: 100 USD per trade", _known) == "ETH"
       and tgs.match_symbol("GEM: $4/USDT breakout", _known) is None)
+
+# ── T4f~T4k: 2차 교차검토 확정 _PAIR 통합수리 (2026-07-27) ────────────────
+# T4e 의 수리는 "숫자-only base 배제"만 닫았고, 결함 부류 전체는 남아 있었다 —
+# 옛 패턴의 `\s*[/\-]?\s*` 가 구분자를 통째로 생략 가능하게 해서 견적통화 바로
+# 앞의 **아무 대문자 토큰**이나 base 로 승격됐다. 거짓 base 하나가 '페어 있음'
+# 판정을 만들어 전수 스캔 폴백을 봉쇄 → 글이 통째로 드롭된다(손실 100%).
+# 확정안: ① `$` 접두는 구분자 주변 공백 허용 ② 무접두는 붙여쓰기/무공백 구분자만
+# ③ 레버리지는 정규식이 아니라 후처리(`^[0-9]{1,3}X$`)로 배제.
+# 아래 6묶음이 그 계약 전부다. `_known` 을 그대로 쓰지 않는 이유: 실물 유니버스
+# 심볼(2Z/USD1/ETC)이 있어야 T4i 의 '영문자 2자' 기각 근거를 증명할 수 있다.
+_known_pair = ["BTC", "ETH", "SOL", "XRP", "ETC", "ID", "2Z", "USD1", "AERO"]
+
+check("카드14-T4f: 레버리지 표기는 base 가 아니다(2X/5X/10X/20X - 후처리 배제)",
+      all(tgs.match_symbol(t, _known_pair) == "ETH" for t in [
+          "ETH LONG 2X USD margin",
+          "ETH LONG. Leverage 5X USDT",
+          "ETH 10X PERP",
+          "Cross 20X USDT / ETH",
+          "ETH LONG 10X/USDT",
+          "ETH LONG 20XUSDT",
+      ]))
+check("카드14-T4g: 공백만으로는 페어가 아니다(대문자 상용구가 글을 못 죽인다)",
+      all(tgs.match_symbol(t, _known_pair) == "ETH" for t in [
+          "ETH LONG\nBALANCE USDT\nEntry 3000",
+          "ETH LONG\nTAKE PROFIT IN USDT\nEntry 3000",
+          "ETH LONG\nTAKE PROFIT - USDT\nEntry 3000",
+          "ETH LONG\nSTOP LOSS / USD 2900",
+          "ETH LONG. MARGIN USDT 500",
+          "ETH setup. TOTAL PERP exposure",
+      ]))
+check("카드14-T4h: 진짜 페어 표기는 전부 그대로 통과(회귀)",
+      tgs.match_symbol("COIN: $ETC/USDT\nEntry 6.8", _known_pair) == "ETC"
+      and tgs.match_symbol("BTCUSDT long", _known_pair) == "BTC"
+      and tgs.match_symbol("#BTCUSDT long", _known_pair) == "BTC"
+      and tgs.match_symbol("ETH-USDT long", _known_pair) == "ETH"
+      and tgs.match_symbol("$SOL / USDT long", _known_pair) == "SOL"
+      and tgs.match_symbol("$1INCH/USDT long", _known_pair) is None)
+# '영문자 2자 이상' 안을 기각한 증거 — 실물 유니버스(data/universe.json)에 2Z(영문자
+# 1자)와 USD1 이 실제로 있다. 이 두 줄이 깨지면 그 안이 다시 들어온 것이다.
+check("카드14-T4i: 실물 심볼 2Z/USD1 이 페어 경로를 잃지 않는다('영문자 2자' 안 기각)",
+      tgs.match_symbol("$2Z/USDT long", _known_pair) == "2Z"
+      and tgs.match_symbol("USD1/USDT long", _known_pair) == "USD1")
+# 오귀속 방지 불변식: 미상장 코인의 페어 글은 **버려져야** 한다. 폴백을 허용하면
+# 'SIGNAL ID:' 의 ID(업비트 상장)로 오귀속된다 — 07-27 실측 사고 그 자체.
+check("카드14-T4j: 미추적 base 는 폴백을 봉쇄한 채 드롭(오귀속 방지 계약 유지)",
+      tgs.match_symbol("COIN: $GRAM/USDT\nSIGNAL ID: 44", _known_pair) is None)
+check("카드14-T4k: 숫자-only 회귀(T4e 계승) - 100 USD 는 base 가 아니고 $4/USDT 는 드롭",
+      tgs.match_symbol("Buy ETH now. Risk: 100 USD per trade", _known_pair) == "ETH"
+      and tgs.match_symbol("GEM: $4/USDT breakout", _known_pair) is None)
 
 # ── T5: 기본 OFF·빈 화이트리스트면 아무 일도 일어나지 않는다(핵심 안전장치) ──
 TEST_DB_TG = "cache/_test_resilience_telegram.db"
