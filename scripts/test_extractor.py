@@ -173,6 +173,12 @@ LADDER_CASES = [
     ("목표가 진짜 범위면 종전대로 상단",
      "Entry: 100\nTarget: 110 - 120\nSL: 95", 100.0,
      {"entry": 100.0, "sl": 95.0, "tp": 120.0}),
+    # 화살표 구분자는 2개짜리도 사다리다 (2026-07-27 실전 VVV 글).
+    # "110 - 120" 은 범위로도 읽히지만 "13.62 → 14.05" 는 순서일 수밖에 없다.
+    ("화살표 2단계 - 첫 값이 TP1, 단계 2",
+     "Direction: LONG | Entry: $13.27 | SL: $12.93 | TP: $13.62 → $14.05", 13.25,
+     {"entry": 13.27, "sl": 12.93, "tp": 13.62}),
+    ("화살표 3단계", "Entry: 10\nTP: 11 → 12 → 13", 10.0, {"entry": 10.0, "tp": 11.0}),
     # 엔트리 범위 뒤에 다른 라벨의 숫자가 이어져도 나열로 오인하지 않는다
     # (숫자 사이에 글자가 끼면 _LADDER 는 매칭되지 않는다)
     ("엔트리 범위는 나열로 오인하지 않음",
@@ -315,7 +321,23 @@ if _long_ok:
     ok += 1
 TOTAL_EXTRA += 3
 
+# 사다리 단계 수 (표시 전용 tp_ladder_count) — 값이 아니라 '몇 단계인가'를 본다.
+LADDER_N_CASES = [
+    ("화살표 2개 → 2단계", "Entry: 13.0\nTP: 13.62 → 14.05", 13.0, 2),
+    ("하이픈 2개는 범위 → 0단계", "Entry: 100\nTarget: 110 - 120", 100.0, 0),
+    ("하이픈 3개 → 3단계", "Entry: 10\nTargets: 11 - 12 - 13", 10.0, 3),
+    ("단일 목표 → 0단계", "Entry: 10\nTarget: 12", 10.0, 0),
+]
+for desc, text, price, exp_n in LADDER_N_CASES:
+    r = parse_setup(text, current_price=price)
+    got = (r or {}).get("tp_ladder_count", 0)
+    passed = got == exp_n
+    print(("✅" if passed else "❌"), f"단계수 {desc} → {got}")
+    if passed:
+        ok += 1
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
-         + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES))
+         + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
+         + len(LADDER_N_CASES))
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)

@@ -79,6 +79,15 @@ _SINGLE = re.compile(_NUM)
 # ("6.81 - 6.85\nSTOP LOSS: 6.25") 매칭되지 않아 진짜 범위를 나열로 오인하지 않는다.
 _LADDER = re.compile(_NUM + r"(?:[ \t]*[-–~〜/][ \t]*" + _NUM + r"){2,}")
 
+# 화살표 구분자 사다리: "TP: $13.62 → $14.05" (2026-07-27 실전 발견, VVV 글).
+# 하이픈과 달리 **2개짜리도 사다리로 본다.** 근거는 기호의 뜻이다 —
+#   "110 - 120" 은 '110에서 120 사이'(범위)로도 읽히지만,
+#   "13.62 → 14.05" 는 '13.62 다음 14.05'(순서)일 수밖에 없다.
+# 그래서 하이픈은 3개 이상일 때만 나열로 보고(2개는 범위 유지), 화살표는 2개부터
+# 나열로 센다. 값은 어느 쪽이든 맨 앞(TP1)만 쓴다.
+_LADDER_ARROW = re.compile(
+    _NUM + r"(?:[ \t]*(?:→|->|➡|=>|~>)[ \t]*" + _NUM + r"){1,}")
+
 # _LADDER 검색 창의 절대 상한 (2026-07-27 2차 교차검토 — 가용성 수리).
 # 왜 필요한가: _LADDER 는 _NUM(내부 교대)을 `{2,}` 로 감싼 **중첩 수량자**라, 긴
 # 숫자 런에서 역추적이 2차식으로 터진다. `_LADDER.search` 실측(같은 머신):
@@ -253,7 +262,13 @@ def _grab_after(label_pat, text: str) -> list:
             # 줄 끝과 _LADDER_MAX_WINDOW 중 **짧은 쪽**. 상한의 근거는 그 상수 주석
             # 참고(중첩 수량자의 2차 역추적 — 개행 없는 긴 숫자 줄 방어).
             _lad_end = min(len(text) if _nl < 0 else _nl, m.end() + _LADDER_MAX_WINDOW)
-            lad = _LADDER.search(text[m.end():_lad_end])
+            _seg = text[m.end():_lad_end]
+            lad = _LADDER.search(_seg)
+            # 화살표 나열은 2개짜리도 사다리다(_LADDER_ARROW 주석 참고). 둘 다
+            # 잡히면 더 왼쪽에서 시작하는 쪽 — 같은 라벨 뒤의 첫 표기가 주제다.
+            _arw = _LADDER_ARROW.search(_seg)
+            if _arw and (not lad or _arw.start() < lad.start()):
+                lad = _arw
         # lad/sng 의 start() 는 둘 다 m.end() 기준 오프셋이라 창 길이가 달라도 비교 가능.
         if lad and lad.start() <= sng.start():
             first = _to_float(lad.group(1))
