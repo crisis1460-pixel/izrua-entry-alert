@@ -54,8 +54,14 @@ _ORDINAL_LABEL = re.compile(r"\b(TP|SL|Target|Entry|타겟|목표)[0-9]{1,2}\b",
 # "목표 68,000" 오탐을 피하면서 이 표기만 잡는 결정적 차이는 숫자 뒤의 콜론:
 # 서수는 "Target 1:" 처럼 반드시 :/= 가 따라온다. 그래서 공백 서수는 콜론이
 # 뒤따를 때만 제거한다.
+# 2026-07-27 프로덕션 실사고 확장: "Take Profit 1: $0.385" 가 안 잡혀 ONDO 목표가에
+# 서수 1 이 들어갔다(tp=1.0). 위 목록이 라벨 '단어'만 갖고 있어서 "Take **Profit**" 처럼
+# 두 단어짜리 라벨의 마지막 단어를 몰랐던 것 — 같은 사고(ALGO/ARB)의 미완 수리였다.
+# 한/영 익절 표기(Take Profit / Profit / 익절)를 추가한다. 콜론 요구 조건은 그대로라
+# "목표 68,000" 류 오탐 위험은 늘지 않는다.
 _SPACED_ORDINAL_LABEL = re.compile(
-    r"\b(TP|SL|Target|Entry|타겟|목표|진입|손절)\s+[0-9]{1,2}(?=\s*[:=])", re.I
+    r"\b(take\s*profit|profit|익절|TP|SL|Target|Entry|타겟|목표|진입|손절)"
+    r"\s+[0-9]{1,2}(?=\s*[:=])", re.I
 )
 
 # 가격 숫자 하나: 1,234.56 / 0.00123 / 12100 / $8.30 (콤마·$ 허용)
@@ -100,6 +106,23 @@ _PERCENT = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*%")
 _DATE_FULL = re.compile(r"\b20[2-9]\d[-./]\d{1,2}[-./]\d{1,2}\b")
 _YEAR_KR = re.compile(r"\b20[2-9]\d\s*년")
 _YEAR_CTX = re.compile(r"\b(?:in|by|since|until|late|early|year)\s+20[2-9]\d\b", re.I)
+
+# R-멀티플 표기 ("4R return", "1.5R", "+2R") — 2026-07-27 프로덕션 실사고.
+# AVAX 글의 산문 "the initial entry achieving a solid 4R return" 에서 라벨 'entry' 가
+# 잡히고 바로 뒤 '4R' 의 4 가 진입가로 들어가, 실제가 $6.48 인 코인에 **$4.0 짜리
+# 가짜 레벨**이 감시 상태로 저장됐다(원문은 숏 분석인데 롱으로도 저장). 레버리지(10x)
+# 를 지우는 것과 완전히 같은 이유다 — 이건 가격이 아니라 '배수'다.
+# 소수 R(1.5R)도 흔하고, 부호가 붙는 경우(+2R/-1R)도 함께 지운다.
+_R_MULTIPLE = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*R\b", re.I)
+
+# 번호 목록 마커 ("1) 1.1129", "2. 0.5340") — 2026-07-27 채널 실사 중 발견.
+# 라벨 다음 줄부터 후보를 번호로 나열하는 포맷에서 **마커 숫자가 가격으로** 읽혔다
+# (Entry 뒤 '1)' → entry=1.0). 과거 'Target 1:' → tp=1.0 사고와 같은 계열이고,
+# _ORDINAL_LABEL 계열은 라벨에 붙은 서수만 처리해 독립 마커는 못 잡았다.
+# 결정적 구분자는 **구두점 뒤 공백**이다: 목록 마커는 "1) " / "1. " 처럼 반드시
+# 공백이 따르지만, 소수 가격 "5.298" 은 점 뒤가 곧바로 숫자다. 이 조건 덕에
+# 진짜 가격을 지울 위험이 없다. 줄 시작에 한정해 문장 중간의 "(1) 참고" 류도 회피.
+_LIST_MARKER = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]+(?=[$\d])")
 
 # 타임프레임 파싱 (2026-07-23 적중창 결정 B: 작성자가 밝힌 지평으로 판정 창 결정)
 _TIMEFRAME = re.compile(
@@ -152,12 +175,17 @@ def _to_float(s: str) -> Optional[float]:
 
 
 def _clean(text: str) -> str:
-    """숫자 오인 유발 토큰을 먼저 지운다(레버리지/퍼센트/연도/라벨 서수)."""
+    """숫자 오인 유발 토큰을 먼저 지운다(레버리지/R배수/퍼센트/연도/목록마커/라벨 서수).
+
+    공통 원칙: **가격이 아닌 숫자**를 가격 탐색 전에 없앤다. 남기면 라벨 뒤 창에서
+    가장 왼쪽 숫자로 잡혀 그대로 진입가·목표가가 된다(전부 실사고 이력이 있다)."""
     text = _LEVERAGE.sub(" ", text)
+    text = _R_MULTIPLE.sub(" ", text)   # "4R return" → 4 가 진입가로 (AVAX 실사고)
     text = _PERCENT.sub(" ", text)
     text = _DATE_FULL.sub(" ", text)
     text = _YEAR_KR.sub(" ", text)
     text = _YEAR_CTX.sub(" ", text)
+    text = _LIST_MARKER.sub("", text)   # "1) 1.1129" → 마커만 제거, 가격은 보존
     text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
     text = _SPACED_ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "Target 1:" → "Target:"
     return text
@@ -194,8 +222,16 @@ def _grab_after(label_pat, text: str) -> list:
     실전에 있는데(라벨 뒤 잡토큰이 \\s* 를 끊어 m.end() 가 라벨 줄에 남는다), 라벨 줄
     끝에서 자르면 창이 비어 사다리를 통째로 놓친다 — 종전 30자 창은 개행을 넘겨
     보던 동작이라 그게 회귀가 된다."""
-    out = []
+    out, spec_out = [], []
     for m in label_pat.finditer(text):
+        # 스펙형(라벨 뒤에 :/= 가 붙은 표기)인지 — 2026-07-27 ONDO 실사고.
+        # 한 글에 라벨이 여러 번 나오면 종전엔 **맨 앞 것**이 이겼는데, 제목이
+        # "ONDO Breakout: Pullback Entry Toward \$0.415" 라 제목의 산문 수치가
+        # 본문 스펙 "Entry: \$0.346–\$0.350" 을 눌렀다(알림이 엉뚱한 가격에 나간다).
+        # 작성자가 콜론으로 명시한 값이 산문 언급보다 항상 더 신뢰할 만하므로,
+        # 스펙형이 하나라도 있으면 그것만 쓰고 산문형은 버린다. 스펙형이 없을 때만
+        # 종전처럼 전부 쓴다(콜론 없이 "Entry 10.5" 로 쓰는 소스가 실제로 있다).
+        is_spec = m.group(0).rstrip().endswith((":", "=")) or ":" in m.group(0) or "=" in m.group(0)
         window = text[m.end(): m.end() + 30]
         rng = _RANGE.search(window)
         sng = _SINGLE.search(window)
@@ -212,19 +248,20 @@ def _grab_after(label_pat, text: str) -> list:
         if lad and lad.start() <= sng.start():
             first = _to_float(lad.group(1))
             if first:
-                out.append([first])   # 길이 1 = 호출부의 [-1]/[0] 이 같은 값
+                (spec_out if is_spec else out).append([first])
                 continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
         if rng and (not sng or rng.start() <= sng.start()):
             lo, hi = _to_float(rng.group(1)), _to_float(rng.group(2))
             if lo and hi:
-                out.append(sorted([lo, hi]))
+                (spec_out if is_spec else out).append(sorted([lo, hi]))
                 continue
         if sng:
             v = _to_float(sng.group(1))
             if v:
-                out.append([v])
-    return out
+                (spec_out if is_spec else out).append([v])
+    # 스펙형이 하나라도 있으면 산문형은 버린다(위 is_spec 주석 참고).
+    return spec_out or out
 
 
 def _sanity(value: float, current_price: Optional[float], max_dev: float) -> bool:

@@ -218,6 +218,51 @@ for desc, text, price, exp in LADDER_CASES:
     if passed:
         ok += 1
 
+# ── 2026-07-27 프로덕션 실사고 3종: 가격이 아닌 숫자가 가격으로 읽힌 사례 ──────
+# 전부 실제 저장된 레벨에서 발견됐다(채널 2호 실사 중 파생). 공통 원인은 하나 —
+# 라벨 뒤 창에서 '가장 왼쪽 숫자'를 집는데, 그 자리에 가격이 아닌 숫자가 있었다.
+# exp 의 값이 None 이면 "그 필드가 None 이어야 한다"는 뜻(가짜 값을 만들지 않음).
+FAKE_NUMBER_CASES = [
+    # ① R-멀티플: AVAX 산문에서 entry 라벨 뒤 "4R" 의 4 가 진입가로 → 실제가 $6.48 인
+    #    코인에 $4.0 짜리 가짜 레벨이 감시 상태로 저장됐다(원문은 숏 분석이었다).
+    ("실사고 AVAX - 산문의 4R 을 진입가로 오인하지 않는다",
+     "AVAX bearish. the initial entry achieving a solid 4R return and more", 6.48,
+     {"entry": None}),
+    ("R-멀티플 소수·부호형도 제거", "Closed at +1.5R. Entry: 6.80", 6.8, {"entry": 6.80}),
+    # ② 번호 목록 마커: "Entry :\n1) 1.1129" 에서 마커 1 이 진입가로.
+    ("번호 목록 1) - 마커가 아니라 가격을 집는다",
+     "Entry :\n1) 1.1129\n2) 1.1462\nTarget: 1.25", 1.11, {"entry": 1.1129, "tp": 1.25}),
+    ("번호 목록 1. - 동일", "Entry:\n1. 0.5120\n2. 0.5340", 0.52, {"entry": 0.5120}),
+    # ③ 두 단어 라벨의 서수: "Take Profit 1: $0.385" 가 기존 서수 제거에 안 걸려
+    #    ONDO 목표가에 1.0 이 들어갔다(ALGO/ARB 사고의 미완 수리).
+    ("실사고 ONDO - 'Take Profit 1:' 서수를 목표가로 오인하지 않는다",
+     "Trading Levels\nEntry: $0.346-$0.350\nTake Profit 1: $0.385\nStop Loss: $0.321",
+     0.35, {"entry": 0.348, "tp": 0.385, "sl": 0.321}),
+    # ④ 스펙형 우선: 제목의 산문 라벨이 본문 스펙을 이기던 문제.
+    ("실사고 ONDO - 제목 산문보다 본문 스펙(콜론)이 이긴다",
+     "ONDO Breakout: Pullback Entry Toward $0.415\n\nTrading Levels\n"
+     "Entry: $0.346-$0.350\nTake Profit 1: $0.385\nStop Loss: $0.321",
+     0.35, {"entry": 0.348, "tp": 0.385}),
+    # 스펙형이 하나도 없으면 종전대로 산문형이라도 쓴다(콜론 없이 쓰는 소스가 실재)
+    ("스펙형이 없으면 산문형이라도 채택(회귀 방지)",
+     "Long setup. Entry 10.5 with stop 9.8 and target 12.0", 10.5, {"entry": 10.5}),
+    # 소수 가격이 목록 마커로 오인되지 않는지(구두점 뒤 공백 유무가 결정적)
+    ("소수 가격 5.298 은 마커로 지워지지 않는다",
+     "Entry: 5.298\nTP: 5.42", 5.3, {"entry": 5.298, "tp": 5.42}),
+]
+for desc, text, price, exp in FAKE_NUMBER_CASES:
+    r = parse_setup(text, current_price=price)
+    if all(v is None for v in exp.values()):
+        passed = r is None or all(r.get(k) is None for k in exp)
+    else:
+        passed = r is not None and all(
+            (r.get(k) is None if v is None else
+             (r.get(k) is not None and _close(r[k], v))) for k, v in exp.items())
+    print(("✅" if passed else "❌"), desc)
+    print(f"    → {r}")
+    if passed:
+        ok += 1
+
 # ── 2026-07-27 2차 교차검토: _LADDER 검색 창 200자 상한 (가용성 수리) ──────
 # _LADDER 는 _NUM(내부 교대)을 {2,} 로 감싼 중첩 수량자라 긴 숫자 런에서 역추적이
 # 2차식으로 폭주한다(실측: 200자 4.1ms / 3,200자 1,186ms / 16,000자 수십 초).
@@ -271,6 +316,6 @@ if _long_ok:
 TOTAL_EXTRA += 3
 
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
-         + len(WINDOW_CASES) + len(LADDER_CASES))
+         + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES))
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)
