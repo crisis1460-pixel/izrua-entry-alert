@@ -1096,6 +1096,12 @@ check("카드14-T4c: 유니버스 밖/미언급은 None",
 check("카드14-T4d: 소문자 일반단어는 코인으로 오인하지 않는다(sol/one 등)",
       tgs.match_symbol("solana ecosystem", _known) is None
       and tgs.match_symbol("BTCUSD", _known) == "BTC")
+# 교차감사 즉시수리 #1 (2026-07-27): _PAIR 가 "Risk: 100 USD" 의 100 을 base 로
+# 오인하면 그 거짓 base 하나가 '페어 있음' 판정을 만들어 전수 스캔 폴백까지 막고,
+# 실제 티커(ETC)가 있는 글을 통째로 드롭했다. base 는 영문자 1자 이상을 요구한다.
+check("카드14-T4e: 숫자-only 는 base 가 아니다(리스크 문구가 진짜 티커를 못 가림)",
+      tgs.match_symbol("Buy ETH now. Risk: 100 USD per trade", _known) == "ETH"
+      and tgs.match_symbol("GEM: $4/USDT breakout", _known) is None)
 
 # ── T5: 기본 OFF·빈 화이트리스트면 아무 일도 일어나지 않는다(핵심 안전장치) ──
 TEST_DB_TG = "cache/_test_resilience_telegram.db"
