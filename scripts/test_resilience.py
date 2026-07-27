@@ -1118,13 +1118,17 @@ run_collect.telegram_source.is_blocked = lambda: False
 _TG_UNIVERSE = [{"symbol": "BTC", "ticker": "KRW-BTC", "rank": 1, "name": "Bitcoin",
                  "price_usd": 60000.0, "tier_icon": "💎"}]
 
-# 소스 코드 기본값 검증 - 이 프로세스는 SETTINGS 를 덮어쓰므로 런타임 값이 아니라
-# 소스 리터럴을 본다(수리9-R6 과 동일 패턴). 배포만으로 동작이 바뀌지 않는 근거.
+# 소스 코드 설정 검증 - 이 프로세스는 SETTINGS 를 덮어쓰므로 런타임 값이 아니라
+# 소스 리터럴을 본다(수리9-R6 과 동일 패턴).
+# 2026-07-27: 첫 채널을 실제로 켰다(BitmexSignalsFee — 126개 실사 후 승인). 그래서
+# 이 두 검사는 "기본값이 OFF" 고정에서 **"켠 상태가 명시적으로 관리되는가"**로 바꾼다.
+# 안전 속성 자체(꺼짐 또는 빈 목록이면 요청 0건)는 아래 T5c·T5d 가 그대로 지킨다.
 _settings_src_tg = (_repo_root / "config" / "settings.py").read_text(encoding="utf-8")
-check("카드14-T5: 설정 기본값이 OFF (배포해도 동작 변화 0)",
-      '"telegram_source_enabled": False' in _settings_src_tg)
-check("카드14-T5b: 화이트리스트 기본값이 빈 리스트",
-      '"telegram_source_channels": []' in _settings_src_tg)
+_tg_on_src = '"telegram_source_enabled": True' in _settings_src_tg
+check("카드14-T5: 켜져 있다면 화이트리스트가 비어 있지 않다(설정 실수 방지)",
+      not _tg_on_src or '"telegram_source_channels": []' not in _settings_src_tg)
+check("카드14-T5b: 꺼져 있다면 화이트리스트도 비어 있다(잔여 설정 방지)",
+      _tg_on_src or '"telegram_source_channels": []' in _settings_src_tg)
 
 settings.SETTINGS["telegram_source_enabled"] = False
 settings.SETTINGS["telegram_source_channels"] = ["somechannel"]

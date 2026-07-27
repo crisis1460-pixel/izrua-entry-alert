@@ -1120,14 +1120,24 @@ _bmu4 = _real_fetch_trades_window("KRW-T", _bmu_now - 9 * 86400,
 _requests_mod.get = _orig_requests_get
 check("BM-U4 7일 초과 과거는 호출 없이 None", _bmu4 is None and not _bmu4_calls)
 
-# BM-U5: 어제 구간은 daysAgo 파라미터가 붙는다(당일 구간엔 안 붙음)
+# BM-U5: 어제 구간은 daysAgo 파라미터가 붙는다(당일 구간엔 안 붙음).
+# 두 구간을 '지금으로부터 N초 전'이 아니라 **UTC 날짜에서 직접** 구성한다
+# (2026-07-27 실전 발견): daysAgo 는 호출 시점의 `datetime.now(UTC).date()` 로
+# 계산되는데, 상대 시각을 쓰면 UTC 자정 부근에서 판정이 뒤집힌다 —
+#   · 자정 직전 실행: _bmu_now 캡처 후 자정을 넘겨 '어제'가 이틀 전(daysAgo=2)
+#   · 자정 직후 실행: '5분 전'이 어제로 넘어가 당일 구간에 daysAgo 가 붙음
+# 둘 다 재현했다. 날짜에서 구성하면 실행 시각과 무관하게 결정적이다.
+_bmu_utc_midnight = datetime.fromtimestamp(_bmu_now, timezone.utc).replace(
+    hour=0, minute=0, second=0, microsecond=0).timestamp()
+_bmu_yesterday = _bmu_utc_midnight - 3600          # 어제 23:00 UTC — 항상 하루 전
+_bmu_today = min(_bmu_utc_midnight + 1, _bmu_now - 5)  # 오늘 00:00:01 UTC 이후
 _bmu5_calls = []
 def _bmu5_get(url, params=None, timeout=None):
     _bmu5_calls.append(params)
     return _FakeResp([])
 _requests_mod.get = _bmu5_get
-_real_fetch_trades_window("KRW-T", _bmu_now - 86400, _bmu_now - 86400 + 60, 5.0)
-_real_fetch_trades_window("KRW-T", _bmu_win[0], _bmu_win[1], 5.0)
+_real_fetch_trades_window("KRW-T", _bmu_yesterday, _bmu_yesterday + 60, 5.0)
+_real_fetch_trades_window("KRW-T", _bmu_today, _bmu_today + 1, 5.0)
 _requests_mod.get = _orig_requests_get
 check("BM-U5 과거일엔 daysAgo, 당일엔 미부착",
       _bmu5_calls[0].get("daysAgo") == 1 and "daysAgo" not in _bmu5_calls[1])

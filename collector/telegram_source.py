@@ -373,24 +373,54 @@ def _symbol_pattern(symbol: str) -> "re.Pattern":
 
 _pattern_cache: dict = {}
 
+# 페어 표기의 '기준통화'(base). "$ETC/USDT", "BTCUSDT", "SOL/USD" 의 앞부분을 잡는다.
+# 2026-07-27 실전 발견: 전수 스캔만 하면 시그널 채널의 상용구가 진짜 티커와 충돌한다 —
+# "COIN: $ETC/USDT" 한 줄에서 ETC 말고도 견적통화 **USDT** 와, 바로 위 "SIGNAL ID:" 의
+# **ID**(Space ID, 업비트 상장)까지 잡혀 3개 = '모호'로 글 전체가 버려졌다(8건 중 7건).
+# 페어 표기가 있으면 그게 글의 주제이므로 전수 스캔보다 우선한다.
+_PAIR = re.compile(
+    r"(?<![A-Za-z0-9])\$?([A-Z0-9]{2,10})\s*[/\-]?\s*(?:USDT|USDC|BUSD|USD|PERP)"
+    r"(?![A-Za-z0-9])"
+)
+# 견적통화·상용구는 그 자체로 티커여도 '이 글의 주제'가 아니다. 전수 스캔 폴백에서만
+# 쓰는 최소 목록 — 여기에 더 채워 넣기 시작하면 곧 단어 블랙리스트가 되므로,
+# 진짜 견적통화만 둔다.
+_QUOTE_ONLY = {"USDT", "USDC", "BUSD", "USD"}
+
 
 def match_symbol(text: str, symbols) -> Optional[str]:
     """본문에서 유니버스 심볼을 찾아 '정확히 하나'면 그 심볼을, 아니면 None 을 반환.
 
-    0개(코인 얘기가 아닌 글)와 2개 이상(여러 코인을 한 글에 담은 시황)은 모두 버린다 —
-    후자를 억지로 하나 고르면 엔트리가 다른 코인에 붙는다. 심볼 1글자는 오탐이
-    압도적이라 아예 제외한다."""
+    ① 페어 표기($ETC/USDT 등)가 있으면 그 base 를 우선 채택한다 — 서로 다른 base 가
+       둘 이상이면 모호로 버린다.
+    ② 없으면 전수 스캔 폴백. 0개(코인 얘기가 아닌 글)와 2개 이상(한 글에 여러 코인)은
+       모두 버린다 — 억지로 하나 고르면 엔트리가 엉뚱한 코인에 붙는다.
+    심볼 1글자는 오탐이 압도적이라 아예 제외한다."""
     if not text:
         return None
+    upper = {s.upper() for s in (symbols or ()) if s and len(s) >= 2}
+    if not upper:
+        return None
+
+    # 페어 표기는 '이 글의 주제'에 대해 권위가 있다. 하나라도 있으면 전수 스캔으로
+    # 넘어가지 않는다 — 넘어가면 추적 대상이 아닌 코인의 글이 상용구에 걸린 엉뚱한
+    # 티커로 귀속된다(실측: "$GRAM/USDT" 글이 "SIGNAL ID:" 의 ID 코인에 붙었다.
+    # GRAM 은 업비트 미상장이라 그냥 버려야 하는 글이다). 오귀속은 잘못된 코인에
+    # 잘못된 진입가로 알림이 나가는 사고라, 버리는 쪽이 항상 낫다.
+    bases = {m.group(1).upper() for m in _PAIR.finditer(text)} - _QUOTE_ONLY
+    if bases:
+        tracked = bases & upper
+        return next(iter(tracked)) if len(tracked) == 1 else None
+
     found = set()
-    for sym in symbols or ():
-        if not sym or len(sym) < 2:
+    for sym in upper:
+        if sym in _QUOTE_ONLY:
             continue
         pat = _pattern_cache.get(sym)
         if pat is None:
             pat = _pattern_cache[sym] = _symbol_pattern(sym)
         if pat.search(text):
-            found.add(sym.upper())
+            found.add(sym)
             if len(found) > 1:
                 return None   # 모호 — 조기 탈출
     return next(iter(found)) if len(found) == 1 else None

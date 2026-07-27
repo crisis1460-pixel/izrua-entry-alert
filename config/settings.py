@@ -44,8 +44,16 @@ SETTINGS = {
     # ⚠️ 기본 OFF + 빈 화이트리스트가 이 기능의 안전장치다 — 아래 두 값을 건드리기
     # 전까지 코드가 배포돼도 요청 0건·동작 변화 0 이다. 채널 목록은 사장님 승인 사항.
     # 켜는 법: enabled 를 True 로, channels 에 채널명(@ 없이)을 넣는다.
-    "telegram_source_enabled": False,
-    "telegram_source_channels": [],      # 예: ["some_public_channel"]
+    # 2026-07-27 첫 채널 활성화 (126개 실사 후 사장님 승인). BitmexSignalsFee 선정 근거:
+    #   · ENTRY/TARGETS/STOP LOSS 전문을 무료 공개(유료 VIP 가림 없음) — 실물 확인
+    #   · 업비트 KRW 상장 비중 71%(17건 중 12), 관측 표본 8건 중 롱 7건
+    #   · 손실도 그대로 게시("KITE 🚫18.7% Loss") — 체리피킹 안 함
+    #   · 어댑터 실측: 진입가 추출 8/8, 미상장(GRAM·CHILLGUY)은 정상 폐기
+    #   · 발행 0.9건/일 → 신규 레벨 하루 0~1건 수준. 관찰기 baseline 간섭 최소
+    # 늘릴 때는 반드시 '사후 게시(retro-post)' 검사를 통과시킬 것 — 신호 게시 후
+    # 수 초~수십 초 만에 "TP1 hit"을 붙이는 사기 채널이 실사에서 3곳 나왔다.
+    "telegram_source_enabled": True,
+    "telegram_source_channels": ["BitmexSignalsFee"],
     "telegram_source_sleep_sec": 5.0,    # 채널당 요청 간격. 비공식 경로라 TradingView
                                           # 페이싱(5.0)보다 느슨하게 가지 않는다.
     "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
