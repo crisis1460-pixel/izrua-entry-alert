@@ -109,6 +109,23 @@ _TV_BLOCK_ALERT_KEY_PREFIX = "tv_block_alert_count_"
 _UNIVERSE_OFFSET_META = "collect_universe_offset"
 
 
+def _save_universe_offset(conn, offset: int, done_i: int, total: int) -> None:
+    """수집 루프의 재개 지점을 '원본 유니버스 기준 절대 인덱스'로 meta 에 기록한다.
+
+    2026-07-27 교차감사 M1: 예전엔 이 저장이 루프 '뒤'에만 있어서, 하드킬
+    (run_cycle.py 의 subprocess timeout 12분)로 프로세스가 죽으면 저장 자체가
+    실행되지 않았고 - 설령 실행됐어도 회차 전체가 한 트랜잭션이라 함께 롤백됐다.
+    그래서 다음 회차가 같은 지점을 또 돌았다. 이제 중간 커밋마다 함께 기록한다.
+
+    done_i = 회전된 목록에서 '방금 처리를 마친' 심볼의 인덱스 → 재개는 그 다음부터.
+    한 바퀴를 다 돌았으면(done_i+1 == total) 0 — 루프 뒤의 완주 처리와 같은 값이라
+    "중간 커밋이 마지막 심볼에 걸린 회차"만 재개 지점이 달라지는 모순이 안 생긴다.
+    """
+    nxt = done_i + 1
+    value = "0" if nxt >= total else str((offset + nxt) % total)
+    db.set_meta(conn, _UNIVERSE_OFFSET_META, value)
+
+
 def _maybe_alert_block(conn, now: float) -> None:
     """이번 수집 주기 중 확정 차단(403/429/캡차/1020)이 감지됐으면 하루 상한 내에서
     즉시 경고. 수집 급감 경고(24시간 뒤에야 울림)보다 빠른 신호 - 단 사용자가
@@ -272,6 +289,11 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
             n_setup += 1 if had_setup else 0
             n_new += 1 if is_new else 0
 
+        # 채널 1개 끝날 때마다 확정 (2026-07-27 교차감사 M1). TradingView 루프와 같은
+        # 이유 — 여기도 하드킬 사정권이고(채널당 5초 페이싱 × 채널 수), 채널 목록이
+        # 늘어날수록 한 트랜잭션에 묶인 구간이 길어진다. 채널이 1개면 사실상 무비용.
+        conn.commit()
+
     if n_posts:
         logger.info("[tg] 채널 %d개: 글 %d건(심볼 미해석 %d) → 셋업 %d건 → 신규 %d건",
                     len(channels), n_posts, n_unmatched, n_setup, n_new)
@@ -355,6 +377,19 @@ def main() -> int:
         #  break 하고 게이트를 소진하지 않는다 — 그건 정상 동작이다.)
         n_deleted = _check_deletions(conn, timeout)
 
+        # ── 중간 커밋 #1: 삭제확인 결과 확정 (2026-07-27 교차감사 M1) ─────────
+        # 여기 아래(수집 루프)는 run_cycle.py 가 subprocess timeout 12분으로 **하드킬**
+        # 할 수 있는 구간이고, 하드킬은 열린 트랜잭션을 통째로 롤백시킨다. 예전엔 실제
+        # TradingView 요청(하루 최대 5건)을 써서 얻은 deleted_checked_at 갱신이 수집분과
+        # 함께 증발했다 — 하루 상한이 있어 그 손실은 곧 '그날 삭제확인 0건'이다.
+        #
+        # '진전 게이트'(n_checked>0 일 때만 하루 게이트 set — 2026-07-27 개발자B 수리)와
+        # 모순되지 않는다: 게이트와 그 근거인 deleted_checked_at 이 **같은 커밋**에 함께
+        # 들어가므로 "게이트만 타고 진전은 없는" 상태가 생길 수 없다. 반대로 뒤이은
+        # 수집 루프가 죽어도 이미 확인한 사실을 되돌릴 이유가 없다(글 생존 여부 확인은
+        # 수집 성패와 독립적인 사실이다).
+        conn.commit()
+
         # ── 수집 순환 (2026-07-27): 유니버스는 시총 내림차순 '고정'이라, 차단으로
         # 중도 이탈하면 매번 앞쪽 대형주만 수집되고 꼬리는 영원히 조회되지 않는
         # 기아가 생긴다(실측: 쿠키 등록 후에도 61번째에서 403 → 하위 21개 0회 조회
@@ -377,6 +412,10 @@ def main() -> int:
                 logger.info("수집 순환 재개: %d번째(%s)부터 (직전 회차 차단 이월분)",
                             offset + 1, universe[0]["symbol"])
 
+        # 중간 커밋 주기 (2026-07-27 교차감사 M1). 0/음수 설정도 최소 1로 막아
+        # "커밋이 영영 안 도는" 설정 실수를 구조적으로 불가능하게 한다.
+        commit_every = max(1, int(settings.get("collect_commit_every_symbols")))
+
         stopped_at = None
         for i, coin in enumerate(universe):
             if tradingview.is_blocked():
@@ -392,17 +431,34 @@ def main() -> int:
                 n_setup += 1 if had_setup else 0
                 n_new += 1 if is_new else 0
 
+            # ── 중간 커밋 #2: 심볼 N개마다 수집분 + 재개 지점을 함께 확정 ────────
+            # 하드킬(12분 timeout)로 죽어도 잃는 건 '마지막 배치'뿐이다. 재개 지점을
+            # 커밋과 같은 시점에 쓰는 게 핵심 — 수집분만 살고 offset 이 뒤처지면 다음
+            # 회차가 이미 받은 구간을 다시 돌고(시간 낭비), 반대면 구간을 건너뛴다.
+            # 재실행 안전성(멱등): 같은 글은 db.make_signal_key 로 결정적인 키를 만들고
+            # levels.signal_key 는 스키마상 UNIQUE, upsert_level 은 그 키로 먼저 조회해
+            # 있으면 UPDATE 한다 — 중간 커밋 뒤 같은 구간을 재수집해도 중복 행은
+            # 구조적으로 생길 수 없다(DB 제약 + 코드 양쪽에서 보장).
+            if (i + 1) % commit_every == 0:
+                if rotate:
+                    _save_universe_offset(conn, offset, i, len(universe))
+                conn.commit()
+
             if i < len(universe) - 1:
                 time.sleep(sleep_sec)
 
         # 순환 지점 저장 — 완주면 0(평상시 대형주 우선 복원), 차단 이탈이면 그 지점.
         # (offset + stopped_at) 은 회전 전 원본 목록 기준 절대 위치로 환산한 값.
+        # 중간 커밋이 이미 써둔 값보다 항상 앞서거나 같으므로(마지막 배치 이후 진행분을
+        # 반영) 여기서 덮어쓰는 게 맞다. 차단 이탈은 하드킬과 달리 정상 흐름이라
+        # 이 지점까지 도달한다.
         if rotate:
             if stopped_at is None:
                 db.set_meta(conn, _UNIVERSE_OFFSET_META, "0")
             else:
                 db.set_meta(conn, _UNIVERSE_OFFSET_META,
                             str((offset + stopped_at) % len(universe)))
+        conn.commit()
 
         # ── 두 번째 입력원: 텔레그램 공개채널 (2026-07-27 카드 #14) ─────────
         # TradingView 루프 뒤에 붙인다. 기본 OFF·빈 화이트리스트라 사장님이 채널을
@@ -413,7 +469,15 @@ def main() -> int:
         n_setup += tg_setup
         n_new += tg_new
 
-        # 파서 개선 자동 전파: 원문 있는 기존 레벨을 현재 파서로 재파싱해 오염값 치유
+        # ── 뒷정리 구간 ─────────────────────────────────────────────────
+        # ⚠️ 아래 셋은 하드킬로 아예 실행되지 않아도 데이터 정합이 깨지지 않는다
+        # (2026-07-27 M1 경계 검토):
+        #  · reparse_all — 활성 레벨을 '현재 파서'로 다시 계산하는 치유라 멱등이고,
+        #    다음 회차가 같은 행들을 그대로 다시 훑는다(밀린 만큼만 늦어짐).
+        #  · expire_old — 만료는 collected_at 경과 시간 기준이라 늦게 돌아도 결과가
+        #    같다(시각이 아니라 조건으로 판정). 4시간 늦게 만료되는 것뿐.
+        #  · stats — 로그용 읽기 전용.
+        # 즉 중간 커밋으로 "수집분만 살고 뒷정리는 안 된" 상태가 남아도 무해하다.
         reparsed = db.reparse_all(conn)
         expired = db.expire_old(conn, settings.get("level_expiry_hours") * 3600)
         st = db.stats(conn)
@@ -427,6 +491,11 @@ def main() -> int:
         # 안 지워지는 문제 방지. 매 수집 회차 가볍게 수행(비용 무시할 수준).
         _prune_tv_block_alert_meta(conn, _day_kst(now_block),
                                    settings.get("tv_block_alert_meta_keep_days"))
+
+        # 마지막 확정 (2026-07-27 M1). 컨텍스트 종료 시에도 커밋되지만 명시한다 —
+        # _maybe_alert_block 은 '발송 성공 후' 카운터를 올리므로, 발송과 커밋 사이에
+        # 죽으면 다음 회차가 같은 차단 경보를 한 번 더 보낸다. 그 창을 최소화한다.
+        conn.commit()
 
         # (글 삭제 감지 _check_deletions 는 이 자리에 있었다 → 2026-07-27 수집 루프
         #  '앞'으로 이동. 이유는 위 호출부 주석 참고 — 되돌리면 다시 기아가 된다.)
