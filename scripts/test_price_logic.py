@@ -1504,6 +1504,71 @@ check("EX2 수집 후 8일 지나면 만료", _ex_st[_ex_stale] == "expired")
 check("EX3 게시 시각 결측이어도 수집 기준으로 동일 판단", _ex_st[_ex_null] == "watching")
 check("EX4 섀도 터치도 수집 기준으로 만료", _ex_st[_ex_shadow] == "expired")
 
+# ── SS1~SS6: 자체 승률의 분자·분모는 R 트랙 한정 (2026-07-27 교차감사 B-m1) ──
+# 같은 날 오전 알림의 승률 '표시 게이트'가 neff_win → neff_r 로 옮겨졌는데
+# get_author_self_stats 의 wins/losses 는 판정 방식 무관 전체 합산으로 남아 있었다.
+# 혼합형(tp_only+tp_sl) 작성자가 등장하는 순간 "게이트는 R 트랙인데 화면 숫자는
+# 전체 표본"이 되어, SL 없는 글의 사실상 자동승이 승률 줄로 새어나간다.
+# 프로덕션에 혼합형이 0명인 지금은 표시값이 안 변한다(수리 시점 실측: 작성자 39명
+# 전원 화면 변동 0, 내부값 변동은 tp_only 전용 2명뿐 — 둘 다 neff_r=0 이라 미표시).
+# 터치율 축(touched/untouched)은 선택편향 처방이라 전체 표본 그대로여야 한다.
+_SS_DB = "cache/_test_selfstats.db"
+if os.path.exists(_SS_DB):
+    os.remove(_SS_DB)
+db.init_db(_SS_DB)
+with db.connect(_SS_DB) as conn:
+    _ss_seq = [0]
+
+    def _ss(author, outcome, r_mult, mode, touched=True, status="touched"):
+        _ss_seq[0] += 1
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,"
+            " status, collected_at, author, outcome, r_multiple, judgment_mode,"
+            " touched_at, resolved_at) VALUES (?,?,?,'long',1.0,?,?,?,?,?,?,?,?)",
+            (f"ss-{_ss_seq[0]}", "SSX", "KRW-SSX", status, now - 3600, author,
+             outcome, r_mult, mode, now - 1800 if touched else None, now - 900))
+
+    # (A) SL 미기재 작성자 — 전부 tp_only 라 r_multiple 이 없다(=R 트랙 표본 0)
+    for _ in range(3):
+        _ss("SSOnlyTP", "hit", None, "tp_only")
+    # (B) 혼합형 — tp_only 2건(승) + tp_sl 3건(1승 2패). 전체 합산이면 3승2패(60%),
+    #     R 트랙 한정이면 1승2패(33%)
+    _ss("SSMixed", "hit", None, "tp_only")
+    _ss("SSMixed", "hit", None, "tp_only")
+    _ss("SSMixed", "hit", 2.0, "tp_sl")
+    _ss("SSMixed", "miss", -1.0, "tp_sl")
+    _ss("SSMixed", "miss", -1.0, "tp_sl")
+    # 미터치 만료 1건 — 터치율 분모(선택편향 축)가 살아있는지 확인용
+    _ss("SSMixed", None, None, None, touched=False, status="expired")
+    # 섀도 터치(touched_at NULL)에 R 이 남은 이례 행 — E_LB 원천과 같은 기준으로 제외
+    _ss("SSShadow", "hit", 2.0, "tp_sl", touched=False)
+
+    _ss_tp = db.get_author_self_stats(conn, "SSOnlyTP")
+    _ss_mix = db.get_author_self_stats(conn, "SSMixed")
+    _ss_sh = db.get_author_self_stats(conn, "SSShadow")
+
+check("SS1 tp_only 전용 작성자는 wins/losses 0 - 승률 줄이 자연히 비표시",
+      _ss_tp["wins"] == 0 and _ss_tp["losses"] == 0)
+check("SS2 tp_only 전용이어도 터치율 축(전체 표본)은 그대로 3건",
+      _ss_tp["touched"] == 3 and _ss_tp["untouched_expired"] == 0)
+check("SS3 혼합형은 R 트랙 건만 카운트 - 전체합산 3승2패가 아니라 1승2패",
+      _ss_mix["wins"] == 1 and _ss_mix["losses"] == 2)
+check("SS4 혼합형 터치율 축은 전체 표본 유지(터치 5 / 미터치만료 1)",
+      _ss_mix["touched"] == 5 and _ss_mix["untouched_expired"] == 1)
+check("SS5 섀도 터치는 R 이 있어도 제외(E_LB 원천 get_author_outcome_rows 와 동일 기준)",
+      _ss_sh["wins"] == 0 and _ss_sh["losses"] == 0)
+
+# SS6: 화면 정합 — tp_only 전용 작성자는 게이트(neff_r=0)와 숫자(0승0패)가 동시에
+# 승률 줄을 막는다. 게이트만 고쳐두면 숫자는 여전히 3승0패(100%)로 남아 있어,
+# 나중에 게이트를 완화하는 순간 그 값이 그대로 노출된다.
+_ss_rep = dict(author="SSOnlyTP", author_self_wins=_ss_tp["wins"],
+               author_self_losses=_ss_tp["losses"], author_touched_n=_ss_tp["touched"],
+               author_untouched_expired=_ss_tp["untouched_expired"],
+               author_self_neff_r=0.0, author_rank_min_neff=5.0)
+check("SS6 tp_only 전용 작성자 렌더에 🏹 승률 줄 없음",
+      not any(l.startswith("🏹") for l in telegram._author_block(_ss_rep)))
+os.remove(_SS_DB)
+
 # ── 체인(카드3): 이 파일에서 그동안 resolve_outcome 을 거쳐 쌓인 실제 판정
 #    (T8/T9/T10/T11/T13/T15/BM1~BM8 등, run_once/_judge_outcomes 정상 경로로
 #    종결된 전체 표본)이 통째로 하나의 유효한 해시체인을 이루는지 확인한다 —

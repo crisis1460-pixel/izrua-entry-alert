@@ -708,14 +708,37 @@ def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
 
 def get_author_self_stats(conn, author: str) -> dict:
     """자체 적중 DB 기준 작성자 성적.
-    승 = hit + timeboxed_win, 패 = miss + timeboxed_loss.
-    터치율(선택편향 처방, ACCURACY_DB_PLAN): 도달터치 ÷ (도달터치 + 미터치만료)."""
+    승 = hit + timeboxed_win, 패 = miss + timeboxed_loss. **단 R 트랙 표본만** —
+    아래 주석 참고.
+    터치율(선택편향 처방, ACCURACY_DB_PLAN): 도달터치 ÷ (도달터치 + 미터치만료).
+
+    ⚠️ 승/패의 분자·분모는 `r_multiple IS NOT NULL` 인 종결 행으로 한정한다
+    (2026-07-27 교차감사 B-m1 수리). 이유:
+      · 같은 날 오전에 알림의 자체 승률 '표시 게이트'를 neff_win(판정 방식 무관 전체
+        종결) → neff_r(R 트랙) 로 옮겼는데, 여기 wins/losses 는 여전히 전체 합산이라
+        "게이트는 R 트랙인데 화면에 뜨는 숫자는 전체 표본"인 어긋남이 남아 있었다.
+      · 지금은 혼합형(tp_only + tp_sl 을 섞어 쓰는) 작성자가 0명이라 게이트를 통과하는
+        작성자의 전체 합산 = R 트랙 합산이어서 표시값이 같다. 혼합형이 한 명이라도
+        생기는 순간 승률 줄이 '경고 판정과 다른 표본'을 보여주기 시작한다 — 화면 변화
+        0으로 고칠 수 있는 창이 지금뿐이라 선반영한다(실측: 프로덕션 39명 전원
+        표시값 불변, 변경은 tp_only 전용 2명의 미표시 내부값뿐).
+      · 이제 승률 줄과 역신호(E_LB) 판정이 같은 표본을 본다 = 승률이 보이면 그 숫자는
+        SL 까지 명시돼 R 로 채점된 건들만 센 것이다.
+    touched/untouched(터치율 축)는 그대로 전체 표본이다 — 선택편향 처방이라 '알림이
+    나간 뒤 실제로 닿았는가'를 재는 것이고, 판정 방식과 무관한 별개 축이다.
+    touched_at IS NOT NULL 을 함께 거는 것은 get_author_outcome_rows(=E_LB 원천)의
+    섀도 터치 제외와 표본을 글자 그대로 일치시키기 위함이다(현 데이터엔 해당 행 0건).
+    """
     if not author:
         return {"wins": 0, "losses": 0, "touched": 0, "untouched_expired": 0}
     row = conn.execute(
         """SELECT
-             SUM(CASE WHEN outcome IN ('hit','timeboxed_win') THEN 1 ELSE 0 END) AS w,
-             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l,
+             SUM(CASE WHEN outcome IN ('hit','timeboxed_win')
+                       AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
+                      THEN 1 ELSE 0 END) AS w,
+             SUM(CASE WHEN outcome IN ('miss','timeboxed_loss')
+                       AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
+                      THEN 1 ELSE 0 END) AS l,
              SUM(CASE WHEN touched_at IS NOT NULL THEN 1 ELSE 0 END) AS t,
              SUM(CASE WHEN status='expired' AND touched_at IS NULL THEN 1 ELSE 0 END) AS e
            FROM levels WHERE author=?""",
