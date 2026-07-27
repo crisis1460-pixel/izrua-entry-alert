@@ -45,6 +45,34 @@ def _save_last_check(conn, ts: float) -> None:
     db.set_meta(conn, "last_check_at", str(ts))
 
 
+# ── 하트비트와 워터마크 분리 (2026-07-27 2차 교차검토 M-A1) ──────────────────
+# last_check_at 한 키가 두 의미를 겸직하고 있었다:
+#   (a) **스캔 워터마크** — "어디까지 소급 검출했나"(run_once 의 since_min 계산)
+#   (b) **기동 하트비트** — "회차가 마지막으로 깨어난 때"(공백 감시·show_status)
+# 겸직 자체가 사고를 만들었다: 환율 실패 회차가 터치를 하나도 검출하지 않고도 (b)
+# 목적으로 이 값을 전진시키자, 그 구간이 **영원히 스캔되지 않는** 상태가 됐다
+# (재현: 업비트 장애 2시간 → 복구 회차 since_min 이 124분이어야 하는데 4분,
+#  미스캔 7,080초). 하필 그 보장이 필요한 유일한 상황에서 소급 검출이 무력화된다.
+#
+# 분리 방향은 "(b) 를 새 키로 옮긴다" — (a) 를 옮기면 저장된 값의 의미가 바뀌어
+# 마이그레이션이 필요하지만, (b) 를 옮기면 기존 값이 그대로 (a) 로 유효해
+# 마이그레이션 비용이 0 이다. 키 작명은 run_cycle.py 의 last_collect_at /
+# last_weekly_report_at 과 같은 결.
+_LAST_CYCLE_META = "last_cycle_at"
+
+
+def _load_last_cycle(conn):
+    try:
+        v = db.get_meta(conn, _LAST_CYCLE_META)
+        return float(v) if v else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _save_last_cycle(conn, ts: float) -> None:
+    db.set_meta(conn, _LAST_CYCLE_META, str(ts))
+
+
 def _day_kst(now: float) -> str:
     return datetime.fromtimestamp(now, tz=_KST).strftime("%Y-%m-%d")
 
@@ -116,7 +144,14 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
 # price_check_gap_alert_minutes 주석 참고) - 임계값을 그 위로 넉넉히 잡아 "백업만으로
 # 도는 정상 상황"을 오탐하지 않는다. 하루 1회만 경보(다른 감시들과 동일 게이트 패턴).
 def _check_price_check_gap(conn, now: float, cfg_get) -> bool:
-    prev = _load_last_check(conn)
+    # 2026-07-27 M-A1: 이 감시가 보는 건 **하트비트**(last_cycle_at)다 - "회차가
+    # 깨어났는가"를 묻는 것이지 "스캔에 성공했는가"가 아니다(후자는 last_check_at).
+    # last_check_at 폴백은 **영구 보존**한다: 배포 첫 회차뿐 아니라, 커밋백 실패로
+    # 회차 DB 가 옛 스냅샷으로 되돌아가면 last_cycle_at 이 다시 사라질 수 있다.
+    # 폴백이 없으면 그때마다 gap 감시가 1회 침묵한다(비용은 2줄).
+    prev = _load_last_cycle(conn)
+    if prev is None:
+        prev = _load_last_check(conn)
     if prev is None:
         return False  # 최초 회차(신규 DB) - 비교 대상이 없으니 고장 판정 불가
     gap_min = (now - prev) / 60.0
@@ -288,10 +323,24 @@ def run_once(now: float = None) -> dict:
         except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
             logger.warning("[체크] 가격체크 공백 감시 실패(무시하고 진행): %s", e)
 
+        # 기동 하트비트 갱신 (2026-07-27 M-A1). 반드시 gap 판정 **뒤** — gap 은 직전
+        # 값과의 차이를 재기 때문이다. 즉시 commit 하는 이유는 A-m2 로 확립한
+        # meta→commit 패턴 승계: "이 회차가 깨어났다"는 사실은 회차가 나중에 어떻게
+        # 죽든(환율 실패·타임아웃·하드킬) 남아야 다음 회차가 거짓 공백 경보를 안 낸다.
+        _save_last_cycle(conn, now)
+        conn.commit()
+
         # 수집 급감 감시는 활성 레벨 유무와 무관하게 매 회차 수행(조용한 고장 감지가
-        # 목적이라, 아래 "대상 없음" 조기 반환보다 먼저 돌아야 한다)
-        if _check_collect_silence(conn, now, cfg_get):
-            summary["collect_silence_alert"] = True
+        # 목적이라, 아래 "대상 없음" 조기 반환보다 먼저 돌아야 한다).
+        # 2026-07-27 수리(m-A7): 나머지 두 워쳐독과 같은 try 격리를 붙인다 - 순서는
+        # meta→commit→send 로 통일돼 있었지만 격리만 이 하나가 맨몸이었다.
+        # render_collect_silence_alert 나 db.get_meta 가 던지면 2분 핫패스가 통째로
+        # 죽는다("회차 생존 최우선" 원칙은 세 워쳐독에 동일하게 적용된다).
+        try:
+            if _check_collect_silence(conn, now, cfg_get):
+                summary["collect_silence_alert"] = True
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 수집 급감 감시 실패(무시하고 진행): %s", e)
 
         # 거래소 리스크 공지 감시 (카드 #5) — 유의종목/거래지원 종료를 감지해 경보 +
         # 해당 코인 대기 레벨 만료. 비문서화 API 를 쓰므로 예외를 여기서 완전히
@@ -313,6 +362,10 @@ def run_once(now: float = None) -> dict:
         unresolved = db.get_unresolved_touched(conn)  # 적중판정 대상 (활성과 별개)
         ret_pending = db.get_ret_pending(conn, now)   # 24/72h 수익률 기록 대상 (종결 무관)
         if not levels and not unresolved and not ret_pending:
+            # 2026-07-27 M-A1: 이 경로는 워터마크를 전진시켜도 된다(위 환율 실패
+            # 경로와 겉모습만 같고 성질이 다르다). 스캔 대상이 애초에 0건이라
+            # 놓칠 터치가 없고, 이후 새로 수집되는 레벨은 _eff_low 가 collected_at
+            # 이후 캔들만 인정하므로 워터마크가 앞서 있어도 손실이 없다.
             _save_last_check(conn, now)
             logger.info("[체크] 활성/판정/수익률 대상 레벨 없음")
             return summary
@@ -337,13 +390,16 @@ def run_once(now: float = None) -> dict:
         usdt_krw = prices.get("KRW-USDT")
         if not usdt_krw:
             logger.warning("[체크] KRW-USDT 환율 조회 실패 - 이번 회차 건너뜀")
-            # 2026-07-27 수리(교차감사 m3): 이 경로도 last_check_at 을 남긴다.
-            # 이 값의 의미는 "회차가 깨어나 돌았다"이지 "일을 했다"가 아니다 —
-            # 소비처가 회차 공백 감지(_check_price_check_gap)와 show_status 표시뿐인데,
-            # 환율 API 가 두어 시간 흔들리면 그동안 회차는 정상인데 값만 정체돼
-            # 다음 성공 회차가 "트리거가 둘 다 죽었다"는 거짓 경보를 낸다.
-            # 봇이 살아있음을 알리는 경보가 거짓말을 하면 진짜 장애 때 신뢰를 잃는다.
-            _save_last_check(conn, now)
+            # 2026-07-27 M-A1: 이 경로는 last_check_at 을 **절대 전진시키지 않는다.**
+            # 여기서 반환하는 회차는 터치 검출을 하나도 하지 않는데, 워터마크를
+            # 전진시키면 그 구간이 영원히 스캔되지 않는다(재현: 업비트 장애 2시간 =
+            # 환율 실패 60회차 → 복구 회차의 since_min 이 124분이어야 하는데 4분,
+            # 미스캔 7,080초). usdt_krw 를 못 얻는 상황은 곧 업비트 API 가 흔들리는
+            # 때이므로, "장애 중에 난 터치를 복구 후 소급 검출한다"는 보장이 하필 그
+            # 보장이 필요한 유일한 상황에서 무력화된다.
+            # 앞선 커밋(b965926)이 여기에 _save_last_check 를 둔 목적 — "거짓 공백
+            # 경보 제거" — 은 위에서 갱신한 last_cycle_at 이 이미 달성했다.
+            # 되돌린 게 아니라 옮긴 것이다.
             return summary
 
         preview_band = cfg_get("preview_band_pct") / 100.0

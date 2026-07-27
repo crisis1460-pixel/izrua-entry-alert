@@ -251,14 +251,22 @@ def print_pipeline_status(conn, now: float) -> None:
 
     print()
     try:
+        # 2026-07-27 M-A1: 두 키의 의미가 다르다.
+        #   last_cycle_at  = 기동 하트비트("회차가 깨어났다")
+        #   last_check_at  = 스캔 워터마크("어디까지 소급 검출했다")
+        # 예전엔 한 키가 둘을 겸직해, 환율/업비트 조회가 몇 시간 죽어도 값이 계속
+        # 갱신되며 화면이 '정상'으로 보였다. 이제 둘을 나란히 찍어 그 사각지대를 없앤다.
+        # last_cycle_at 이 없는(구세대/커밋백 롤백) DB 는 워터마크로 폴백한다.
+        last_cycle = db.get_meta(conn, "last_cycle_at")
         last_check = db.get_meta(conn, "last_check_at")
         last_collect = db.get_meta(conn, "last_collect_at")
         last_report = db.get_meta(conn, "last_weekly_report_at")
         last_snapshot = db.get_meta(conn, "last_author_snapshot_at")
     except sqlite3.OperationalError:
-        last_check = last_collect = last_report = last_snapshot = None
+        last_cycle = last_check = last_collect = last_report = last_snapshot = None
 
-    print(f"  마지막 가격체크    : {_fmt_ago(last_check, now)}")
+    print(f"  마지막 회차      : {_fmt_ago(last_cycle or last_check, now)}  (하트비트)")
+    print(f"  마지막 가격스캔  : {_fmt_ago(last_check, now)}  (소급 판정창의 기준)")
     print(f"  마지막 수집        : {_fmt_ago(last_collect, now)}"
           f"  (다음 수집 {_fmt_eta(last_collect, now, settings.get('collect_interval_hours') * 3600)})")
     print(f"  마지막 작성자 스냅샷: {_fmt_ago(last_snapshot, now)}")
@@ -352,7 +360,15 @@ def print_health(conn, now: float) -> None:
     print(_SEP)
     warnings = []
 
-    last_check = db.get_meta(conn, "last_check_at") if _has_table(conn, "meta") else None
+    # 2026-07-27 M-A1: '회차가 도는가'는 하트비트(last_cycle_at)로 판정한다.
+    # 구세대/커밋백 롤백 DB 는 워터마크(last_check_at)로 폴백 — 폴백이 없으면 배포
+    # 첫 회차와 롤백 직후에 이 경고가 거짓으로 뜬다.
+    if _has_table(conn, "meta"):
+        last_cycle_raw = db.get_meta(conn, "last_cycle_at")
+        last_check_raw = db.get_meta(conn, "last_check_at")
+    else:
+        last_cycle_raw = last_check_raw = None
+    last_check = last_cycle_raw or last_check_raw
     if last_check:
         elapsed = now - float(last_check)
         if elapsed > 30 * 60:
@@ -360,6 +376,21 @@ def print_health(conn, now: float) -> None:
                             f"(2분 주기 회차 기준 이상 지연) — cron/Actions 확인 필요")
     else:
         warnings.append("⚠️ 가격체크 이력 없음(last_check_at 미기록)")
+
+    # 두 키가 갈라지면 그 자체가 신호다: "회차는 도는데 스캔을 못 하고 있다"
+    # (환율/업비트 조회 실패가 반복되는 상태). 예전엔 한 키가 둘을 겸직해 이 상황이
+    # 통째로 관측 사각지대였다 — 업비트가 몇 시간 죽어도 화면은 '정상'이었다.
+    # 임계 30분은 위 정지 경고와 같은 값을 재사용(2분 주기 기준 15회차 연속 실패).
+    # ⚠️ 텔레그램 경보로 승격하지 않는다 — 알림 추가는 기획 카드 사안이고, 실제로
+    # 뜨는 빈도를 여기서 먼저 관찰한 뒤 올린다.
+    if last_cycle_raw and last_check_raw:
+        try:
+            stall = float(last_cycle_raw) - float(last_check_raw)
+        except (TypeError, ValueError):
+            stall = 0.0
+        if stall > 30 * 60:
+            warnings.append(f"⚠️ 회차는 도는데 가격 스캔이 {stall / 60:.0f}분째 정체"
+                            f"(환율/업비트 조회 실패 의심) — 소급 판정창이 그만큼 벌어져 있습니다")
 
     # 가격체크 회차 공백 기록 (2026-07-27 기획 카드 #2 과제2) — 회차가 도는 동안엔
     # 자기 정지를 스스로 감지할 수 없어, 다음 회차가 직전 last_check_at 과의 공백을

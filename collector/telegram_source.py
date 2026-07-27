@@ -379,17 +379,44 @@ _pattern_cache: dict = {}
 # **ID**(Space ID, 업비트 상장)까지 잡혀 3개 = '모호'로 글 전체가 버려졌다(8건 중 7건).
 # 페어 표기가 있으면 그게 글의 주제이므로 전수 스캔보다 우선한다.
 #
-# base 는 숫자만으로는 성립하지 않는다(교차감사 확정 → 즉시수리 #1): "Risk: 100 USD"
-# 같은 리스크·포지션 문구의 100 이 base 로 잡히면, 그 거짓 base 하나가 '페어 있음'
-# 판정을 만들어 전수 스캔 폴백까지 막고 실제 티커(ETC)가 있는 글을 통째로 드롭했다.
-# 영문자 1자 이상을 요구하면 100(탈락)·1INCH(통과)·4(탈락, 실제로 4USDT 라는 잡코인
-# 글이 있었다) 모두 의도대로 갈린다. 진짜 숫자-only 티커가 유니버스에 들어오는 날이
-# 오면 전수 스캔 폴백(_symbol_pattern)이 여전히 잡는다 — 여기서 잃는 건 '페어 우선'
-# 경로 하나뿐이다.
+# 2026-07-27 2차 교차검토 확정안. 이전 판(즉시수리 #1)은 "숫자-only base 배제"만
+# 했는데, **결함의 본질은 숫자가 아니라 구분자였다**: 옛 패턴의 `\s*[/\-]?\s*` 는
+# 구분자를 통째로 생략할 수 있어서, 견적통화 바로 앞의 아무 대문자 토큰이나 base 로
+# 승격됐다 — `BALANCE USDT`·`TAKE PROFIT IN USDT`·`MARGIN USDT 500`·`TOTAL PERP`,
+# 그리고 레버리지 표기 `2X USD`/`5X USDT`/`10X PERP` 가 전부 같은 구멍으로 들어왔다.
+#
+# 왜 정밀도 우선인가(설계 원칙 — 비용이 비대칭이다):
+#   · 진짜 페어를 놓치면(FN) 아래 전수 스캔 폴백이 받아준다 → 손실 ≈ 0.
+#   · 가짜 페어를 잡으면(FP) `if bases:` 가 참이 되어 폴백이 봉쇄되고 글이 통째로
+#     버려진다 → 손실 100%.
+#   따라서 애매하면 페어가 아닌 것으로 본다.
+#
+# 두 갈래로 나눈 이유:
+#   ① `$` 접두 = 사람이 손으로 붙인 티커 표식이라 신뢰할 수 있다 → 구분자 주변
+#      공백을 허용한다(`$SOL / USDT` 는 실전 표기).
+#   ② 무접두 = 붙여쓰기(`BTCUSDT`) 또는 공백 없는 구분자(`ETH-USDT`)만 인정한다.
+#      공백을 허용하면 `TAKE PROFIT - USDT`(base=PROFIT)·`STOP LOSS / USD`(base=LOSS)
+#      가 그대로 통과한다(재현 확인). 대가로 `SOL USDT`·`SOL / USDT` 같은 무접두
+#      공백 페어는 페어 경로를 잃지만, 위 비대칭 비용상 폴백으로 내려가는 게 옳다.
+#
+# ⚠️ "base 는 영문자 2자 이상" 안은 **기각**한다(2차 검토에서 반박됨).
+#    실물 유니버스(data/universe.json 81심볼)에 **`2Z`(영문자 1자)** 가 있고 `USD1`
+#    도 있다. 이 규칙을 넣으면 `$2Z/USDT` 가 페어 경로를 잃고 SIGNAL ID 류 오귀속에
+#    노출된다. 숫자-only 배제(영문자 **1자** 이상)가 상한이다 — 100·4 는 탈락하고
+#    1INCH·2Z·USD1 은 살아남는다.
+_PAIR_BASE = r"(?=[0-9]*[A-Z])[A-Z0-9]{2,10}"
+_PAIR_QUOTE = r"(?:USDT|USDC|BUSD|USD|PERP)"
 _PAIR = re.compile(
-    r"(?<![A-Za-z0-9])\$?((?=[0-9]*[A-Z])[A-Z0-9]{2,10})\s*[/\-]?\s*(?:USDT|USDC|BUSD|USD|PERP)"
-    r"(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?:"
+    r"\$(?P<sb>" + _PAIR_BASE + r")\s*[/\-]\s*"     # ① $ 접두 → 구분자 주변 공백 허용
+    r"|(?P<nb>" + _PAIR_BASE + r")(?:[/\-]|)"       # ② 무접두 → 붙여쓰기/무공백 구분자만
+    r")" + _PAIR_QUOTE + r"(?![A-Za-z0-9])"
 )
+# 레버리지 토큰 배제는 **정규식이 아니라 후처리**로 한다. 정규식에 lookahead 로
+# 밀어넣으면 `20XUSDT`(무구분) 때문에 패턴이 난해해지고, 어휘 판단이 '모양' 판단에
+# 섞인다 — 정규식은 모양만, 어휘는 이름 붙은 술어로. `X` 한정이라 실물 심볼 `2Z` 는
+# 안 다친다(`2X` 라는 티커가 상장되는 날엔 이 줄을 다시 볼 것).
+_LEVERAGE_BASE = re.compile(r"^[0-9]{1,3}X$")
 # 견적통화·상용구는 그 자체로 티커여도 '이 글의 주제'가 아니다. 전수 스캔 폴백에서만
 # 쓰는 최소 목록 — 여기에 더 채워 넣기 시작하면 곧 단어 블랙리스트가 되므로,
 # 진짜 견적통화만 둔다.
@@ -415,7 +442,12 @@ def match_symbol(text: str, symbols) -> Optional[str]:
     # 티커로 귀속된다(실측: "$GRAM/USDT" 글이 "SIGNAL ID:" 의 ID 코인에 붙었다.
     # GRAM 은 업비트 미상장이라 그냥 버려야 하는 글이다). 오귀속은 잘못된 코인에
     # 잘못된 진입가로 알림이 나가는 사고라, 버리는 쪽이 항상 낫다.
-    bases = {m.group(1).upper() for m in _PAIR.finditer(text)} - _QUOTE_ONLY
+    bases = set()
+    for m in _PAIR.finditer(text):
+        b = (m.group("sb") or m.group("nb")).upper()
+        if b in _QUOTE_ONLY or _LEVERAGE_BASE.match(b):
+            continue   # 견적통화 자기자신 / 레버리지 표기는 base 가 아니다
+        bases.add(b)
     if bases:
         tracked = bases & upper
         return next(iter(tracked)) if len(tracked) == 1 else None

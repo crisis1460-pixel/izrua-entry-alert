@@ -1587,6 +1587,132 @@ os.remove(_SS_DB)
 #    종결된 전체 표본)이 통째로 하나의 유효한 해시체인을 이루는지 확인한다 —
 #    개별 단위테스트(test_resilience.py)와 달리 실제 운영 경로 산출물 검증.
 
+# ── T-m3a~e: 하트비트 / 스캔 워터마크 분리 (2026-07-27 2차 교차검토 M-A1) ──────
+# last_check_at 한 키가 두 의미를 겸직하고 있었다 — (a) 소급 판정창의 워터마크
+# ("어디까지 스캔했나", run_once 의 since_min)와 (b) 기동 하트비트("회차가 깨어났나",
+# 공백 감시·show_status). 겸직 때문에, 터치를 하나도 검출하지 않고 반환하는 환율
+# 실패 회차가 워터마크를 전진시켜 **그 구간이 영원히 스캔되지 않았다**.
+# 수리: last_check_at = 워터마크(성공 스캔에서만 전진), 신규 last_cycle_at = 하트비트.
+_M3_DB = "cache/_test_m3_watermark.db"
+if os.path.exists(_M3_DB):
+    os.remove(_M3_DB)
+db.init_db(_M3_DB)
+_m3_prev_db_path = settings.SETTINGS["db_path"]
+_m3_prev_gap_min = settings.SETTINGS.get("price_check_gap_alert_minutes")
+settings.SETTINGS["db_path"] = _M3_DB
+settings.SETTINGS["price_check_gap_alert_minutes"] = 120
+
+_m3_t0 = now + 20000
+with db.connect(_M3_DB) as conn:
+    _m3_lv = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long",
+                  entry_usd=8.0, sl_usd=7.5, tp_usd=9.2, rr=2.0, grade="B", score=62,
+                  author="M3", post_url="https://tv.com/m3",
+                  collected_at=_m3_t0 - 7200)
+    _m3_lv["signal_key"] = db.make_signal_key("LINK", 8.0, "M3", "m3")
+    db.upsert_level(conn, _m3_lv)
+
+# fetch_range_since 가 실제로 받은 since_min 을 그대로 관측한다(간접 지표가 아니라
+# 소급 판정창 그 자체를 본다). 캔들은 None 을 돌려 터치/판정 경로를 건드리지 않는다.
+_m3_since = []
+_m3_real_range = upbit.fetch_range_since
+_m3_real_prices = upbit.fetch_prices
+
+
+def _m3_range(market, mins, timeout):
+    _m3_since.append(mins)
+    return None
+
+
+# 엔트리(8.0 USD × 1400 = 11,200원)가 현재가의 -5% 안쪽이라 need_low 가 참 →
+# 캔들 조회가 실제로 일어난다. 동시에 현재가가 엔트리보다 위라 터치는 안 난다.
+_m3_fx = {"ok": True}
+
+
+def _m3_prices(markets, timeout):
+    out = {m: 11500.0 for m in markets}
+    if _m3_fx["ok"]:
+        out["KRW-USDT"] = USDT_KRW
+    else:
+        out.pop("KRW-USDT", None)   # 환율 조회 실패 = 업비트 API 가 흔들리는 상황
+    return out
+
+
+upbit.fetch_range_since = _m3_range
+upbit.fetch_prices = _m3_prices
+
+price_check.run_once(_m3_t0)                       # 정상 회차 — 워터마크 t0 확정
+_m3_since.clear()
+_m3_fx["ok"] = False
+for _i in range(1, 4):                             # 환율 실패 3회차 (2분 간격)
+    price_check.run_once(_m3_t0 + _i * 120)
+with db.connect(_M3_DB) as conn:
+    _m3_check_during = db.get_meta(conn, "last_check_at")
+    _m3_cycle_during = db.get_meta(conn, "last_cycle_at")
+    _m3_gap_during = db.get_meta(conn, "last_price_check_gap_min")
+
+check("T-m3e 환율 실패 회차는 하트비트만 전진시킨다(워터마크는 t0 에 고정)",
+      _m3_since == []
+      and abs(float(_m3_check_during) - _m3_t0) < 1
+      and abs(float(_m3_cycle_during) - (_m3_t0 + 360)) < 1)
+# b965926(거짓 공백 경보 제거)이 달성했던 것을 되돌리지 않았음을 못박는다 —
+# 환율이 계속 실패해도 하트비트가 매 회차 찍히므로 공백은 2분으로 유지된다.
+check("T-m3b 환율 실패가 이어져도 회차 공백은 2분(거짓 정지 경보 없음)",
+      _m3_gap_during == "2.0")
+
+_m3_fx["ok"] = True
+price_check.run_once(_m3_t0 + 480)                 # 복구 회차
+# 수리 전이라면 직전 실패 회차가 워터마크를 전진시켜 since_min = int(120/60)+2 = 4분
+# → 장애 8분 중 6분이 영구 미스캔. 수리 후엔 t0 부터 전 구간(480초)을 덮는다.
+check("T-m3a(핵심) 복구 회차의 소급 판정창이 장애 구간 전체를 덮는다",
+      len(_m3_since) == 1 and _m3_since[0] == int(480 / 60) + 2)
+with db.connect(_M3_DB) as conn:
+    _m3_check_after = db.get_meta(conn, "last_check_at")
+check("T-m3a2 성공 회차는 워터마크를 전진시킨다",
+      abs(float(_m3_check_after) - (_m3_t0 + 480)) < 1)
+
+# T-m3d: '대상 없음' 조기 반환은 **여전히** 워터마크를 전진시킨다(의도적 예외).
+# 환율 실패와 겉모습만 같고 성질이 다르다 — 스캔 대상이 0건이라 놓칠 터치가 없고,
+# 이후 수집되는 레벨은 _eff_low 가 collected_at 이후 캔들만 인정한다.
+_M3_DB2 = "cache/_test_m3_empty.db"
+if os.path.exists(_M3_DB2):
+    os.remove(_M3_DB2)
+db.init_db(_M3_DB2)
+settings.SETTINGS["db_path"] = _M3_DB2
+price_check.run_once(_m3_t0 + 600)
+with db.connect(_M3_DB2) as conn:
+    _m3_empty_check = db.get_meta(conn, "last_check_at")
+    _m3_empty_cycle = db.get_meta(conn, "last_cycle_at")
+check("T-m3d '대상 없음' 조기 반환은 워터마크도 전진(의도적 예외 — 계약 고정)",
+      abs(float(_m3_empty_check) - (_m3_t0 + 600)) < 1
+      and abs(float(_m3_empty_cycle) - (_m3_t0 + 600)) < 1)
+
+# T-m3c: last_cycle_at 이 없는 구세대 DB(또는 커밋백 롤백으로 옛 스냅샷이 돌아온
+# DB)에서도 last_check_at 폴백으로 공백 판정이 정상 동작한다. 폴백이 없으면 그런
+# 회차마다 공백 감시가 1회 침묵한다.
+_M3_DB3 = "cache/_test_m3_fallback.db"
+if os.path.exists(_M3_DB3):
+    os.remove(_M3_DB3)
+db.init_db(_M3_DB3)
+_m3_sent_before = len(sent_messages)
+with db.connect(_M3_DB3) as conn:
+    db.set_meta(conn, "last_check_at", str(_m3_t0))      # 하트비트 키는 일부러 없음
+    _m3_fallback = price_check._check_price_check_gap(
+        conn, _m3_t0 + 200 * 60, settings.get)
+    _m3_fallback_gap = db.get_meta(conn, "last_price_check_gap_min")
+check("T-m3c last_cycle_at 부재 시 last_check_at 폴백으로 공백 판정(200분 > 임계 120분)",
+      _m3_fallback is True and _m3_fallback_gap == "200.0"
+      and len(sent_messages) == _m3_sent_before + 1)
+
+upbit.fetch_range_since = _m3_real_range
+upbit.fetch_prices = _m3_real_prices
+settings.SETTINGS["db_path"] = _m3_prev_db_path
+if _m3_prev_gap_min is not None:
+    settings.SETTINGS["price_check_gap_alert_minutes"] = _m3_prev_gap_min
+for _p in (_M3_DB, _M3_DB2, _M3_DB3):
+    if os.path.exists(_p):
+        os.remove(_p)
+
+
 # ── AD: 주간 감사 덤프가 운영 배선(init_db 훅)으로 실제로 도는가 (카드 #4) ──
 # 단위 검증은 scripts/test_weekly_report.py(A 섹션) 담당. 여기서는 "회차가 부르는
 # db.init_db 만으로 배선이 완결되는가"만 본다 — 회차 엔트리포인트(run_cycle/

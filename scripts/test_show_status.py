@@ -196,6 +196,43 @@ code, out = capture(days=7)
 check("S12 공백 meta 없으면 줄 자체 미출력 + 이상 징후 없음 유지",
       "가격체크 회차 공백" not in out and "이상 징후 없음" in out)
 
+# ── S13: 하트비트 / 스캔 워터마크 분리 (2026-07-27 2차 교차검토 M-A1) ──────
+# last_cycle_at(회차가 깨어난 때) 과 last_check_at(어디까지 스캔했나) 이 갈라지면
+# 그 자체가 "회차는 도는데 일을 못 하고 있다"는 신호다. 예전엔 한 키가 둘을 겸직해
+# 업비트가 몇 시간 죽어도 화면이 '정상'으로 보이는 관측 사각지대였다.
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_cycle_at", str(NOW - 60))         # 회차는 1분 전에도 돌았다
+    db.set_meta(conn, "last_check_at", str(NOW - 3600))       # 스캔은 60분째 정체
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+code, out = capture(days=7)
+check("S13 하트비트/워터마크 두 줄로 분리 표시",
+      "마지막 회차" in out and "마지막 가격스캔" in out)
+check("S13b 스캔 정체 경고 1줄(회차는 도는데 스캔을 못 한다)",
+      "회차는 도는데 가격 스캔이" in out and "59분째 정체" in out)
+check("S13c 회차 자체는 살아 있으므로 '멈춰 있습니다' 정지 경고는 뜨지 않는다",
+      "멈춰 있습니다" not in out)
+
+# S13d: 두 키가 나란히 신선하면 정체 경고 없음(정상 상태 회귀)
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_cycle_at", str(NOW - 60))
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+code, out = capture(days=7)
+check("S13d 두 키가 나란히 신선하면 정체 경고 없음 + 이상 징후 없음",
+      "회차는 도는데" not in out and "이상 징후 없음" in out)
+
+# S13e: last_cycle_at 이 없는 구세대/롤백 DB — 워터마크로 폴백하고, 폴백 상태에서는
+# 두 키의 차이를 잴 수 없으므로 정체 경고도 내지 않는다(거짓 경고 방지).
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+code, out = capture(days=7)
+check("S13e 하트비트 키 부재 시 워터마크 폴백 - 거짓 정체 경고 없음",
+      "회차는 도는데" not in out and "이상 징후 없음" in out)
+
 # ── S8: --report 옵션 — 주간 리포트 텍스트가 함께 출력됨 ────────────
 fresh_db()
 code, out = capture(days=7, report=True)

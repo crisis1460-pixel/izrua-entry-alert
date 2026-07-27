@@ -218,6 +218,58 @@ for desc, text, price, exp in LADDER_CASES:
     if passed:
         ok += 1
 
+# ── 2026-07-27 2차 교차검토: _LADDER 검색 창 200자 상한 (가용성 수리) ──────
+# _LADDER 는 _NUM(내부 교대)을 {2,} 로 감싼 중첩 수량자라 긴 숫자 런에서 역추적이
+# 2차식으로 폭주한다(실측: 200자 4.1ms / 3,200자 1,186ms / 16,000자 수십 초).
+# B-M1 이 창을 30자 → '줄 끝'으로 넓히며 생긴 노출면이고, 수집기는 제3자가 쓴 임의
+# 텍스트를 파싱한다 — 개행 없는 긴 숫자 줄 하나가 12분 하드킬 사정권의 회차를
+# 통째로 태울 수 있었다. 상한 200자의 산정 근거는 extractor._LADDER_MAX_WINDOW 주석.
+import time as _time  # noqa: E402
+
+from collector import extractor as _ex  # noqa: E402
+
+# ① 최악 입력에서 시간이 갇히는가.
+# 폭주 입력은 '정상 사다리'가 아니라 **구분자 없는 긴 숫자 런**이다 — _NUM 의
+# `[0-9]*\.[0-9]+|[0-9]+` 가 매 시작점마다 끝까지 먹었다가 되돌아오고, 구분자가
+# 끝내 안 나오므로 O(n²) 가 그대로 실현된다(정상 사다리는 곧바로 매칭돼 싸다).
+# _grab_after 를 직접 부르는 이유: parse_setup 전체를 재면 _clean/_PERCENT 등
+# 다른 정규식 비용이 섞여 이 수리의 효과가 묻힌다(측정 확인: 683ms vs 1,835ms).
+# 실측(같은 머신): 상한 있음 4.2ms / 없음 987ms — 230배.
+_redos_text = "TARGETS: " + ("1" * 3200) + "\nSTOP LOSS: 990"
+_t0 = _time.perf_counter()
+_ex._grab_after(_ex._TP_LABEL, _redos_text)
+_elapsed_ms = (_time.perf_counter() - _t0) * 1000
+# 임계 200ms: 상한 실측(4.2ms)의 47배 여유 — 느린 CI 도 통과하고, 상한이 사라지면
+# (987ms) 반드시 걸린다.
+_redos_ok = _elapsed_ms < 200 and _ex._LADDER_MAX_WINDOW == 200
+print(("✅" if _redos_ok else "❌"),
+      f"ReDoS 방어 - 200자 초과 긴 숫자 런에서 시간 폭주 없음 ({_elapsed_ms:.1f}ms)")
+if _redos_ok:
+    ok += 1
+
+# ② 상한을 넣어도 정상 사다리는 불변 — 첫 목표를 그대로 집는다
+_r_cap = parse_setup(
+    "$ETC LONG\nENTRY: 6.81 - 6.85\nTARGETS: 7.15 - 7.45 - 7.85 - 8.25\nSTOP LOSS: 6.25",
+    current_price=7.0)
+_cap_ok = (_r_cap is not None and _close(_r_cap["tp"], 7.15)
+           and _close(_r_cap["entry"], 6.83) and _close(_r_cap["sl"], 6.25))
+print(("✅" if _cap_ok else "❌"), "200자 상한을 넣어도 정상 사다리 판정 불변(TP1=7.15)")
+print(f"    → {_r_cap}")
+if _cap_ok:
+    ok += 1
+
+# ③ 200자를 훌쩍 넘는 '진짜' 긴 나열이어도 맨 앞 rung 은 상한 안쪽이라 결과 불변
+# (잘림이 값을 바꾸지 않는다는 것이 이 상한을 정당화하는 근거의 절반이다)
+_long_line = "TARGETS: " + " - ".join(f"{1005 + i * 0.01:.2f}" for i in range(400))
+_r_long = parse_setup("$TEST LONG\nENTRY: 1000\n" + _long_line + "\nSTOP LOSS: 990",
+                      current_price=1000.0)
+_long_ok = _r_long is not None and _close(_r_long["tp"], 1005.0)
+print(("✅" if _long_ok else "❌"), "창이 잘려도 맨 앞 rung 이 TP1 로 그대로 나온다")
+print(f"    → tp={None if _r_long is None else _r_long['tp']}")
+if _long_ok:
+    ok += 1
+TOTAL_EXTRA += 3
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES))
 print(f"\n{ok}/{TOTAL} 통과")
