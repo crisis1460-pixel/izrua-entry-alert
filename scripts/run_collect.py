@@ -79,7 +79,21 @@ def _check_deletions(conn, timeout: float) -> int:
     # "0건 확인"인데 하루 게이트가 소진되고 후보(그날 26건)가 통째로 다음날로
     # 밀리는 사고가 있었다. 로그 문구("다음 회차로 연기")대로, 차단 시엔 게이트를
     # set 하지 않는다 - 정상 순회 완료(또는 애초에 후보 없음)일 때만 하루 게이트 소진.
-    if not blocked:
+    #
+    # 2026-07-27 수리(개발자B, 교차감사 A-M2 확정): 위 수정만으로는 부족했다 - 결과가
+    # 전부 None(판정 보류, tradingview.check_post_deleted 가 "모르겠다"고 응답)이면
+    # 차단이 아니어도(blocked=False) 정상 순회를 '완료'한 것으로 처리돼 게이트가
+    # 소진됐다. 그런데 None 은 deleted_checked_at 을 갱신 안 하므로(위 continue 참고)
+    # 후보 정렬(get_deletion_check_candidates 의 "미확인 우선, collected_at ASC")이
+    # 결정적이라 다음날도 '같은' 후보 5건이 다시 뽑히고 또 전부 None 이면 - 게이트만
+    # 매일 태워지고 실제 확인은 영원히 0건이었다(3일째 실적 0건의 근본 원인).
+    # 이제 "진전이 있었을 때만"(n_checked > 0) 게이트를 태운다 - 후보가 아예 없던
+    # 경우는 위에서 이미 별도로 처리·반환했으므로 여기 도달했다는 것 자체가
+    # "후보는 있었다"는 뜻이라 원래 기준(n_checked > 0 or not candidates)이 자연히
+    # n_checked > 0 하나로 좁혀진다.
+    # 전원 None 이어도 게이트를 안 태우면 다음 "수집 회차"(cron 4시간 간격)가 바로
+    # 재시도한다 - 무한 재시도가 아니라 하루 최대 6회(24h / 4h)로 유계돼 있다.
+    if not blocked and n_checked > 0:
         db.set_meta(conn, "last_deletion_check_day", day)
     if n_checked:
         logger.info("[삭제확인] %d건 확인 (삭제 %d건)", n_checked, n_deleted)

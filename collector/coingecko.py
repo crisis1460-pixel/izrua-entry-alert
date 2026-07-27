@@ -152,25 +152,51 @@ def _load_cache(path: str, max_age_sec: float) -> Optional[list]:
             payload = json.load(f)
         if time.time() - payload.get("updated_at", 0) > max_age_sec:
             return None
-        return payload.get("universe")
+        universe = payload.get("universe")
+        # 2026-07-27 수리(개발자B, 교차감사 A-m5 확정 - "major 에 가깝다"): 이전엔
+        # `is not None` 게이트라 [] 도 "신선한 캐시"로 통과했다. CoinGecko/업비트
+        # 어느 한쪽이 순간적으로 빈 배열을 응답한 회차가 하필 이 함수를 거치면
+        # 그 [] 가 그대로 파일에 박히고(과거 _save_cache 는 무조건 저장), 이후
+        # universe_refresh_hours(24h) 내내 "신선"으로 읽혀 수집·텔레그램 소스
+        # 전체가 조용히 무동작했다 - 로그도 예외도 없이. truthy 검사로 바꿔 빈
+        # 캐시는 캐시-미스로 취급해 즉시 재조회를 유도한다(아래 _save_cache 도
+        # 같은 이유로 빈 목록을 애초에 저장하지 않게 바꿨다 - 이중 방어).
+        return universe if universe else None
     except Exception:
         return None
 
 
 def _load_cache_any_age(path: str) -> Optional[list]:
-    """신선도 무시하고 캐시가 존재하기만 하면 반환 - 실패 시 폴백 전용(2026-07-26)."""
+    """신선도 무시하고 캐시가 존재하기만 하면 반환 - 실패 시 폴백 전용(2026-07-26).
+
+    2026-07-27 수리(A-m5): 빈 목록은 폴백할 가치가 없다 - 이 함수의 취지는 "완전
+    실패보다 낡은 유니버스가 낫다"인데, 빈 유니버스는 완전 실패와 다를 바 없이
+    수집·텔레그램 소스 전체를 조용히 멈춘다(오히려 예외가 안 나서 더 나쁘다 -
+    호출부가 "이번 회차 스킵"으로 명시 처리할 기회조차 사라진다). 빈 캐시면
+    None 을 반환해 build_universe 의 except 블록이 원 예외를 그대로 전파하게
+    한다(_load_cache 와 동일한 truthy 게이트)."""
     p = Path(path)
     if not p.exists():
         return None
     try:
         with open(p, "r", encoding="utf-8") as f:
             payload = json.load(f)
-        return payload.get("universe")
+        universe = payload.get("universe")
+        return universe if universe else None
     except Exception:
         return None
 
 
 def _save_cache(path: str, universe: list) -> None:
+    # 2026-07-27 수리(A-m5): 빈 목록을 저장하면 다음 호출의 _load_cache/
+    # _load_cache_any_age 가 빈 캐시를 읽게 된다 - 위 두 함수를 truthy 게이트로
+    # 고쳐도, 애초에 저장을 안 하는 편이 기존 정상 캐시를 보존한다는 점에서 낫다
+    # (완전 실패보다 낡은 유니버스가 낫다는 기존 폴백 철학과 같은 방향 - 빈
+    # 유니버스보다 '어제자 정상 유니버스'가 훨씬 낫다). 저장을 생략하면 다음
+    # 호출은 기존 캐시가 있으면 그걸(신선하면), 없거나 만료됐으면 재조회를 탄다.
+    if not universe:
+        logger.warning("[cg] 빈 유니버스 - 캐시 저장 생략(기존 캐시가 있다면 보존)")
+        return
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:

@@ -162,6 +162,86 @@ check("수리2b: 캐시조차 없으면 예외를 그대로 전파(호출부가 
 
 
 # ══════════════════════════════════════════════════════════════════
+# 즉시수리(2026-07-27, 개발자B, 교차감사 A-m5 확정): 빈 유니버스가 캐시·stale
+# 폴백에 박혀 24시간짜리 조용한 장애가 되던 문제. _save_cache 는 빈 목록을 저장하지
+# 않고, _load_cache/_load_cache_any_age 는 truthy 게이트로 빈 캐시를 미스 취급한다.
+# ══════════════════════════════════════════════════════════════════
+_cache_path_m5 = "cache/_test_resilience_universe_m5.json"
+if os.path.exists(_cache_path_m5):
+    os.remove(_cache_path_m5)
+settings.SETTINGS["universe_cache_path"] = _cache_path_m5
+settings.SETTINGS["universe_refresh_hours"] = 24
+settings.SETTINGS["universe_top_n"] = 10
+settings.SETTINGS["http_timeout_sec"] = 5.0
+
+_good_universe_m5 = [{"symbol": "ETH", "ticker": "KRW-ETH", "rank": 2, "name": "Ethereum",
+                      "price_usd": 3000.0, "tier_icon": "\U0001f947"}]
+
+
+def _cg_get_empty_markets(url, params=None, headers=None, timeout=None):
+    if "coins/markets" in url:
+        return _FakeResp(200, [])   # CoinGecko 가 빈 배열로 응답(순간 오류 재현)
+    if "market/all" in url:
+        return _FakeResp(200, [{"market": "KRW-BTC"}])
+    return _FakeResp(404)
+
+
+# m5-1: 캐시가 아예 없는 상태에서 빈 응답 → build_universe 는 여전히 빈 목록을
+# 반환하지만(동작 유지, 예외 아님), 그 빈 목록을 캐시 파일로 저장하지는 않는다 -
+# 저장했다면 다음 24시간 동안 "신선한 빈 캐시"로 굳어 재조회 자체가 안 됐을 것.
+requests.get = _cg_get_empty_markets
+_uni_empty1 = coingecko.build_universe()
+check("즉시수리(m5)-1: 빈 응답이면 build_universe 는 빈 목록을 반환(기존 동작 유지)",
+      _uni_empty1 == [])
+check("즉시수리(m5)-1b: 빈 목록은 캐시 파일로 저장되지 않는다(다음 호출이 재조회 가능)",
+      not os.path.exists(_cache_path_m5))
+
+# m5-2: 정상 캐시가 이미 있는데(단, 만료돼 fetch 를 타야 하는 상태) 빈 응답이 오면
+# - 반환값은 이번 회차의 빈 결과 그대로지만, 디스크의 기존 정상 캐시는 덮어써지지
+# 않고 보존된다(다음 정상 응답이 올 때까지 "어제자 유니버스"를 잃지 않는다).
+with open(_cache_path_m5, "w", encoding="utf-8") as f:
+    json.dump({"updated_at": time.time() - 25 * 3600, "universe": _good_universe_m5}, f)
+_uni_empty2 = coingecko.build_universe()
+with open(_cache_path_m5, "r", encoding="utf-8") as f:
+    _payload_after_m5 = json.load(f)
+check("즉시수리(m5)-2: 정상 캐시가 있어도 빈 응답이면 반환값은 빈 목록(재조회 결과 그대로)",
+      _uni_empty2 == [])
+check("즉시수리(m5)-2b: 기존 정상 캐시 파일은 빈 응답으로 덮어써지지 않는다(보존)",
+      _payload_after_m5.get("universe") == _good_universe_m5)
+
+# m5-3: (구버전 버그로) 캐시에 이미 빈 목록이 "신선하게" 저장돼 있던 경우 -
+# truthy 게이트 덕에 24시간 이내여도 미스 취급해 실제로 재조회가 발생해야 한다.
+with open(_cache_path_m5, "w", encoding="utf-8") as f:
+    json.dump({"updated_at": time.time(), "universe": []}, f)
+
+_fetch_called_m5 = {"n": 0}
+
+
+def _cg_get_track_calls(url, params=None, headers=None, timeout=None):
+    _fetch_called_m5["n"] += 1
+    if "coins/markets" in url:
+        return _FakeResp(200, [{"symbol": "eth", "market_cap_rank": 2, "name": "Ethereum",
+                                "current_price": 3000.0}])
+    if "market/all" in url:
+        return _FakeResp(200, [{"market": "KRW-ETH"}])
+    return _FakeResp(404)
+
+
+requests.get = _cg_get_track_calls
+_uni_m5_3 = coingecko.build_universe()
+check("즉시수리(m5)-3: 신선(24h 이내)해도 캐시가 빈 목록이면 미스 취급 - 재조회 발생",
+      _fetch_called_m5["n"] > 0)
+check("즉시수리(m5)-3b: 재조회 성공 시 정상 유니버스를 반환한다",
+      len(_uni_m5_3) == 1 and _uni_m5_3[0]["symbol"] == "ETH")
+with open(_cache_path_m5, "r", encoding="utf-8") as f:
+    _payload_m5_3 = json.load(f)
+check("즉시수리(m5)-3c: 정상 결과는 캐시에 저장된다(빈 목록만 저장 생략 - 회귀 아님)",
+      _payload_m5_3.get("universe") == _uni_m5_3)
+
+os.remove(_cache_path_m5)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 수리2(하류) + 수리3 + 수리4: scripts/run_collect.py
 # ══════════════════════════════════════════════════════════════════
 from scripts import run_collect
@@ -295,6 +375,80 @@ with db.connect(TEST_DB_EMPTY) as conn:
     gate_empty = db.get_meta(conn, "last_deletion_check_day")
 check("수리4 시나리오C: 후보 없음이면 0건 + 게이트 set(회귀 없음 확인)",
       n_c == 0 and gate_empty is not None)
+
+# 시나리오 D (즉시수리, 2026-07-27, 개발자B, 교차감사 A-M2 확정): 차단은 없었지만
+# (blocked=False) 후보 전원이 '판정 보류(None)' - deleted_checked_at 이 하나도
+# 갱신 안 됐는데 예전엔 여기서도 게이트가 소진돼, 결정적 정렬(ORDER BY (checked_at
+# IS NOT NULL), collected_at ASC) 때문에 다음날도 '같은' 후보가 다시 뽑히고 또
+# 전부 None 이면 - 게이트만 매일 태워지고 실제 확인은 영원히 0건이었다(실적 3일째
+# 0건의 근본 원인). 핵심 수리: 진전(n_checked>0) 없이는 게이트를 태우지 않는다.
+TEST_DB_DEL_NONE = "cache/_test_resilience_delgate_none.db"
+if os.path.exists(TEST_DB_DEL_NONE):
+    os.remove(TEST_DB_DEL_NONE)
+db.init_db(TEST_DB_DEL_NONE)
+with db.connect(TEST_DB_DEL_NONE) as conn:
+    for i in range(3):
+        _insert_touched(conn, f"nonekey{i}")
+
+tradingview.is_blocked = lambda: False
+tradingview.check_post_deleted = lambda url, timeout: None  # 전원 판정 보류
+with db.connect(TEST_DB_DEL_NONE) as conn:
+    n_d = run_collect._check_deletions(conn, timeout=5.0)
+    gate_after_none = db.get_meta(conn, "last_deletion_check_day")
+    n_checked_col_d = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE deleted_checked_at IS NOT NULL"
+    ).fetchone()["n"]
+check("수리4 시나리오D: 차단 없이 정상 순회했지만 전원 판정 보류 - 삭제 확정 0건",
+      n_d == 0)
+check("수리4 시나리오D: deleted_checked_at 은 단 한 건도 갱신되지 않는다(전원 보류)",
+      n_checked_col_d == 0)
+check("수리4(핵심 수리) 시나리오D: 전원 None 이면 진전이 없었으므로 하루 게이트를 "
+      "태우지 않는다 - 안 그러면 같은 후보가 매일 재선택만 되고 확인은 영원히 0건",
+      gate_after_none is None)
+
+# 다음 "수집 회차"(2분 뒤가 아니라 4시간 뒤 cron)에는 즉시 재시도되고, 하루 최대
+# 6회(24h/4h)로 유계된다는 것도 함께 확인 - 게이트가 안 걸렸으니 즉시 재호출해도
+# 다시 시도된다(무한 루프가 아니라 "하루 여러 번 재시도 가능"이라는 뜻).
+with db.connect(TEST_DB_DEL_NONE) as conn:
+    n_d2 = run_collect._check_deletions(conn, timeout=5.0)
+check("수리4 시나리오D 후속: 게이트 미소진 덕에 다음 회차(같은 날)도 즉시 재시도된다",
+      n_d2 == 0)  # 여전히 전부 None 이라 확인 0건이지만, 재시도 자체는 일어남(예외 없음)
+
+# 시나리오 E (즉시수리): 후보 중 '1건이라도' 실제 판정(True/False)이 나오면 -
+# 전원 보류가 아니므로 진전이 있었던 것 - 게이트가 정상적으로 소진돼야 한다
+# (매 회차 무한정 재시도되는 것도 낭비이므로, 진전이 있었으면 하루 상한을 지킨다).
+TEST_DB_DEL_MIX = "cache/_test_resilience_delgate_mix.db"
+if os.path.exists(TEST_DB_DEL_MIX):
+    os.remove(TEST_DB_DEL_MIX)
+db.init_db(TEST_DB_DEL_MIX)
+with db.connect(TEST_DB_DEL_MIX) as conn:
+    for i in range(3):
+        _insert_touched(conn, f"mixkey{i}")
+
+_mix_results = {"mixkey0": None, "mixkey1": False, "mixkey2": None}
+
+
+def _mix_check_post_deleted(url, timeout):
+    for k, v in _mix_results.items():
+        if k in url:
+            return v
+    return None
+
+
+tradingview.is_blocked = lambda: False
+tradingview.check_post_deleted = _mix_check_post_deleted
+with db.connect(TEST_DB_DEL_MIX) as conn:
+    n_e = run_collect._check_deletions(conn, timeout=5.0)
+    gate_after_mix = db.get_meta(conn, "last_deletion_check_day")
+    n_checked_col_e = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE deleted_checked_at IS NOT NULL"
+    ).fetchone()["n"]
+check("수리4 시나리오E: 3건 중 1건만 실제 판정(나머지 보류) - 확인 1건 기록",
+      n_checked_col_e == 1)
+check("수리4(핵심 수리) 시나리오E: 1건이라도 판정됐으면(진전 있음) 하루 게이트를 "
+      "정상적으로 소진한다(전원 보류였던 D 와 대비 - 회귀 아님)",
+      gate_after_mix is not None)
+check("수리4 시나리오E: 삭제 확정 0건(그 1건은 생존 판정=False)", n_e == 0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -853,6 +1007,112 @@ check("과제2-G7: render_price_check_gap_alert 렌더러 신설(파일 끝 추�
 _gap_render = telegram.render_price_check_gap_alert(130.0, 120.0)
 check("과제2-G7b: 렌더 본문에 공백·임계 수치 반영",
       "130" in _gap_render and "120" in _gap_render)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 즉시수리(2026-07-27, 개발자B, 교차감사 A-m2 확정): 워쳐독 3종
+# (_check_collect_silence / _check_price_check_gap / _check_outcome_chain) 의
+# meta 기록이 telegram.send 호출보다 '먼저' 커밋돼 있는지 검증한다. send 호출
+# 시점에 - 원래 커넥션의 아직 열려 있는 트랜잭션과는 무관하게 - 같은 DB 파일에
+# 대고 새 커넥션을 열어 meta 를 조회한다. 새 커넥션에서 값이 보인다는 것은 곧
+# conn.commit() 이 send 이전에 실제로 디스크까지 반영됐다는 뜻이다(진행 중인
+# 트랜잭션은 다른 커넥션에는 보이지 않으므로, 이 검증은 "set_meta 만 호출됐다"가
+# 아니라 "commit 까지 됐다"를 잡아낸다).
+# ══════════════════════════════════════════════════════════════════
+import sqlite3 as _sqlite3
+
+TEST_DB_ORDER = "cache/_test_resilience_watchdog_order.db"
+if os.path.exists(TEST_DB_ORDER):
+    os.remove(TEST_DB_ORDER)
+db.init_db(TEST_DB_ORDER)
+
+
+def _meta_via_fresh_conn(key):
+    c = _sqlite3.connect(TEST_DB_ORDER)
+    try:
+        row = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+    finally:
+        c.close()
+
+
+_orig_send_order = telegram.send
+
+# ── _check_collect_silence: send 시점에 별도 커넥션으로 meta 조회 ──
+_order_seen_silence = {}
+
+
+def _send_check_silence(text):
+    _order_seen_silence["meta_at_send"] = _meta_via_fresh_conn("collect_silence_warned_date")
+    return True
+
+
+_now_order = time.time()
+with db.connect(TEST_DB_ORDER) as conn:
+    for i in range(14):  # 직전 7일 이틀에 한 번꼴 수집 → 평균 있음(오탐 방지 통과)
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, collected_at) "
+            "VALUES (?, 'X', 'KRW-X', 'long', 'expired', ?)",
+            (f"ord_silence_{i}", _now_order - 25 * 3600 - i * 12 * 3600))
+
+telegram.send = _send_check_silence
+with db.connect(TEST_DB_ORDER) as conn:
+    _r_order_silence = pc._check_collect_silence(conn, _now_order, settings.get)
+check("즉시수리(m2)-order-a: _check_collect_silence - send 성공", _r_order_silence is True)
+check("즉시수리(m2)-order-a(핵심): send 호출 시점에 이미 meta 가 별도 커넥션에서도 보인다"
+      "(set_meta 뿐 아니라 commit 까지 send 이전에 끝났다는 증거)",
+      _order_seen_silence.get("meta_at_send") is not None)
+
+# ── _check_price_check_gap: 동일 검증 ──
+_order_seen_gap = {}
+
+
+def _send_check_gap(text):
+    _order_seen_gap["meta_at_send"] = _meta_via_fresh_conn("price_check_gap_warned_date")
+    return True
+
+
+settings.SETTINGS["price_check_gap_alert_minutes"] = 10
+with db.connect(TEST_DB_ORDER) as conn:
+    db.set_meta(conn, "last_check_at", str(_now_order - 20 * 60))
+
+telegram.send = _send_check_gap
+with db.connect(TEST_DB_ORDER) as conn:
+    _r_order_gap = pc._check_price_check_gap(conn, _now_order, settings.get)
+check("즉시수리(m2)-order-b: _check_price_check_gap - send 성공", _r_order_gap is True)
+check("즉시수리(m2)-order-b(핵심): send 호출 시점에 이미 meta 가 별도 커넥션에서도 보인다",
+      _order_seen_gap.get("meta_at_send") is not None)
+
+# ── _check_outcome_chain: 불일치를 만들어 send 경로를 태운 뒤 동일 검증 ──
+_order_seen_chain = {}
+
+
+def _send_check_chain(text):
+    _order_seen_chain["meta_at_send"] = _meta_via_fresh_conn(pc._OUTCOME_CHAIN_CHECK_META)
+    return True
+
+
+with db.connect(TEST_DB_ORDER) as conn:
+    id_ord_chain = _insert_level_chain(conn, "ord_chain")
+with db.connect(TEST_DB_ORDER) as conn:
+    db.resolve_outcome(conn, id_ord_chain, "hit", 1500.0, "tp_sl", r_multiple=2.0,
+                       now=time.time())
+with db.connect(TEST_DB_ORDER) as conn:  # 사후 변조로 해시 불일치 강제 유발
+    conn.execute("UPDATE levels SET r_multiple=? WHERE id=?", (99.9, id_ord_chain))
+
+_now_order_chain = time.time()
+_day_order_chain = pc._day_kst(_now_order_chain)
+telegram.send = _send_check_chain
+with db.connect(TEST_DB_ORDER) as conn:
+    _r_order_chain = pc._check_outcome_chain(conn, _now_order_chain, _day_order_chain)
+check("즉시수리(m2)-order-c: _check_outcome_chain - 불일치 감지 시 send 경로를 탄다",
+      _r_order_chain is True)
+check("즉시수리(m2)-order-c(핵심): send 호출 시점에 이미 meta 가 별도 커넥션에서도 보인다",
+      _order_seen_chain.get("meta_at_send") is not None)
+
+telegram.send = _orig_send_order
+if os.path.exists(TEST_DB_ORDER):
+    os.remove(TEST_DB_ORDER)
 
 
 # ══════════════════════════════════════════════════════════════════

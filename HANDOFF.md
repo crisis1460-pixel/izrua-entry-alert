@@ -111,9 +111,14 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
 
 1. **기획/설계 변경은 질문카드**: AskUserQuestion 객관식 + 추천안(근거 포함)
 2. **양식 변경은 샘플 먼저**: 렌더링 출력 → 사용자 확정 후 push
-3. **push 절차**: 테스트 7종 + check_secrets → `git checkout origin/main -- data` 로 정리 →
+3. **push 절차**: 테스트 8종 + check_secrets → `git checkout origin/main -- data` 로 정리 →
    rebase 후 push. **봇이 2분마다 data 를 커밋하므로 경합은 정상** — 재시도 루프를 쓴다.
    `rm -rf data` 후 `git add -A` **절대 금지**(봇 데이터 삭제 사고 이력)
+   ⚠️ **사람(CTO 포함)은 data/ 를 직접 커밋·푸시하지 않는다** (2026-07-27 규약).
+   커밋백의 rebase 는 바이너리라 사람 커밋과 충돌 시 재시도 전부가 결정적으로 실패해
+   그 회차 상태가 유실된다 — 07-27 07:18 실사고. DB 수리가 필요하면 수리 스크립트를
+   레포에 커밋해 두고 **다음 봇 회차가 자기 커밋백에 실어 가게** 하거나, 불가피하게
+   직접 커밋할 땐 액션의 in-flight 회차가 없는지 확인 후 1회로 끝낼 것
 4. Windows: `PYTHONIOENCODING=utf-8` 필수. PowerShell 에서 프로덕션 DB 쓰기가
    분류기에 막히면 Bash 로 실행
 5. 토큰 값은 채팅에 넣지 않기. 리서치는 웹 검증 후 결정

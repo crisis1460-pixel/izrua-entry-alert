@@ -75,10 +75,25 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
     if baseline_avg < cfg_get("collect_silence_min_baseline_avg"):
         return False  # 원래도 조용했던 기간(신규 프로젝트 등) - 오탐 방지
 
+    # 2026-07-27 수리(개발자B, 교차감사 A-m2 확정): send→meta 를 meta→commit→send 로
+    # 뒤집는다. 예전 순서(발송 성공 뒤에 meta 기록)는, 이 함수가 걸린 같은 회차의
+    # '뒤쪽' 처리(적중판정·해시체인 검증 등, run_once 전체가 하나의 with-블록)에서
+    # 크래시·타임아웃이 나면 그 with-블록의 최종 commit 이 롤백되면서 방금 쓴
+    # meta 도 함께 증발했다 - 다음 회차가 "오늘 아직 경고 안 보냄"으로 오판해
+    # 중복 발송했다. 진입 알림 쪽에 이미 확정된 원칙(2026-07-24: "발송·기록 즉시
+    # 확정")을 그대로 승계한다: meta 를 먼저 쓰고 즉시 commit 해두면, 이후 send 가
+    # 실패하거나 같은 회차 뒤쪽이 죽어도 "오늘 이미 처리함" 기록은 살아남는다.
+    # 대가는 "meta 는 찍혔는데 실제 전송은 실패"할 가능성인데, 하루 1회 경보는
+    # 다음 날 자연 재시도되는 게 정상 동작이고(사용자 결정) 중복 발송(스팸)이
+    # 미발송(침묵)보다 이 봇에서는 더 나쁘다는 게 확정 원칙이다 - 아래
+    # _check_price_check_gap/_check_outcome_chain 도 동일 순서로 통일한다(이 파일
+    # 안에서 세 워쳐독의 패턴이 엇갈려 있던 게 이번 수리 대상이었다). 다음에
+    # 네 번째 워쳐독을 추가할 때도 이 순서를 그대로 승계할 것.
+    db.set_meta(conn, "collect_silence_warned_date", day)
+    conn.commit()
     text = telegram.render_collect_silence_alert(
         cfg_get("collect_silence_window_hours"), baseline_avg)
     if telegram.send(text):
-        db.set_meta(conn, "collect_silence_warned_date", day)
         logger.warning("[체크] 수집 급감 경고 발송 (직전 %.1f건/일 -> 최근 0건)", baseline_avg)
         return True
     return False
@@ -123,9 +138,14 @@ def _check_price_check_gap(conn, now: float, cfg_get) -> bool:
     if db.get_meta(conn, "price_check_gap_warned_date") == day:
         return False  # 오늘 이미 경고 발송함 - 중복 방지(collect_silence 와 동일 패턴)
 
+    # 2026-07-27 수리(A-m2): meta→commit→send 순서 통일 - 이유는 위
+    # _check_collect_silence 상단 주석 참고(같은 회차 뒤쪽 처리가 죽어도 "오늘 이미
+    # 처리함" 기록은 살아남아야 한다는 원칙). 이 파일 안 세 워쳐독
+    # (수집급감/가격체크공백/해시체인)이 이제 전부 동일 순서다.
+    db.set_meta(conn, "price_check_gap_warned_date", day)
+    conn.commit()
     text = telegram.render_price_check_gap_alert(gap_min, threshold)
     if telegram.send(text):
-        db.set_meta(conn, "price_check_gap_warned_date", day)
         logger.warning("[체크] 가격체크 공백 경고 발송 (직전 공백 %.1f분 > 임계 %.1f분)",
                        gap_min, threshold)
         return True
@@ -155,8 +175,17 @@ def _check_outcome_chain(conn, now: float, day: str) -> bool:
     except Exception as e:  # noqa: BLE001 - 검증 실패가 회차를 죽이면 안 됨
         logger.warning("[체크] 해시체인 재계산 중 예외(무시): %s", e)
         db.set_meta(conn, _OUTCOME_CHAIN_CHECK_META, day)
+        conn.commit()  # 2026-07-27 수리(A-m2): 아래 정상 경로와 동일하게 즉시 확정 -
+        # 이 분기는 send 로 이어지진 않지만, 같은 회차 뒤쪽이 죽었을 때도 "오늘
+        # 검증 시도함"(그리고 실패함) 기록이 살아남아야 다음 회차가 같은 예외를
+        # 반복하며 매번 소음을 내지 않는다.
         return False
     db.set_meta(conn, _OUTCOME_CHAIN_CHECK_META, day)  # 정상이든 불일치든 오늘은 1회로 끝
+    # 2026-07-27 수리(A-m2): 이 함수는 원래도 meta 를 send 보다 먼저 썼지만 commit
+    # 시점이 없어, run_once 전체를 감싸는 with-블록이 뒤쪽에서 롤백되면 이 meta 도
+    # 함께 사라졌다 - _check_collect_silence/_check_price_check_gap 과 순서(meta→
+    # commit→send)를 맞춘다(이 파일 안 세 워쳐독 패턴 통일이 이번 수리의 목적).
+    conn.commit()
     if mismatch is None:
         return False
     logger.warning("[체크] 적중 DB 해시체인 불일치 감지 - level_id=%s reason=%s",
