@@ -147,6 +147,50 @@ reset_meta()
 check("C13 SystemExit 도 격리",
       run_cycle.maybe_collect(TEST_DB, now=NOON_KST, collect_runner=die) == "failed")
 
+# ── C14~C15: 수집 DB 접근 예외 격리 (2026-07-26 — 3·4단계 감사 조치의 2단계 확장) ──
+# 주기판정 조회/meta 기록도 DB 접근이라 실패할 수 있다 - try 밖에 있으면 run_cycle
+# 전체(1단계 가격체크 결과의 커밋백 포함)까지 죽는다. db.get_meta/set_meta 를 일시
+# 교체해 재현한다(storage/db.py 수정 금지 - D16~D18 과 동일한 모듈 속성 교체 기법).
+reset_meta()
+_orig_get_meta_c = db.get_meta
+
+
+def _get_meta_boom_collect(conn, key, default=None):
+    if key in (run_cycle.META_LAST_COLLECT, run_cycle.META_LAST_COLLECT_FAIL):
+        raise RuntimeError("meta read boom")
+    return _orig_get_meta_c(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_collect
+_c14_ran = []
+check("C14 수집 주기판정 DB 조회 실패도 격리(failed, 러너 미실행·예외 전파 없음)",
+      run_cycle.maybe_collect(TEST_DB, now=NOON_KST,
+                              collect_runner=lambda t: _c14_ran.append(1)) == "failed"
+      and not _c14_ran)
+db.get_meta = _orig_get_meta_c
+
+reset_meta()
+_orig_set_meta_c = db.set_meta
+
+
+def _set_meta_boom_collect(conn, key, value):
+    if key in (run_cycle.META_LAST_COLLECT, run_cycle.META_LAST_COLLECT_FAIL):
+        raise RuntimeError("meta write boom")
+    return _orig_set_meta_c(conn, key, value)
+
+
+db.set_meta = _set_meta_boom_collect
+_c15_ran = []
+check("C15 수집 성공 후 meta 기록 실패도 격리(수집은 수행됐고 상태만 failed)",
+      run_cycle.maybe_collect(TEST_DB, now=NOON_KST,
+                              collect_runner=lambda t: _c15_ran.append(1)) == "failed"
+      and len(_c15_ran) == 1)
+# 주의: patched set_meta 상태에서 reset_meta() 를 부르면 그 자체가 던진다. C15 는
+# set_meta 가 첫 호출에서 던져 아무 것도 못 썼으므로 meta 는 reset 직후 그대로다.
+check("C15b 수집 실패 + 실패 meta 기록마저 실패해도 격리(failed, 예외 전파 없음)",
+      run_cycle.maybe_collect(TEST_DB, now=NOON_KST, collect_runner=boom) == "failed")
+db.set_meta = _orig_set_meta_c
+
 # ── G1~G9: 수집 정체(last_collect_at staleness) 감시 (2026-07-26 과제3) ──────
 # 기존 monitor/price_check.py 의 _check_collect_silence(신규 행 유무 - 결과 신호)와
 # 다른 신호(meta.last_collect_at 갱신 여부 - 구조 신호)를 본다. 여기선 run_cycle.py

@@ -160,10 +160,21 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
         logger.info("수집 생략: --no-collect")
         return "skipped"
 
-    with db.connect(db_path) as conn:
-        due, reason = collect_due(conn, now,
-                                  settings.get("collect_interval_hours") * 3600,
-                                  settings.get("collect_retry_minutes") * 60)
+    # 2026-07-26 감사 minor 후속: 3·4단계에서 고친 것과 동일 결함류 - 주기 판정 조회도
+    # DB 접근이라 잠금/디스크 오류로 실패할 수 있다. try 밖이면 예외가 run_cycle 전체
+    # (1단계 가격체크 결과의 커밋백 포함)까지 끌고 내려가므로 동일하게 격리한다.
+    try:
+        with db.connect(db_path) as conn:
+            due, reason = collect_due(conn, now,
+                                      settings.get("collect_interval_hours") * 3600,
+                                      settings.get("collect_retry_minutes") * 60)
+    except BaseException as e:  # noqa: BLE001 - 수집 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 주기 판정 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::수집 주기 판정 실패 - {type(e).__name__}")
+        return "failed"
+
     if force:
         due, reason = True, "강제 실행(force)"
     if not due:
@@ -179,12 +190,30 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
             raise
         logger.error("수집 실패(%.0f초, 나머지 단계는 계속): %s: %s",
                      time.time() - t0, type(e).__name__, e)
-        _mark(db_path, META_LAST_COLLECT, META_LAST_COLLECT_FAIL, now, success=False)
+        # 실패 마킹도 DB 접근 - 여기서마저 실패하면 백오프가 기록되지 않아 다음 회차가
+        # 즉시 재시도하게 될 뿐이니, 로그만 남기고 원래의 failed 반환을 계속 진행한다.
+        try:
+            _mark(db_path, META_LAST_COLLECT, META_LAST_COLLECT_FAIL, now, success=False)
+        except BaseException as e2:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
+            if isinstance(e2, KeyboardInterrupt):
+                raise
+            logger.error("수집 실패 meta 기록 실패(백오프 미기록): %s: %s",
+                         type(e2).__name__, e2)
         print(f"::warning::수집 실패 - {type(e).__name__} "
               f"({settings.get('collect_retry_minutes')}분 후 재시도, 알림은 정상 동작)")
         return "failed"
 
-    _mark(db_path, META_LAST_COLLECT, META_LAST_COLLECT_FAIL, now, success=True)
+    # 성공 마킹도 DB 접근 - 여기서 실패해도(잠금/디스크 등) 수집된 레벨은 이미 SQLite 에
+    # 커밋돼 살아 있으니, 회차를 죽이지 않고 failed 로만 남긴다(다음 회차가 주기 재판정).
+    try:
+        _mark(db_path, META_LAST_COLLECT, META_LAST_COLLECT_FAIL, now, success=True)
+    except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 meta 기록 실패(수집 자체는 완료): %s: %s", type(e).__name__, e)
+        print(f"::warning::수집 meta 기록 실패 - {type(e).__name__}")
+        return "failed"
+
     logger.info("수집 성공(%.0f초)", time.time() - t0)
     return "ok"
 
