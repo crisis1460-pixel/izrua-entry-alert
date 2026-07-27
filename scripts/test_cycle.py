@@ -686,6 +686,29 @@ check("D18 차단 신호 없으면 발송 안 함", _sent["n"] == 1)
 telegram.send = _orig_send
 tradingview.hard_block_detected = _orig_hard_block
 settings.SETTINGS["tv_block_alert_daily_limit"] = _orig_alert_limit
+
+# ── D18b~D18e: 차단 쿨다운이 회차(프로세스)를 넘는가 (2026-07-28 실사고 회귀) ──
+# 실사고: 차단 경보가 03:47·03:53 로 6분 간격에 두 번 울렸다. 문구는 "30분 쿨다운
+# 후 자동 재시도"인데 _blocked_until 이 모듈 전역이라 회차마다 0 으로 리셋됐다.
+_orig_blocked = tradingview._blocked_until
+tradingview._blocked_until = 0.0
+check("D18b 새 프로세스(회차)는 쿨다운 없이 시작한다 - 사고의 출발점",
+      not tradingview.is_blocked())
+
+_until = time.time() + 1800
+tradingview.restore_block_state(_until)
+check("D18c 저장값을 복원하면 쿨다운이 되살아난다", tradingview.is_blocked())
+
+# 이번 회차에서 더 늦은 쿨다운이 걸렸다면 오래된 저장분이 되돌리지 못해야 한다.
+tradingview.restore_block_state(_until - 900)
+check("D18d 더 이른 저장값은 현재 쿨다운을 앞당기지 않는다",
+      tradingview.blocked_until() == _until)
+
+tradingview._blocked_until = 0.0
+tradingview.restore_block_state(time.time() - 60)   # 이미 만료된 값
+check("D18e 만료된 저장값은 복원해도 '차단 아님'", not tradingview.is_blocked())
+tradingview._blocked_until = _orig_blocked
+
 os.remove(TEST_DB4)
 
 

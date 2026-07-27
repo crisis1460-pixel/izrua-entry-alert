@@ -60,6 +60,14 @@ def _save_last_check(conn, ts: float) -> None:
 # last_weekly_report_at 과 같은 결.
 _LAST_CYCLE_META = "last_cycle_at"
 
+# 재발송 차단 창(2026-07-28). 이 시간 안에 같은 (코인·종류·레벨묶음) 알림이 이미
+# 나갔으면 다시 보내지 않는다 — 회차 경합으로 상태 전이를 못 본 회차의 최종 방어선.
+# 왜 10분인가: 실측 중복 간격은 45~60초였지만, 경합 폭은 앞 회차가 늦게 끝날수록
+# 커진다(수집 회차는 6~10분). 그 최악 구간을 덮는 값이다. 부작용이 없는 이유 —
+# 터치는 알림과 동시에 status 가 종결돼 정상 경로에서 재발송이 아예 없고, 예고는
+# dup_preview 가 이미 막는다. 즉 이 창에 걸리는 건은 정의상 경합 재발송뿐이다.
+_RESEND_BLOCK_SEC = 600.0
+
 
 def _load_last_cycle(conn):
     try:
@@ -540,6 +548,19 @@ def run_once(now: float = None) -> dict:
                     logger.info("[체크] %s 일일 본알림 상한 도달 - 억제", coin)
                     send_ok = False
                     obs["suppressed_cap"] += 1
+
+                # 재발송 차단(2026-07-28 실사고 — DOT·ENA·AAVE 가 03:53·03:54 두 번).
+                # 평시엔 status 전이(touched/previewed)가 막지만, 회차가 겹치면 뒤
+                # 회차가 앞 회차 커밋 '이전' DB로 돌아 그 전이를 못 본다. alerts_log 는
+                # append-only 라 경합에도 양쪽 행이 남으므로 여기서 한 번 더 막는다.
+                # 창을 재발송 간격(2분)이 아니라 넉넉히 잡는 이유: 경합은 앞 회차가
+                # 늦게 끝날수록 벌어지고, 같은 클러스터를 이 창 안에 두 번 알릴
+                # 정당한 사유가 없다(터치는 상태가 종결되고 예고는 dup_preview 가 막는다).
+                if send_ok and db.recent_alert_exists(
+                        conn, coin, kind, ids, now - _RESEND_BLOCK_SEC):
+                    logger.warning("[체크] %s %s 최근 발송 이력 있음 - 재발송 차단", coin, kind)
+                    send_ok = False
+                    obs["suppressed_dup"] += 1
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)

@@ -86,6 +86,31 @@ jobs:
             echo "이전 상태 없음 - 첫 회차가 수집부터 수행한다 (레벨 0개로 정상 종료)"
           fi
 
+      # ── 실행 직전 data/ 최신화 (2026-07-28 중복알림 사고 수리) ──────────────
+      # 왜 필요한가: 체크아웃과 이 잡의 실제 실행 사이에는 setup-python + pip
+      # 설치까지 수십 초가 뜨는데, 앞 회차가 바로 그 사이에 push 하면 우리는
+      # '앞 회차 이전' DB로 회차를 돈다. 그러면 앞 회차가 이미 보낸 터치·예고를
+      # 상태 전이(status)로도, alerts_log 로도 볼 수 없어 같은 알림을 다시 보낸다.
+      #   · 실측(07-28 03:53·03:54): DOT·ENA 터치와 AAVE 예고가 각각 두 번 발송.
+      #   · 확정 증거: TV 차단 경보가 '하루 1회' 상한을 뚫고 두 번 나갔는데
+      #     카운터(tv_block_alert_count)는 1 — 뒤 회차가 앞 회차 기록이 없는 DB를
+      #     읽었다는 뜻이다.
+      # 그래서 파이썬을 띄우기 '직전'에 원격 data/ 를 다시 당겨 창을 초 단위로 줄인다.
+      # data/ 는 이 워크플로가 유일 라이터라 로컬에 살릴 변경이 없다 → 원격이 항상 옳다.
+      # 실패해도 회차는 진행한다(구 상태로라도 도는 편이 낫고, 재발송은 alerts_log
+      # 방어선이 한 겹 더 막는다 - monitor/price_check.py _RESEND_BLOCK_SEC).
+      - name: data/ 최신 상태 재동기화
+        run: |
+          if git fetch origin "${{ github.ref_name }}" --depth=1 -q 2>/dev/null; then
+            if git checkout FETCH_HEAD -- data/ 2>/dev/null; then
+              echo "::notice::data/ 를 원격 최신으로 재동기화함"
+            else
+              echo "::warning::data/ 체크아웃 실패 - 체크아웃 시점 상태로 진행"
+            fi
+          else
+            echo "::warning::fetch 실패 - 체크아웃 시점 상태로 진행"
+          fi
+
       - name: 회차 실행 (가격체크 + 조건부 수집·주간리포트)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

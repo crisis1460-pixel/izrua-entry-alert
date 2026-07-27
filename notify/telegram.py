@@ -193,7 +193,7 @@ _SELF_STATS_MIN_N = 5  # 자체 표본이 이 이상일 때만 병기 (ACCURACY_
 
 # 소스 표시 문구 (2026-07-27). levels.source 값 → 알림에 쓸 한국어 라벨.
 # 등록되지 않은 소스는 값 그대로 노출한다(빈칸보다 낫고, 새 소스 추가 시 눈에 띈다).
-_SOURCE_LABEL = {"telegram": "텔레그램 채널"}
+_SOURCE_LABEL = {"telegram": "텔레그램 채널", "tradingview": "트레이딩뷰"}
 
 
 def _author_block(rep: dict) -> list:
@@ -238,13 +238,17 @@ def _author_block(rep: dict) -> list:
     elif not self_line:
         if rep.get("author_followers"):
             lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
-        elif rep.get("source") and rep["source"] != "tradingview":
+        elif rep.get("source"):
             # 소스별 문구 분기 (2026-07-27 사용자 지시). 워쳐는 TradingView 작성자만
             # 추적하므로 그 밖의 소스는 **영원히** "워쳐 미추적"이다 — 늘 참인 문구는
             # 아무 정보도 주지 않는다. 그 자리에 '어디서 온 신호인지'를 대신 넣는다.
-            # TradingView 인데 워쳐에 없는 경우는 아래 종전 문구가 여전히 정확하다.
+            #
+            # 2026-07-28 확대: TradingView 인데 워쳐에 없는 작성자도 여기로 보낸다
+            # (실측 ENA/@Elephantun). "워쳐 미추적 작성자"는 사장님 관점에서 봇 내부
+            # 사정일 뿐 — 읽는 사람에게 쓸모 있는 정보는 '어디서 온 신호인가'다.
             lines.append(f"📡 {_SOURCE_LABEL.get(rep['source'], rep['source'])} · 적중률 미집계")
         else:
+            # source 가 비어 있는 초기 수집분(컬럼 도입 전)만 여기로 온다.
             lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
     if self_line:
         lines.append(self_line)

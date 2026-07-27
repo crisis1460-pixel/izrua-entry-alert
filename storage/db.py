@@ -101,9 +101,13 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     previews_total       INTEGER NOT NULL DEFAULT 0, -- 필터 무관 전체 예고 발생
     suppressed_grade     INTEGER NOT NULL DEFAULT 0, -- 등급 미달로 억제
     suppressed_cap       INTEGER NOT NULL DEFAULT 0, -- 코인당 일일 상한으로 억제
-    suppressed_dup       INTEGER NOT NULL DEFAULT 0, -- (사용 안 함) 2026-07-26 감사
-        -- MAJOR-1 이전에 '밴드 체류 회차'를 억제로 잘못 세던 자리. 과거 데이터
-        -- 해석용으로만 남기고 더는 증가하지 않는다 → preview_dwell 로 이관.
+    suppressed_dup       INTEGER NOT NULL DEFAULT 0, -- 재발송 차단 건수(2026-07-28~)
+        -- ⚠️ 의미가 두 번 바뀐 컬럼이라 날짜로 갈라 읽어야 한다:
+        --   ~2026-07-26: '밴드 체류 회차'를 억제로 잘못 세던 자리(MAJOR-1). 값 무의미.
+        --   2026-07-26~27: 미사용(0 고정).
+        --   2026-07-28~: 회차 경합에 의한 재발송을 alerts_log 로 막은 건수.
+        -- 새 컬럼을 파지 않고 이 자리를 쓰는 이유 - 의미가 '중복 억제'로 정확히
+        -- 일치하고 이미 휴면이라, 스키마 이관 없이 관측을 되살릴 수 있다.
     preview_dwell        INTEGER NOT NULL DEFAULT 0, -- 예고 밴드 체류 회차(억제 아님)
     suppressed_send_fail INTEGER NOT NULL DEFAULT 0, -- 필터는 통과했으나 텔레그램 발송 실패
     -- suppressed_grade 의 부분집합(중복 카운트 아님!) — 2026-07-26 목표거리 감점 도입
@@ -887,6 +891,29 @@ def count_alerts_today(conn, coin_symbol: str, day_kst: str, kind: Optional[str]
         q += " AND kind=?"
         params.append(kind)
     return conn.execute(q, params).fetchone()["n"]
+
+
+def recent_alert_exists(conn, coin_symbol: str, kind: str, level_ids: list,
+                        since: float) -> bool:
+    """같은 (코인, 종류, 레벨묶음) 알림이 since 이후에 이미 나갔는가 — 재발송 차단용.
+
+    2026-07-28 실사고: 03:53·03:54 에 DOT·ENA 터치와 AAVE 예고가 각각 두 번 나갔다.
+    회차 경합이 원인이다 — 뒤 회차가 앞 회차의 커밋 '이전' 상태로 체크아웃돼 상태
+    전이(status='touched')를 못 본 채 같은 알림을 다시 보냈다. 같은 시각 TV 차단
+    경보도 하루 1회 상한을 뚫고 두 번 나갔는데(카운터는 1로 남음), 그게 '앞 회차
+    기록이 없는 DB를 읽었다'는 확정 증거다.
+
+    levels.status 전이와 달리 alerts_log 는 append-only 라 경합 회차가 서로의 행을
+    덮어쓰지 않는다 → 상태 전이보다 한 겹 더 단단한 방어선이다. level_ids 는
+    record_alert 와 같은 방식(정렬 없이 그대로 콤마 결합)으로 맞춘다 — 같은
+    클러스터면 호출부가 같은 순서로 넘긴다."""
+    key = ",".join(str(i) for i in level_ids)
+    row = conn.execute(
+        "SELECT 1 FROM alerts_log WHERE coin_symbol=? AND kind=? AND level_ids=? "
+        "AND sent_at >= ? LIMIT 1",
+        (coin_symbol, kind, key, since),
+    ).fetchone()
+    return row is not None
 
 
 def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: str,

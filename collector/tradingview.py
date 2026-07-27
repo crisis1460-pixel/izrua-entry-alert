@@ -600,6 +600,28 @@ def is_blocked() -> bool:
     return time.time() < _blocked_until
 
 
+def blocked_until() -> float:
+    """차단 쿨다운 만료 epoch (걸린 적 없으면 0.0) — 호출부가 DB 에 영속화하기 위한 게터."""
+    return _blocked_until
+
+
+def restore_block_state(until: float) -> None:
+    """DB 에 저장해둔 쿨다운 만료 시각을 모듈에 복원한다 — 회차 경계를 넘기기 위함.
+
+    2026-07-28 실사고: TradingView 차단 경보가 03:47·03:53 로 6분 간격에 두 번 울렸다.
+    알림 문구는 "봇이 30분 쿨다운 후 자동 재시도합니다"인데, 실제로는 쿨다운이 회차를
+    넘지 못했다 — _blocked_until 이 모듈 전역 변수라 GitHub Actions 회차마다 새
+    프로세스에서 0 으로 리셋됐기 때문이다. 문구가 약속한 동작이 구현돼 있지 않았고,
+    "재시도는 밴을 키울 뿐"이라는 이 모듈 자신의 판단과도 어긋난 상태였다.
+
+    지난 값이 들어와도 무해하다 — is_blocked() 가 time.time() 과 비교하므로 만료된
+    시각은 자동으로 '차단 아님'이 된다. 더 뒤인 값만 채택하는 이유는, 이번 회차에서
+    새로 걸린 쿨다운을 오래된 저장분이 되돌리지 못하게 하기 위함이다."""
+    global _blocked_until
+    if until and until > _blocked_until:
+        _blocked_until = float(until)
+
+
 def reset_detail_budget() -> None:
     """주기 전역 예산(상세 방문 + 프로필 조회) 리셋 — 수집 주기 시작 시 호출.
     (이름은 호환성 유지 — 프로필 예산도 함께 리셋한다, 리뷰 [4])

@@ -431,8 +431,15 @@ check("T14j 텔레그램 소스는 '워쳐 미추적' 대신 출처를 표기",
       "📡 텔레그램 채널 · 적중률 미집계" in msg_j and "워쳐 미추적" not in msg_j)
 msg_k = tg.render_alert("touch", "LINK", [dict(_src, source="tradingview")],
                         8.35 * USDT_KRW, USDT_KRW)
-check("T14k TradingView 소스는 종전 문구 유지(워쳐가 실제 추적 대상인 소스)",
-      "👥 적중률 기록없음 (워쳐 미추적 작성자)" in msg_k and "📡" not in msg_k)
+# 2026-07-28 사장님 지시로 뒤집힌 결정: TradingView 인데 워쳐가 안 따라가는 작성자도
+# 출처를 적는다(실측 ENA/@Elephantun). "워쳐 미추적"은 봇 내부 사정일 뿐이고, 읽는
+# 사람에게 쓸모 있는 정보는 '어디서 온 신호인가'다.
+check("T14k TradingView 미추적 작성자도 '워쳐 미추적' 대신 출처를 표기",
+      "📡 트레이딩뷰 · 적중률 미집계" in msg_k and "워쳐 미추적" not in msg_k)
+msg_k2 = tg.render_alert("touch", "LINK", [dict(_src, source=None)],
+                         8.35 * USDT_KRW, USDT_KRW)
+check("T14k2 source 가 빈 초기 수집분만 종전 문구로 남는다",
+      "👥 적중률 기록없음 (워쳐 미추적 작성자)" in msg_k2)
 msg_l = tg.render_alert("touch", "LINK",
                         [dict(_src, source="telegram", tp_ladder_count=8)],
                         8.35 * USDT_KRW, USDT_KRW)
@@ -1784,6 +1791,49 @@ with db.connect(_AD_DB) as _c:
 check("AD3 감사 훅이 활성 레벨 원문을 건드리지 않음(reparse_all 대상 보존)",
       _ad_raw == "원문")
 _shutil.rmtree(_AD_ROOT, ignore_errors=True)
+
+# ── RS: 회차 경합 재발송 차단 (2026-07-28 실사고 회귀) ───────────────────────
+# 실사고: 03:53·03:54 에 DOT·ENA 터치와 AAVE 예고가 각각 두 번 나갔다. 뒤 회차가
+# 앞 회차의 커밋 '이전' DB로 돌아 상태 전이(status='touched')를 못 봤기 때문이다.
+# 여기서는 그 상황을 그대로 재현한다 — 발송 후 status 만 되돌리고(=전이 유실),
+# append-only 인 alerts_log 는 남긴다. 그 한 겹으로 재발송이 막혀야 한다.
+with db.connect(TEST_DB) as conn:
+    lv_rs = dict(coin_symbol="RSND", ticker="KRW-RSND", direction="long",
+                 entry_usd=10.0, sl_usd=9.5, tp_usd=11.0, rr=2.0, grade="B", score=70,
+                 author="AuthRS", author_followers=50000, author_hit_rate=None,
+                 author_hit_count=None, author_whitelisted=False, mcap_rank=20,
+                 mcap_tier_icon="🥇", post_url="https://tv.com/urs", post_age_minutes=10,
+                 collected_at=now - 600)
+    lv_rs["signal_key"] = db.make_signal_key("RSND", 10.0, "AuthRS", "urs")
+    db.upsert_level(conn, lv_rs)
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 10.0 * USDT_KRW * 0.999   # entry 대비 -0.1% → 터치
+_before_rs = len(sent_messages)
+price_check.run_once(now + 2000)
+check("RS1 정상 첫 발송은 나간다", len(sent_messages) == _before_rs + 1)
+
+_dup_before = (_obs_row() or {})["suppressed_dup"]
+with db.connect(TEST_DB) as conn:   # 앞 회차 상태 전이만 유실된 DB 재현
+    conn.execute("UPDATE levels SET status='watching', touched_at=NULL "
+                 "WHERE coin_symbol='RSND'")
+    conn.commit()
+_before_rs2 = len(sent_messages)
+price_check.run_once(now + 2060)    # 60초 뒤 = 실사고와 같은 간격
+check("RS2 상태 전이가 유실돼도 재발송하지 않는다(alerts_log 방어선)",
+      len(sent_messages) == _before_rs2)
+check("RS3 재발송 차단이 관찰지표(suppressed_dup)에 잡힌다",
+      (_obs_row() or {})["suppressed_dup"] == _dup_before + 1)
+
+# 차단 창(_RESEND_BLOCK_SEC)을 넘기면 다시 보낼 수 있어야 한다 - 영구 봉인이 아니라
+# '경합 구간만' 막는 장치임을 고정한다.
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE levels SET status='watching', touched_at=NULL "
+                 "WHERE coin_symbol='RSND'")
+    conn.commit()
+_before_rs3 = len(sent_messages)
+price_check.run_once(now + 2000 + price_check._RESEND_BLOCK_SEC + 60)
+check("RS4 차단 창을 넘기면 다시 발송된다(영구 봉인 아님)",
+      len(sent_messages) == _before_rs3 + 1)
 
 print()
 print("── 본알림 실제 렌더링 ──")

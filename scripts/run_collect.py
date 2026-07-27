@@ -140,6 +140,10 @@ def _check_deletions(conn, timeout: float) -> int:
 # (_prune_tv_block_alert_meta) 양쪽에서 공유해 접두사가 어긋날 일이 없게 한다.
 _TV_BLOCK_ALERT_KEY_PREFIX = "tv_block_alert_count_"
 
+# 차단 쿨다운 만료 epoch 영속화 키 (2026-07-28) — 모듈 전역 변수는 회차(프로세스)를
+# 못 넘어 "30분 쿨다운"이 지켜지지 않았다. collector.tradingview.restore_block_state 참고.
+_TV_BLOCKED_UNTIL_KEY = "tv_blocked_until"
+
 # 수집 순환 재개 지점(원본 유니버스 기준 절대 인덱스) — 차단 기아 방지 (2026-07-27)
 _UNIVERSE_OFFSET_META = "collect_universe_offset"
 
@@ -406,6 +410,20 @@ def main() -> int:
     max_age_h = settings.get("max_post_age_hours")
 
     with db.connect(db_path) as conn:
+        # ── 차단 쿨다운 복원 (2026-07-28 수리) ──────────────────────────────
+        # 회차마다 새 프로세스라 tradingview._blocked_until 이 0 으로 리셋된다 →
+        # "30분 쿨다운"이 사실상 한 회차 안에서만 유효했다. 여기서 DB 값을 실어
+        # 회차 경계를 넘긴다. 반드시 삭제감지·수집 루프보다 **앞**이어야 한다 —
+        # 뒤에 두면 이번 회차가 이미 밴 벽에 요청을 쏜 뒤라 복원의 의미가 없다.
+        _saved_block = db.get_meta(conn, _TV_BLOCKED_UNTIL_KEY, "0")
+        try:
+            tradingview.restore_block_state(float(_saved_block or 0))
+        except (TypeError, ValueError):
+            logger.warning("[차단쿨다운] 저장값 해석 실패(무시): %r", _saved_block)
+        if tradingview.is_blocked():
+            logger.warning("[차단쿨다운] 이전 회차 차단 유효 - %.0f초 남음",
+                           tradingview.blocked_until() - time.time())
+
         # ── 글 삭제 감지(과제1) — 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
         #
         # ⚠️ 이 호출은 반드시 심볼 수집 루프보다 **앞**에 있어야 한다. 뒤로 옮기면
@@ -533,6 +551,12 @@ def main() -> int:
         # 됐어도 hard_block_detected() 는 주기 내내 유지되므로 여기서 잡힌다.
         now_block = time.time()
         _maybe_alert_block(conn, now_block)
+
+        # 이번 회차에 걸린 쿨다운을 다음 회차로 넘긴다(2026-07-28 수리). 위
+        # _maybe_alert_block 뒤에 두는 이유는 없고 순서 무관하지만, 차단 관련
+        # 처리를 한자리에 모아 읽기 쉽게 뒀다. 만료 시각이 과거면 저장해도 무해하다
+        # (is_blocked() 가 현재시각과 비교하므로 자동으로 '차단 아님'이 된다).
+        db.set_meta(conn, _TV_BLOCKED_UNTIL_KEY, str(tradingview.blocked_until()))
 
         # 차단경보 meta 키 정리(과제2, 2026-07-26 감사 minor) - 날짜별 카운터가 영영
         # 안 지워지는 문제 방지. 매 수집 회차 가볍게 수행(비용 무시할 수준).
