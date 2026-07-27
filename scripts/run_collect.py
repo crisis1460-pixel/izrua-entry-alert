@@ -255,6 +255,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "entry_usd": setup["entry"],
             "sl_usd": setup.get("sl"),
             "tp_usd": setup.get("tp"),
+            "tp_ladder_count": setup.get("tp_ladder_count") or 0,  # 표시 전용(1/N단계)
             "rr": rr,
             "grade": grade,
             "score": score,

@@ -167,6 +167,16 @@ def judgment_window_hours(tf_hours, entry, tp) -> float:
     return 168.0
 
 
+class _Vals(list):
+    """_grab_after 가 돌려주는 값 목록 + 부가정보. list 를 그대로 상속해 기존
+    호출부([0]/[-1]/len)는 전혀 바뀌지 않고, 사다리 단계 수만 얹어 나른다."""
+    __slots__ = ("ladder_n",)
+
+    def __init__(self, seq=()):
+        super().__init__(seq)
+        self.ladder_n = 0
+
+
 def _to_float(s: str) -> Optional[float]:
     try:
         return float(s.replace(",", "").replace("$", "").strip())
@@ -248,7 +258,13 @@ def _grab_after(label_pat, text: str) -> list:
         if lad and lad.start() <= sng.start():
             first = _to_float(lad.group(1))
             if first:
-                (spec_out if is_spec else out).append([first])
+                # 값은 첫 rung 하나만 쓰되(판정·배점 축이 TP1), 사다리가 몇 단계인지는
+                # 표시용으로 함께 실어 보낸다(2026-07-27 사용자 승인 A안 — 알림에
+                # "1/8단계"). 반환 타입을 리스트 그대로 유지해야 호출부의 [0]/[-1]
+                # 접근이 안 깨지므로, 개수만 속성으로 얹는 얇은 하위 클래스를 쓴다.
+                vals = _Vals([first])
+                vals.ladder_n = len(_SINGLE.findall(lad.group(0)))
+                (spec_out if is_spec else out).append(vals)
                 continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
         if rng and (not sng or rng.start() <= sng.start()):
@@ -345,6 +361,10 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         if risk > 0 and reward > 0:
             rr = round(reward / risk, 2)
 
+    # 사다리 단계 수 — 표시 전용(알림의 "1/8단계"). tp 가 sanity 로 폐기됐으면
+    # 같이 버린다(값 없는데 단계만 남으면 표시가 거짓말을 한다).
+    tp_ladder_count = getattr(tps[0], "ladder_n", 0) if (tps and tp is not None) else 0
+
     return {
         "direction": direction,
         "entry": entry,
@@ -353,4 +373,5 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         "sl": sl,
         "tp": tp,
         "rr": rr,
+        "tp_ladder_count": tp_ladder_count,
     }

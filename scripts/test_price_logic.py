@@ -415,6 +415,36 @@ check("T14e 지표 유무로 줄 수가 달라지지 않는다",
       msg_c.count("\n") == msg_d.count("\n") == msg_a.count("\n"))
 check("T14f 지표 미주입 경로도 동일", "역신호" not in msg_a)
 
+# T14j~T14n: 소스 표기 + 다단계 목표 (2026-07-27 사용자 승인 A안).
+# 워쳐는 TradingView 작성자만 추적하므로 텔레그램 채널은 **영원히** "워쳐 미추적"
+# 이다 — 늘 참인 문구는 정보가 0이라 그 자리에 출처를 넣는다. 목표는 소스가 8단계
+# 사다리를 줘도 우리는 TP1 만 쓰므로(판정·배점 축) "1/8단계"로 위에 더 있음만
+# 알린다. 판정 로직은 건드리지 않는다.
+_src = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
+            grade="C", score=45, author="SomeChannel", author_followers=None,
+            author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+            mcap_rank=19, mcap_tier_icon="🥇", post_url="https://t.me/x/1",
+            post_age_minutes=60, collected_at=now)
+msg_j = tg.render_alert("touch", "LINK", [dict(_src, source="telegram")],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14j 텔레그램 소스는 '워쳐 미추적' 대신 출처를 표기",
+      "📡 텔레그램 채널 · 적중률 미집계" in msg_j and "워쳐 미추적" not in msg_j)
+msg_k = tg.render_alert("touch", "LINK", [dict(_src, source="tradingview")],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14k TradingView 소스는 종전 문구 유지(워쳐가 실제 추적 대상인 소스)",
+      "👥 적중률 기록없음 (워쳐 미추적 작성자)" in msg_k and "📡" not in msg_k)
+msg_l = tg.render_alert("touch", "LINK",
+                        [dict(_src, source="telegram", tp_ladder_count=8)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14l 다단계 목표는 '1/8단계' 병기", "1/8단계" in msg_l)
+check("T14m 단계 표기로 줄 수가 늘지 않는다",
+      msg_l.count("\n") == msg_j.count("\n"))
+msg_n = tg.render_alert("touch", "LINK",
+                        [dict(_src, source="telegram", tp_ladder_count=1)],
+                        8.35 * USDT_KRW, USDT_KRW)
+check("T14n 단계가 1개(또는 미상)면 꼬리표 없음 - 기존 알림과 동일",
+      "단계" not in msg_n)
+
 # ── 2026-07-24 감사 수정 검증 ──────────────────────────────────
 # T15: 여러 캔들에 걸쳐 TP 먼저 → SL 나중이면 순서대로 hit (뭉개면 가짜 ambiguous였음)
 lid15 = add_touched("LINK", 10.0, 9.0, 11.0, 7200, "t15")

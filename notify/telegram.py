@@ -191,6 +191,10 @@ def _fmt_followers(count) -> str:
 
 _SELF_STATS_MIN_N = 5  # 자체 표본이 이 이상일 때만 병기 (ACCURACY_DB_PLAN 2단계 발동 조건)
 
+# 소스 표시 문구 (2026-07-27). levels.source 값 → 알림에 쓸 한국어 라벨.
+# 등록되지 않은 소스는 값 그대로 노출한다(빈칸보다 낫고, 새 소스 추가 시 눈에 띈다).
+_SOURCE_LABEL = {"telegram": "텔레그램 채널"}
+
 
 def _author_block(rep: dict) -> list:
     """작성자 라인 + 적중률 라인 (워쳐 스타일 + 자체 적중 병기).
@@ -234,6 +238,12 @@ def _author_block(rep: dict) -> list:
     elif not self_line:
         if rep.get("author_followers"):
             lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
+        elif rep.get("source") and rep["source"] != "tradingview":
+            # 소스별 문구 분기 (2026-07-27 사용자 지시). 워쳐는 TradingView 작성자만
+            # 추적하므로 그 밖의 소스는 **영원히** "워쳐 미추적"이다 — 늘 참인 문구는
+            # 아무 정보도 주지 않는다. 그 자리에 '어디서 온 신호인지'를 대신 넣는다.
+            # TradingView 인데 워쳐에 없는 경우는 아래 종전 문구가 여전히 정확하다.
+            lines.append(f"📡 {_SOURCE_LABEL.get(rep['source'], rep['source'])} · 적중률 미집계")
         else:
             lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
     if self_line:
@@ -320,7 +330,15 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         tp = None
     if tp and entry_rep:
         pct = (tp - entry_rep) / entry_rep * 100
-        lines.append(f"    목표:  {_krw(tp)}원  ({pct:+.1f}%)")
+        # 다단계 목표 표기 (2026-07-27 사용자 승인, A안): 소스가 "TARGETS: 0.059 -
+        # 0.0615 - … - 0.085" 처럼 사다리로 주면 우리는 **첫 목표(TP1)만** 쓴다 —
+        # 적중 판정("TP1 도달=승")과 TP 거리 배점이 그 축이라 바꾸면 기존 표본과
+        # 축이 어긋난다. 그래서 판정은 그대로 두고 "1/8단계"만 덧붙여, 위로 더
+        # 있다는 사실을 알린다(정확한 상단은 출처 링크의 원문에 있다).
+        # 단계가 1개뿐이거나 미상이면 종전과 완전히 동일한 한 줄이 나간다.
+        n_tp = rep.get("tp_ladder_count") or 0
+        step = f"  1/{n_tp}단계" if n_tp > 1 else ""
+        lines.append(f"    목표:  {_krw(tp)}원  ({pct:+.1f}%){step}")
     else:
         lines.append("    목표:  데이터 없음")
     if volume_rank:

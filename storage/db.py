@@ -205,6 +205,12 @@ _EXTRA_COLUMNS = {
     # **표시 전용 아님 — 분석 전용**: 알림 양식·필터·등급 어디에도 넣지 않는다.
     # 기존 행은 DEFAULT 로 자동 'tradingview' 가 되어 소급 분류가 정확하다.
     "source": "TEXT DEFAULT 'tradingview'",
+    # 목표 사다리 단계 수 (2026-07-27 사용자 승인 A안). 예: "TARGETS: 0.059 - 0.0615
+    # - … - 0.085" 이면 8. **표시 전용** — 알림에 "1/8단계"로 붙어 "위로 더 있다"를
+    # 알린다. 판정(적중=TP1 도달)과 등급의 TP 거리 배점은 종전대로 첫 목표만 쓴다
+    # (바꾸면 기존 34건 표본과 축이 어긋난다). 0/1 이면 꼬리표가 안 붙어 기존 알림과
+    # 완전히 동일하다. 기존 행은 DEFAULT 0 이고 raw_text 가 있으면 재파싱이 채운다.
+    "tp_ladder_count": "INTEGER DEFAULT 0",
 }
 
 
@@ -272,8 +278,8 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source, tp_ladder_count)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -287,6 +293,7 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("judgment_window_hours"), level.get("raw_text"),
                 # 소스 미지정이면 tradingview (기존 호출부 무수정 호환)
                 level.get("source") or "tradingview",
+                level.get("tp_ladder_count") or 0,   # 표시 전용(알림 "1/N단계")
             ),
         )
         return True
@@ -333,7 +340,7 @@ def reparse_all(conn) -> int:
     # long 규칙을 적용하면 유효한 숏 sl/tp 를 NULL 로 파괴). 이 봇은 long 만 알림하나
     # DB 무결성을 위해 방향 한정.
     rows = conn.execute(
-        "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text "
+        "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text, tp_ladder_count "
         "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
         "AND direction='long'"
     ).fetchall()
@@ -352,12 +359,19 @@ def reparse_all(conn) -> int:
         if new_sl and new_tp and entry > new_sl:
             rr = round((new_tp - entry) / (entry - new_sl), 2)
         win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]), entry, new_tp)
+        # 표시 전용 사다리 단계 수도 함께 치유한다(2026-07-27) — 컬럼 신설 전에
+        # 수집된 기존 레벨은 0 이라 알림에 꼬리표가 안 붙는데, 원문이 남아 있으면
+        # 여기서 채워진다. tp 가 위 재검증에서 폐기됐으면 0(값 없는데 단계만 남으면
+        # 표시가 거짓말을 한다).
+        new_lad = (setup.get("tp_ladder_count") or 0) if new_tp is not None else 0
         if (new_sl == r["sl_usd"] and new_tp == r["tp_usd"]
-                and rr == r["rr"] and win == r["judgment_window_hours"]):
+                and rr == r["rr"] and win == r["judgment_window_hours"]
+                and new_lad == (r["tp_ladder_count"] or 0)):
             continue
         conn.execute(
-            "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=? WHERE id=?",
-            (new_sl, new_tp, rr, win, r["id"]),
+            "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=?, "
+            "tp_ladder_count=? WHERE id=?",
+            (new_sl, new_tp, rr, win, new_lad, r["id"]),
         )
         changed += 1
     return changed
