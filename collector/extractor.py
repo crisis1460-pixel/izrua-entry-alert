@@ -104,6 +104,12 @@ _LADDER_ARROW = re.compile(
 # 200자 안에 rung 3개가 들어오면 '나열인가' 판별은 이미 끝나 있다.
 _LADDER_MAX_WINDOW = 200
 
+# 줄바꿈 나열형 사다리의 단계 수 상한(표시 신뢰 컷). 실측(원문 103건) 분포는
+# 1~8 에서 끝나고 8단계 두 건은 육안 확인 결과 진짜 8단 사다리였다. 12 는 그
+# 위로 얹은 여유이자, 본문 산문에 'target' 이 흩뿌려져 단계가 부풀 때의 방어선 —
+# 넘으면 '틀린 단계 수를 보여주느니 안 보여준다'(이 모듈의 판단 보류 원칙).
+_LADDER_MAX_STEPS = 12
+
 # 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
 _PERCENT = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*%")
@@ -184,6 +190,16 @@ class _Vals(list):
     def __init__(self, seq=()):
         super().__init__(seq)
         self.ladder_n = 0
+
+
+class _Grabbed(list):
+    """_grab_after 의 반환 그릇. 담긴 값들이 스펙형(라벨 뒤 :/=)에서 나왔는지를
+    호출부에 알린다 — 줄바꿈 나열 사다리를 셀 때 산문형을 배제하는 데 쓴다."""
+    __slots__ = ("is_spec",)
+
+    def __init__(self, seq=(), is_spec=False):
+        super().__init__(seq)
+        self.is_spec = is_spec
 
 
 def _to_float(s: str) -> Optional[float]:
@@ -292,7 +308,7 @@ def _grab_after(label_pat, text: str) -> list:
             if v:
                 (spec_out if is_spec else out).append([v])
     # 스펙형이 하나라도 있으면 산문형은 버린다(위 is_spec 주석 참고).
-    return spec_out or out
+    return _Grabbed(spec_out or out, is_spec=bool(spec_out))
 
 
 def _sanity(value: float, current_price: Optional[float], max_dev: float) -> bool:
@@ -378,7 +394,32 @@ def parse_setup(text: str, current_price: Optional[float] = None,
 
     # 사다리 단계 수 — 표시 전용(알림의 "1/8단계"). tp 가 sanity 로 폐기됐으면
     # 같이 버린다(값 없는데 단계만 남으면 표시가 거짓말을 한다).
-    tp_ladder_count = getattr(tps[0], "ladder_n", 0) if (tps and tp is not None) else 0
+    tp_ladder_count = 0
+    if tps and tp is not None:
+        _n = getattr(tps[0], "ladder_n", 0)
+        if _n > 1:
+            tp_ladder_count = _n  # 한 줄 나열형("a - b - c", "a → b")
+        else:
+            # 줄바꿈 나열형("Target 1: …" 세 줄, "• TP1: …" 네 줄). 실측상 원문의
+            # 절반가량이 이 형태다. 값이 서로 다른 것만 세는 이유는 "Take-Profit
+            # Targets:" 같은 머리말이 첫 목표를 한 번 더 잡아 단계를 부풀리기 때문.
+            #
+            # 스펙형(콜론 라벨)일 때만 세는 이유 — 2026-07-27 SOL 오탐. 산문에서
+            # 목표가 여러 번 나오는 건 사다리가 아니라 **같은 자리의 다른 안**인
+            # 경우가 많다("originally … take-profit at 73.6 … optimized … 74.06"
+            # = 원래안과 수정안). 그걸 '1/2단계'로 보여주면 있지도 않은 분할 익절을
+            # 지어내는 셈이라, 작성자가 라벨로 명시한 표기만 사다리로 인정한다.
+            #
+            # 각 rung 에도 tp 와 **같은 크기 sanity**(엔트리의 0.25~4배)를 건다 —
+            # 2026-07-27 JUP/JTO 실사고. 원문이 "TP4:\n5 *10" 처럼 깨져 들어와
+            # 0.185 짜리 셋업에 5.0 이 한 단계로 잡혔다(실제 목표는 3개, 본문의
+            # 배분도 TP1~TP3 뿐). 대표값 tp 만 걸러선 단계 수가 부푼 채로 남는다.
+            if tps.is_spec:
+                _lo, _hi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
+                            else (float("-inf"), float("inf")))
+                _firsts = {v[0] for v in tps if v and _lo <= v[0] <= _hi}
+                if 1 < len(_firsts) <= _LADDER_MAX_STEPS:
+                    tp_ladder_count = len(_firsts)
 
     return {
         "direction": direction,

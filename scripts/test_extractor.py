@@ -327,6 +327,22 @@ LADDER_N_CASES = [
     ("하이픈 2개는 범위 → 0단계", "Entry: 100\nTarget: 110 - 120", 100.0, 0),
     ("하이픈 3개 → 3단계", "Entry: 10\nTargets: 11 - 12 - 13", 10.0, 3),
     ("단일 목표 → 0단계", "Entry: 10\nTarget: 12", 10.0, 0),
+    # 줄바꿈 나열형 — 실측상 원문의 절반가량이 이 형태인데 종전엔 통째로 안 세졌다.
+    ("줄바꿈 Target 1/2/3 → 3단계",
+     "Entry Price: 100\nTarget 1: 110\nTarget 2: 120\nTarget 3: 130", 100.0, 3),
+    ("줄바꿈 불릿 TP1~TP4 → 4단계",
+     "Entry: 10\n• TP1: 11\n• TP2: 12\n• TP3: 13\n• TP4: 14", 10.0, 4),
+    # 머리말이 첫 목표를 한 번 더 잡아도 단계가 부풀지 않는다(고유 값 기준).
+    ("머리말 + TP1~TP3 → 4단계 아닌 3단계",
+     "Entry: 10\nTake Profit Targets:\nTP1: 11\nTP2: 12\nTP3: 13", 10.0, 3),
+    # 2026-07-27 JUP/JTO 실사고: 원문이 깨져 들어온 이상값은 단계로 세지 않는다.
+    ("깨진 rung(엔트리 27배)은 단계에서 제외 → 4 아닌 3단계",
+     "JUP Short setup\nEntry: 0.19\n• TP1: 0.185\n• TP2: 0.1811\n• TP3: 0.1768\n"
+     "• TP4:\n5 *10", 0.19, 3),
+    # 2026-07-27 SOL 오탐: 산문의 반복 언급은 사다리가 아니라 '원래안 vs 수정안'.
+    ("산문 반복 목표는 사다리 아님 → 0단계",
+     "SOLUSDT short, originally set with an entry at 100, take-profit at 92, "
+     "and stop-loss at 104. The optimized take-profit is 94 instead.", 100.0, 0),
 ]
 for desc, text, price, exp_n in LADDER_N_CASES:
     r = parse_setup(text, current_price=price)
