@@ -91,6 +91,11 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
     # 네 번째 워쳐독을 추가할 때도 이 순서를 그대로 승계할 것.
     db.set_meta(conn, "collect_silence_warned_date", day)
     conn.commit()
+    # 장애 경보 3종(수집급감·회차공백·체인불일치)은 **유음을 유지한다**. 기획 카드 #6 은
+    # "시스템 경보도 무음"을 제안했지만 이 봇의 실패 양상과 맞지 않는다 — 07-23~26 에
+    # 수집이 3일간 멈췄는데 아무도 몰랐던 이유가 정확히 '조용해서'였다. 알림이 안 오는
+    # 것과 봇이 죽은 것을 사용자가 구분할 유일한 수단이 이 경보다. 빈도도 각 하루 1회
+    # 상한이라 소음원이 아니다(소음원은 예고 알림이었고 그쪽을 무음으로 돌렸다).
     text = telegram.render_collect_silence_alert(
         cfg_get("collect_silence_window_hours"), baseline_avg)
     if telegram.send(text):
@@ -332,6 +337,13 @@ def run_once(now: float = None) -> dict:
         usdt_krw = prices.get("KRW-USDT")
         if not usdt_krw:
             logger.warning("[체크] KRW-USDT 환율 조회 실패 - 이번 회차 건너뜀")
+            # 2026-07-27 수리(교차감사 m3): 이 경로도 last_check_at 을 남긴다.
+            # 이 값의 의미는 "회차가 깨어나 돌았다"이지 "일을 했다"가 아니다 —
+            # 소비처가 회차 공백 감지(_check_price_check_gap)와 show_status 표시뿐인데,
+            # 환율 API 가 두어 시간 흔들리면 그동안 회차는 정상인데 값만 정체돼
+            # 다음 성공 회차가 "트리거가 둘 다 죽었다"는 거짓 경보를 낸다.
+            # 봇이 살아있음을 알리는 경보가 거짓말을 하면 진짜 장애 때 신뢰를 잃는다.
+            _save_last_check(conn, now)
             return summary
 
         preview_band = cfg_get("preview_band_pct") / 100.0
@@ -506,7 +518,12 @@ def run_once(now: float = None) -> dict:
                                                  sentiment=_sentiment(), week52=week52,
                                                  kimchi_pct=kimchi,
                                                  volume_rank=_volume_ranks().get(ticker))
-                    if telegram.send(text):
+                    # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
+                    # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
+                    # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
+                    # 보낸다. 알림 개수·필터·양식은 그대로이고 방해 강도만 낮추는 변경이라
+                    # 관찰 데이터(daily_stats)에는 영향이 없다.
+                    if telegram.send(text, urgency="high" if touched else "low"):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         summary["touches" if touched else "previews"] += 1
                     else:

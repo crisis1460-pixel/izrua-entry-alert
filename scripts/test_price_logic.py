@@ -57,7 +57,16 @@ with db.connect(TEST_DB) as conn:
         db.upsert_level(conn, lv)
 
 sent_messages = []
-telegram.send = lambda text: sent_messages.append(text) or True
+sent_urgency = []   # 무음/유음 분리 검증용 (2026-07-27): 터치=high, 예고=low
+
+
+def _stub_send(text, urgency="high"):
+    sent_messages.append(text)
+    sent_urgency.append(urgency)
+    return True
+
+
+telegram.send = _stub_send
 
 fake = {"price": None, "low": None, "high": None, "candles": None}
 upbit.fetch_prices = lambda mkts, t: {m: (USDT_KRW if m == "KRW-USDT" else fake["price"]) for m in mkts}
@@ -209,6 +218,8 @@ check("T1 원거리 - 무알림", s1["previews"] == 0 and s1["touches"] == 0 and
 fake["price"] = 8.30 * USDT_KRW * 1.006
 s2 = price_check.run_once(now + 120)
 check("T2 접근 - 예고 1건", s2["previews"] == 1 and len(sent_messages) == 1 and "진입가 접근" in sent_messages[0])
+# 무음/유음 분리(기획 카드 #6, 2026-07-27 승인): 예고는 아직 행동할 시점이 아니라 무음.
+check("T2b 예고는 무음(disable_notification)", sent_urgency[-1] == "low")
 
 # T3: 같은 조건 재체크 → 중복 예고 없음
 s3 = price_check.run_once(now + 180)
@@ -220,6 +231,8 @@ fake["low"] = 8.24 * USDT_KRW
 s4 = price_check.run_once(now + 240)
 touch_msg = sent_messages[-1]
 check("T4 터치 - 본알림 1건", s4["touches"] == 1 and len(sent_messages) == 2)
+# 터치 본알림만 소리를 낸다 — "지금 매수를 판단하라"는 유일한 신호이기 때문.
+check("T4b 터치 본알림은 유음", sent_urgency[-1] == "high")
 check("T4 터치 헤더+진입가 표기", "진입가 터치" in touch_msg and "진입:" in touch_msg)
 check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and touch_msg.count("출처2") == 1
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
@@ -707,7 +720,7 @@ with db.connect(TEST_DB) as conn:
 fake["low"] = fake["high"] = fake["candles"] = None
 fake["price"] = 10.0 * USDT_KRW * 0.999  # 터치 + 등급 통과권(S) - 발송만 실패시킴
 _prev_send = telegram.send
-telegram.send = lambda text: False
+telegram.send = lambda text, urgency="high": False
 sent_before28 = len(sent_messages)
 price_check.run_once(now + 1320)
 telegram.send = _prev_send
@@ -1337,7 +1350,7 @@ with db.connect(TEST_DB) as conn:
     conn.execute("DELETE FROM meta WHERE key LIKE 'announcement%'")
 _zil_f = _an_level("ZIL", 0.013, "an_fail")   # watching 만 보유 - 가장 흔한 형태
 sent_messages.clear()
-telegram.send = lambda text: False            # 텔레그램 일시 장애
+telegram.send = lambda text, urgency="high": False            # 텔레그램 일시 장애
 with db.connect(TEST_DB) as conn:
     r11 = announcements.check_announcements(conn, now, settings.get)
     _an_pending_raw = db.get_meta(conn, "announcement_pending_alerts")
@@ -1348,7 +1361,7 @@ check("AN11 발송 실패 - 레벨은 만료되지만 경보는 대기 큐에 �
 
 # 텔레그램 복구 → 다음 회차에 재시도 발송. (이 시점 ZIL 은 이미 만료돼 활성 목록에
 # 없다 = 대기 큐가 없었다면 경보가 영원히 안 나가는 상황)
-telegram.send = lambda text: sent_messages.append(text) or True
+telegram.send = _stub_send
 with db.connect(TEST_DB) as conn:
     _an_no_active = "ZIL" not in announcements._active_symbols(conn)
     r12 = announcements.check_announcements(conn, now + 120, settings.get)
