@@ -908,10 +908,9 @@ check("과제1: FORCE_COLLECT/FORCE_REPORT 가 schedule 의 null inputs 를 방�
       "inputs.force_collect || false" in _pc_yml_card2
       and "inputs.force_report || false" in _pc_yml_card2)
 
-check("과제3: 커밋백 재시도가 6회로 확대(백오프 5단 3→5→8→13→21초 + 마지막 1회)",
-      "for wait in 3 5 8 13 21; do" in _pc_yml_card2)
-check("과제3: git pull --rebase 가 재시도마다 재실행됨(1회성 stale pull 아님)",
-      _pc_yml_card2.count("git pull --rebase origin main") >= 2)
+check("과제3: 커밋백 재시도가 6회(백오프 5단 3→5→8→13→21초 + 마지막 1회, 총 6회 push 시도)",
+      "DELAYS=(3 5 8 13 21)" in _pc_yml_card2
+      and "for i in 0 1 2 3 4 5; do" in _pc_yml_card2)
 check("과제3: 예전 '3회 실패' 문구는 사라지고 '6회 실패'로 갱신됨",
       "push 3회 실패" not in _pc_yml_card2 and "push 6회 실패" in _pc_yml_card2)
 # 기존 수리7(::error::+exit 1 표면화)이 문구 변경 후에도 깨지지 않았는지 재확인.
@@ -920,6 +919,42 @@ check("과제3(수리7 회귀 확인): ::error:: 로 실패 표면화 유지",
 _after_error_card2 = _pc_yml_card2.split("::error::")[-1]
 check("과제3(수리7 회귀 확인): ::error:: 직후 exit 1 여전히 존재",
       "exit 1" in _after_error_card2[:200])
+
+
+# ══════════════════════════════════════════════════════════════════
+# M3(2026-07-27, 개발자B, 교차감사 확정) — commit-then-rebase 를
+# fetch-then-commit 으로 교체. data/levels.db 는 바이너리라 3-way 머지가
+# 불가능해서, 로컬 커밋을 먼저 만들고 그 위에서 rebase 하면 origin 이 data/ 를
+# 건드린 경우 매 재시도가 같은 지점에서 결정적으로 재충돌했다(경합과 달리
+# 충돌은 기다린다고 안 풀린다 - 07-27 07:17~07:18 실사고). 아래는 그 구조
+# 전환이 실제로 반영됐는지와, "무조건 ours 승리"가 아니라 사람이 손댄 data/ 는
+# 자동 병합하지 않고 사람에게 넘기는 방어 로직이 존재하는지를 검사한다(실행
+# 자체는 위 스크래치패드 임시 저장소 시나리오로 별도 검증 완료 - 여기선 텍스트
+# 구조만 확인).
+# ══════════════════════════════════════════════════════════════════
+check("M3: 커밋을 먼저 만들지 않는다 - 스냅샷을 tmp 로 뺀 뒤 매 재시도에서 fetch 한다",
+      "SNAPSHOT_DIR=" in _pc_yml_card2 and "git fetch -q origin main" in _pc_yml_card2)
+check("M3: 옛 구조(로컬 커밋 먼저 + git pull --rebase 재시도)의 실제 명령이 제거됨"
+      "(설명 주석 속 인용은 남아있을 수 있어 실행 명령 형태로만 검사)",
+      "git pull --rebase origin main" not in _pc_yml_card2)
+check("M3: base 기록 후 매 루프에서 최신 origin과 비교한다(REMOTE/BASE 갱신)",
+      "BASE=\"$(git rev-parse HEAD)\"" in _pc_yml_card2
+      and 'REMOTE="$(git rev-parse origin/main)"' in _pc_yml_card2)
+check("M3: origin의 data/ 가 base 이후 변경됐는지 diff 로 실제 검사한다",
+      'git diff --quiet "$BASE" "$REMOTE" -- data/' in _pc_yml_card2)
+check("M3: data/ 충돌 감지 시 조용히 덮지 않고 ::error:: 로 사람에게 넘긴다(exit 1)",
+      "자동 병합 위험 회피" in _pc_yml_card2 and "사람 확인 필요" in _pc_yml_card2)
+check("M3: 충돌 시 어느 커밋이 끼어들었는지 로그에 남긴다(git log BASE..REMOTE -- data/)",
+      'git log --oneline "$BASE"..."$REMOTE" -- data/' in _pc_yml_card2
+      or 'git log --oneline "$BASE".."$REMOTE" -- data/' in _pc_yml_card2)
+check("M3: '무조건 ours 승리가 아닌 이유' 주석이 명시적으로 남아있다",
+      "무조건 ours" in _pc_yml_card2 and "직접 push" in _pc_yml_card2)
+check("M3: 안전할 때만 reset --hard 로 최신 origin 을 따라간다",
+      'git reset -q --hard "$REMOTE"' in _pc_yml_card2)
+check("M3: data/ 를 스냅샷과 정확히 동기화한다(삭제 포함 - 감사 덤프 정리 되살아남 방지)",
+      "shutil.rmtree(dst)" in _pc_yml_card2 and "shutil.copytree(snap, dst)" in _pc_yml_card2)
+check("M3: 여전히 이 잡 하나만 data/ 를 커밋한다(W1 불변식 - git add data/ 유지)",
+      "git add data/" in _pc_yml_card2)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1487,10 +1522,154 @@ check("카드14-T7d: init_db 재호출도 예외 없이 통과(마이그레이�
 tgs._get = _tg_orig_get
 
 
+# ══════════════════════════════════════════════════════════════════
+# 교차감사 M1(2026-07-27, 개발자A): 수집이 회차 전체를 단일 트랜잭션으로 감싸던 문제.
+# run_cycle.py 가 수집을 subprocess timeout(12분)으로 **하드킬**하면 열린 트랜잭션이
+# 통째로 롤백돼 그 회차 수집분 전량 + 순환 offset 까지 증발했고, 다음 회차가 같은
+# 지점을 다시 돌았다(무한 제자리걸음). 지금 안 터지는 유일한 이유가 "매번 차단으로
+# 일찍 끊겨서"라 차단이 완화될수록 폭탄에 가까워지는 구조였다.
+# 수리: 심볼 N개(collect_commit_every_symbols)마다 중간 커밋 + 그 커밋에 재개 지점을
+# 함께 기록. 하드킬은 여기서 '수집 루프 도중 예외'로 재현한다 — 어느 쪽이든 커밋되지
+# 않은 트랜잭션이 롤백된다는 점에서 DB 관점의 결과가 같다.
+# ══════════════════════════════════════════════════════════════════
+TEST_DB_M1 = "cache/_test_resilience_m1_commit.db"
+if os.path.exists(TEST_DB_M1):
+    os.remove(TEST_DB_M1)
+settings.SETTINGS["db_path"] = TEST_DB_M1
+settings.SETTINGS["tv_fetch_sleep_sec"] = 0.0
+settings.SETTINGS["collect_commit_every_symbols"] = 3
+settings.SETTINGS["telegram_source_enabled"] = False   # 이 절은 TradingView 경로만 본다
+db.init_db(TEST_DB_M1)
+
+_M1_UNIVERSE = [
+    {"symbol": f"M{i}", "ticker": f"KRW-M{i}", "rank": i + 1, "name": f"M{i} Coin",
+     "price_usd": 10.0, "tier_icon": "🥈"} for i in range(10)
+]
+_m1_fetched: list = []
+_m1_seen_mid = {}
+_M1_KILL_AT = "M7"   # 커밋 경계(3·6·9개째)가 아닌 지점에서 죽여 '마지막 배치' 손실 재현
+
+
+def _m1_fetch_ideas(symbol, timeout, max_age_hours=None):
+    _m1_fetched.append(symbol)
+    # 커밋 #2(6개째 처리 직후) 시점에 **별도 커넥션**으로 관측한다. 진행 중인
+    # 트랜잭션은 다른 커넥션에 보이지 않으므로, 여기서 6건이 보인다는 것은
+    # "set 만 됐다"가 아니라 "commit 까지 디스크에 반영됐다"는 증거다.
+    if symbol == "M6" and "rows" not in _m1_seen_mid:
+        _c = _sqlite3.connect(TEST_DB_M1, timeout=5)
+        try:
+            _m1_seen_mid["rows"] = _c.execute("SELECT COUNT(*) FROM levels").fetchone()[0]
+            _row = _c.execute("SELECT value FROM meta WHERE key=?",
+                              (run_collect._UNIVERSE_OFFSET_META,)).fetchone()
+            _m1_seen_mid["offset"] = _row[0] if _row else None
+        finally:
+            _c.close()
+    # _ingest_idea 는 자체 try/except 로 예외를 삼키므로(글 1건 격리 원칙), 격리 밖인
+    # fetch 단계에서 던져야 예외가 main() 밖으로 나가 트랜잭션이 롤백된다.
+    if symbol == _M1_KILL_AT:
+        raise RuntimeError("하드킬 재현(중간 커밋 검증용)")
+    return [{"title": f"{symbol} idea", "description": "x", "author": f"A{symbol}",
+             "url": f"https://tv.example/{symbol}", "age_minutes": 5.0,
+             "author_followers": 100}]
+
+
+coingecko.build_universe = lambda force=False: list(_M1_UNIVERSE)
+tradingview.fetch_ideas = _m1_fetch_ideas
+tradingview.is_blocked = lambda: False
+tradingview.hard_block_detected = lambda: None
+tradingview.fetch_author_followers = lambda username, timeout: 100
+upbit_mod.fetch_prices = lambda tickers, timeout: {}
+run_collect.parse_setup = lambda text, current_price=None: {
+    "direction": "long", "entry": 10.0, "sl": 9.0, "tp": 12.0}
+run_collect.calculate_grade = lambda *a, **k: ("B", 60, 2.0)
+run_collect.judgment_window_hours = lambda *a, **k: 168.0
+run_collect.parse_timeframe_hours = lambda text: None
+
+_m1_raised = False
+try:
+    _run_main(["run_collect.py"])
+except RuntimeError:
+    _m1_raised = True
+
+with db.connect(TEST_DB_M1) as conn:
+    _m1_rows = [r["coin_symbol"] for r in conn.execute(
+        "SELECT coin_symbol FROM levels ORDER BY id").fetchall()]
+    _m1_off = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+
+check("M1-1: 하드킬 재현 - 수집 루프 도중 예외가 main() 밖으로 나간다(미커밋 종료)",
+      _m1_raised)
+check("M1-2(핵심): 중간 커밋된 6건(M0~M5)이 롤백에서 살아남는다 "
+      "- 예전엔 단일 트랜잭션이라 그 회차 수집분 전량이 증발했다",
+      _m1_rows == [f"M{i}" for i in range(6)])
+check("M1-3: 잃는 건 마지막 배치(커밋 전 M6)뿐 - 손실 범위가 유계",
+      "M6" not in _m1_rows)
+check("M1-4: 커밋이 루프 '도중' 실제 디스크까지 반영된다(별도 커넥션에서 6건 관측)",
+      _m1_seen_mid.get("rows") == 6)
+check("M1-5: 재개 지점이 중단 지점(M6 = 원본 기준 절대 인덱스 6)을 가리킨다 "
+      "- 살아남은 구간을 다시 돌지도, 못 받은 구간을 건너뛰지도 않는다", _m1_off == "6")
+check("M1-5b: 재개 지점도 수집분과 '같은' 중간 커밋에 실린다(둘의 불일치 불가)",
+      _m1_seen_mid.get("offset") == "6")
+
+# 다음 회차: 중단 지점부터 이어받고, 완주하면 0 리셋(기존 순환 계약 유지) + 중복 0
+_M1_KILL_AT = ""
+_m1_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_M1) as conn:
+    _m1_rows2 = [r["coin_symbol"] for r in conn.execute(
+        "SELECT coin_symbol FROM levels ORDER BY id").fetchall()]
+    _m1_off2 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "0")
+    _m1_dup = conn.execute(
+        "SELECT COUNT(*) AS n FROM (SELECT signal_key FROM levels "
+        "GROUP BY signal_key HAVING COUNT(*) > 1)").fetchone()["n"]
+check("M1-6: 다음 회차는 중단 지점(M6)부터 이어받는다(하드킬로도 순환이 안 끊긴다)",
+      _m1_fetched == ["M6", "M7", "M8", "M9", "M0", "M1", "M2", "M3", "M4", "M5"])
+check("M1-7: 완주 시 순환 지점 0 리셋 유지(중간 커밋 도입이 기존 계약을 안 깬다)",
+      _m1_off2 == "0")
+check("M1-8: 살아남은 구간(M0~M5)을 다시 수집해도 중복 삽입 0 - signal_key UNIQUE + "
+      "upsert_level 의 키 조회→UPDATE 경로가 멱등성을 보장",
+      _m1_dup == 0 and len(_m1_rows2) == 10
+      and set(_m1_rows2) == {f"M{i}" for i in range(10)})
+
+# ── 중간 커밋 #1: 삭제확인 결과는 수집 루프가 죽어도 살아남는다 ──────────────
+# 삭제확인은 하루 상한 5요청짜리 희소 자원이라, 수집 하드킬에 딸려 롤백되면
+# 그날치 확인이 통째로 사라진다. '진전 게이트'(B의 A-M2 수리)와의 무모순도 함께 확인 —
+# deleted_checked_at 과 게이트가 같은 커밋에 들어가므로 한쪽만 남을 수 없다.
+TEST_DB_M1DEL = "cache/_test_resilience_m1_delcommit.db"
+if os.path.exists(TEST_DB_M1DEL):
+    os.remove(TEST_DB_M1DEL)
+settings.SETTINGS["db_path"] = TEST_DB_M1DEL
+db.init_db(TEST_DB_M1DEL)
+with db.connect(TEST_DB_M1DEL) as conn:
+    conn.execute(
+        """INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,
+             author, post_url, status, collected_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("m1delkey", "TST", "KRW-TST", "long", 1.0, "Auth",
+         "https://tv.example/m1del", "touched", time.time()))
+
+tradingview.check_post_deleted = lambda url, timeout: False   # 생존 판정 = 진전 있음
+_M1_KILL_AT = "M0"      # 첫 심볼부터 하드킬 - 수집분은 0건
+_m1_fetched.clear()
+try:
+    _run_main(["run_collect.py"])
+except RuntimeError:
+    pass
+with db.connect(TEST_DB_M1DEL) as conn:
+    _m1_del_checked = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels WHERE deleted_checked_at IS NOT NULL"
+    ).fetchone()["n"]
+    _m1_del_gate = db.get_meta(conn, "last_deletion_check_day")
+check("M1-9: 수집 루프가 첫 심볼에서 죽어도 삭제확인 결과는 이미 커밋돼 살아남는다 "
+      "(하루 5요청짜리 희소 자원을 롤백으로 날리지 않는다)", _m1_del_checked == 1)
+check("M1-9b: 근거(deleted_checked_at)와 하루 게이트가 같은 커밋에 함께 남는다 "
+      "- '게이트만 타고 진전은 없음'이 구조적으로 불가(진전 게이트와 무모순)",
+      _m1_del_gate is not None)
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
 for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY, TEST_DB_CHAIN, TEST_DB_LEGACY,
            TEST_DB_CHAIN_CYCLE, TEST_DB_GAP, TEST_DB_DELORDER, TEST_DB_DELORDER2,
-           TEST_DB_TG, TEST_DB_TGMIG):
+           TEST_DB_TG, TEST_DB_TGMIG, TEST_DB_M1, TEST_DB_M1DEL):
     try:
         if os.path.exists(_p):
             os.remove(_p)
