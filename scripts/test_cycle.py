@@ -237,7 +237,7 @@ check("G5 다음 날에도 여전히 정체 중이면 다시 경고(하루 1회 
 
 telegram.send = _orig_send_g
 
-# G6: 발송 실패(False 반환)는 failed - warned_date 를 기록하지 않아 다음 회차 재시도
+# G6: 발송 실패(False 반환)는 failed - meta-first 순서라 warned_date 는 기록됨(당일 재시도 없음)
 with db.connect(STALE_DB) as conn:
     db.set_meta(conn, run_cycle.META_LAST_COLLECT, str(NEXT_DAY_KST - 20 * HOUR))
     db.set_meta(conn, run_cycle.META_COLLECT_STALE_WARNED, "1970-01-01")  # 재시도 대상으로
@@ -245,6 +245,11 @@ _orig_send_g2 = telegram.send
 telegram.send = lambda text: False
 check("G6 발송 실패(False 반환)는 failed",
       run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed")
+
+# G6 에서 meta-first 로 META_COLLECT_STALE_WARNED 가 오늘 날짜로 기록됐으므로
+# G7 이 warned_day==day 로 "skipped" 반환하지 않도록 리셋한다.
+with db.connect(STALE_DB) as conn:
+    db.set_meta(conn, run_cycle.META_COLLECT_STALE_WARNED, "1970-01-01")
 
 
 def _send_boom_g(_text):
@@ -286,9 +291,9 @@ def _set_meta_boom_stale(conn, key, value):
 
 db.set_meta = _set_meta_boom_stale
 _sent_before_g9 = _sent_g["n"]
-check("G9 발송 후 meta 기록 실패도 격리(발송은 됐지만 상태는 failed)",
+check("G9 meta 기록 실패 시 발송 생략(failed, 중복 발송 방지)",
       run_cycle.maybe_alert_collect_stale(STALE_DB, now=NEXT_DAY_KST) == "failed"
-      and _sent_g["n"] == _sent_before_g9 + 1)
+      and _sent_g["n"] == _sent_before_g9)
 db.set_meta = _orig_set_meta_g
 telegram.send = _orig_send_g2
 
