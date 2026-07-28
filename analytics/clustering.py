@@ -39,9 +39,16 @@ def build_clusters(levels: list, band_pct: float, window_sec: float = None,
         for j, l in enumerate(with_entry):
             if j in used or l["entry_usd"] < top * (1 - band_pct / 100.0):
                 continue
-            if window_sec is not None and t_top is not None:
+            if window_sec is not None:
+                # 2026-07-28 수리: t_top is None 이면 시간창 모드에서 병합을 막는다.
+                # 대표 시각이 없을 때 시간창을 조용히 무시하면 몇 달 간격으로 우연히
+                # 같은 가격대에 걸린 레벨이 합의로 집계돼 CR 이 부풀려진다(docstring).
+                # t_top None → 자기 자신(j==i)만 클러스터; 시각 있는 레벨은 병합 안 됨.
                 t = l.get(time_key)
-                if t is None or abs(t - t_top) > window_sec:
+                if t_top is None:
+                    if j != i:
+                        continue
+                elif t is None or abs(t - t_top) > window_sec:
                     continue
             group.append((j, l))
         for j, _ in group:

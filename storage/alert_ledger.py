@@ -44,9 +44,10 @@ def ledger_path(db_path: str) -> str:
 
 
 def _key(coin_symbol: str, kind: str, level_ids: Iterable) -> str:
-    """발송 하나를 가리키는 키. storage.db.record_alert 와 같은 방식으로 결합한다
-    (정렬 없이 그대로) — 같은 클러스터면 호출부가 같은 순서로 넘긴다."""
-    return f"{coin_symbol}|{kind}|{','.join(str(i) for i in level_ids)}"
+    """발송 하나를 가리키는 키. storage.db.record_alert·recent_alert_exists 와 동일하게
+    sorted() 로 순서를 고정한다(2026-07-28 수리) — build_clusters 출력 순서가 바뀌어도
+    같은 클러스터는 항상 같은 키를 만들어 재발송 차단이 조용히 무력화되지 않는다."""
+    return f"{coin_symbol}|{kind}|{','.join(str(i) for i in sorted(level_ids))}"
 
 
 def append(db_path: str, coin_symbol: str, kind: str, level_ids: Iterable,
@@ -73,7 +74,7 @@ def recent_exists(db_path: str, coin_symbol: str, kind: str, level_ids: Iterable
                     continue
                 try:
                     row = json.loads(line)
-                except ValueError:
+                except (ValueError, AttributeError, TypeError):
                     continue          # 손상 줄은 건너뛴다(위 설계 원칙)
                 if row.get("k") == want and (row.get("t") or 0) >= since:
                     return True
@@ -117,7 +118,11 @@ def merge_files(*paths: str, out_path: str, keep_sec: float = 7 * 86400,
     for p in paths:
         merged.update(_load(p))
     rows = sorted(((t, line) for line, t in merged.items() if t >= cutoff))
-    with open(out_path, "w", encoding="utf-8") as fh:
+    # 2026-07-28 수리: 임시파일에 쓰고 os.replace 로 원자 교체 — 프로세스 중단 시
+    # 반쪽 잘린 원장이 남아 최근 발송 기록이 유실되는 것 방지.
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         for _t, line in rows:
             fh.write(line + "\n")
+    os.replace(tmp, out_path)
     return len(rows)

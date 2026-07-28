@@ -109,6 +109,22 @@ def is_blocked() -> bool:
     return time.time() < _blocked_until
 
 
+def blocked_until() -> float:
+    """차단 쿨다운 만료 epoch (걸린 적 없으면 0.0) — 호출부가 DB 에 영속화하기 위한 게터.
+    tradingview.blocked_until() 과 동일한 계약."""
+    return _blocked_until
+
+
+def restore_block_state(until: float) -> None:
+    """DB 에 저장해둔 쿨다운 만료 시각을 모듈에 복원한다 — 회차 경계를 넘기기 위함.
+    2026-07-28 수리: tradingview 에서 07-28 실사고로 확인된 것과 동일한 결함이 그대로
+    남아 있었다(_blocked_until 이 프로세스 전역 변수라 회차마다 0 으로 리셋). 이제
+    tradingview.restore_block_state 와 같은 계약으로 대칭을 맞춘다."""
+    global _blocked_until
+    if until and until > _blocked_until:
+        _blocked_until = float(until)
+
+
 def _get(url: str, timeout: float, max_retry: int = 2) -> Tuple[Optional[str], bool]:
     """GET → (본문|None, 차단 여부). 403/429/503 은 재시도 없이 즉시 포기 + 쿨다운
     (비공식 경로에서 재시도는 차단을 키울 뿐이다). 그 외 오류만 짧게 재시도."""

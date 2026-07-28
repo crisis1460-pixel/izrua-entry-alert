@@ -115,11 +115,14 @@ def build_universe(force: bool = False) -> list:
     try:
         top = fetch_top_coins(settings.get("universe_top_n"), timeout)
         krw = fetch_upbit_krw_symbols(timeout)
-    except requests.RequestException:
+    except (requests.RequestException, KeyError, TypeError, ValueError):
         # 2026-07-26 수리: 신선 캐시가 없어도(24h 지남/force) 완전 실패보다는 낡은
         # 유니버스가 낫다 - 수집 스킵보다 폐기된 코인 몇 개 섞이는 편이 안전.
         # 캐시조차 없으면(첫 실행) 원래 예외를 그대로 전파해 호출부가 이번 회차를
         # 스킵하게 한다(run_collect.py 책임).
+        # 2026-07-28 수리: CoinGecko 레이트리밋 시 200+{"status":{...}} 에러바디를
+        # 주면 raise_for_status 는 통과하고 data[:top_n] 에서 KeyError — 이 케이스가
+        # RequestException 이 아니라 캐시 폴백을 건너뛰고 회차 전체를 스킵했다.
         stale = _load_cache_any_age(cache_path)
         if stale is not None:
             logger.warning("[cg] 유니버스 갱신 실패 - 만료된 캐시로 폴백(%d개)", len(stale))

@@ -1866,6 +1866,44 @@ price_check.run_once(now + 2000 + price_check._RESEND_BLOCK_SEC + 120)
 check("LG2 DB 기록이 통째로 사라져도 원장만으로 재발송이 막힌다",
       len(sent_messages) == _before_lg)
 
+# ── MG: merge_files 합집합 동작 단위 검증 (2026-07-28) ───────────────────
+# 역회귀 리뷰 4-B: merge_files 자체에 대한 단위 테스트 없음(MEDIUM). 여기서 검증한다.
+# 커밋백 실제 호출 패턴 포함 — merge_files(REMOTE, LOCAL, out_path=LOCAL).
+import tempfile as _tempfile, shutil as _shutil_mg, json as _json_mg
+
+_tmp_mg = _tempfile.mkdtemp()
+_mg_now = time.time()
+
+def _wl(path, rows):
+    with open(path, "w", encoding="utf-8") as fh:
+        for k, t in rows:
+            fh.write(_json_mg.dumps({"k": k, "t": t}, sort_keys=True) + "\n")
+
+_fA = os.path.join(_tmp_mg, "A.ndjson")
+_fB = os.path.join(_tmp_mg, "B.ndjson")
+_fo = os.path.join(_tmp_mg, "out.ndjson")
+
+_wl(_fA, [("K1", _mg_now - 10), ("K2", _mg_now - 20)])
+_wl(_fB, [("K1", _mg_now - 10), ("K3", _mg_now - 30)])
+check("MG1 합집합·중복 제거: K1 중복 1건·K2·K3 고유항목 유지 → 3줄",
+      _AL.merge_files(_fA, _fB, out_path=_fo) == 3)
+
+_wl(_fA, [("K_old", _mg_now - 10000), ("K_new", _mg_now - 10)])
+check("MG2 keep_sec 프루닝: 10000초 전 항목 제거·최근 항목만 유지 → 1줄",
+      _AL.merge_files(_fA, out_path=_fo, keep_sec=1000) == 1)
+
+_wl(_fB, [("K_only", _mg_now - 5)])
+check("MG3 한쪽 파일 없음: OSError 없이 나머지 파일 항목만 유지 → 1줄",
+      _AL.merge_files(os.path.join(_tmp_mg, "missing.ndjson"), _fB, out_path=_fo) == 1)
+
+_wl(_fA, [("KA", _mg_now - 10)])
+_wl(_fB, [("KB", _mg_now - 20)])
+_shutil_mg.copy2(_fB, _fo)   # out_path = _fB 내용으로 초기화
+check("MG4 out_path=입력파일(커밋백 패턴): 자기 자신에 써도 데이터 손실 없음 → 2줄",
+      _AL.merge_files(_fA, _fo, out_path=_fo) == 2)
+
+_shutil_mg.rmtree(_tmp_mg, ignore_errors=True)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)

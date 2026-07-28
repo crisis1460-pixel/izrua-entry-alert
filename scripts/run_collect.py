@@ -143,6 +143,7 @@ _TV_BLOCK_ALERT_KEY_PREFIX = "tv_block_alert_count_"
 # 차단 쿨다운 만료 epoch 영속화 키 (2026-07-28) — 모듈 전역 변수는 회차(프로세스)를
 # 못 넘어 "30분 쿨다운"이 지켜지지 않았다. collector.tradingview.restore_block_state 참고.
 _TV_BLOCKED_UNTIL_KEY = "tv_blocked_until"
+_TG_BLOCKED_UNTIL_KEY = "tg_blocked_until"  # 2026-07-28 수리: telegram_source 대칭 영속화
 
 # 수집 순환 재개 지점(원본 유니버스 기준 절대 인덱스) — 차단 기아 방지 (2026-07-27)
 _UNIVERSE_OFFSET_META = "collect_universe_offset"
@@ -423,6 +424,15 @@ def main() -> int:
         if tradingview.is_blocked():
             logger.warning("[차단쿨다운] 이전 회차 차단 유효 - %.0f초 남음",
                            tradingview.blocked_until() - time.time())
+        # 2026-07-28 수리: telegram_source 도 동일한 패턴으로 복원(tradingview 와 대칭).
+        _saved_tg_block = db.get_meta(conn, _TG_BLOCKED_UNTIL_KEY, "0")
+        try:
+            telegram_source.restore_block_state(float(_saved_tg_block or 0))
+        except (TypeError, ValueError):
+            logger.warning("[TG차단쿨다운] 저장값 해석 실패(무시): %r", _saved_tg_block)
+        if telegram_source.is_blocked():
+            logger.warning("[TG차단쿨다운] 이전 회차 차단 유효 - %.0f초 남음",
+                           telegram_source.blocked_until() - time.time())
 
         # ── 글 삭제 감지(과제1) — 하루 1회, 종결 레벨만, 상한 건수만 순환 확인.
         #
@@ -557,6 +567,7 @@ def main() -> int:
         # 처리를 한자리에 모아 읽기 쉽게 뒀다. 만료 시각이 과거면 저장해도 무해하다
         # (is_blocked() 가 현재시각과 비교하므로 자동으로 '차단 아님'이 된다).
         db.set_meta(conn, _TV_BLOCKED_UNTIL_KEY, str(tradingview.blocked_until()))
+        db.set_meta(conn, _TG_BLOCKED_UNTIL_KEY, str(telegram_source.blocked_until()))
 
         # 차단경보 meta 키 정리(과제2, 2026-07-26 감사 minor) - 날짜별 카운터가 영영
         # 안 지워지는 문제 방지. 매 수집 회차 가볍게 수행(비용 무시할 수준).

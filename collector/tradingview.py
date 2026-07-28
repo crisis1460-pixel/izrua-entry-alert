@@ -166,8 +166,12 @@ def _ensure_cookie(session) -> dict:
 
 def _looks_blocked(status: int, text: str) -> bool:
     """차단/캡차/챌린지 신호 판별. mnwato 는 캡차를 <title>Captcha Challenge</title> 로
-    감지, Cloudflare 밴은 'error code: 1020', 구형 챌린지는 503 + 'Just a moment'."""
-    if status in (403, 429, 503):
+    감지, Cloudflare 밴은 'error code: 1020', 구형 챌린지는 503 + 'Just a moment'.
+    2026-07-28 수리: 503 은 일시적 서버 과부하일 수도 있어 텍스트 없이 상태코드만으로
+    확정 차단 처리하지 않는다 — 모듈 docstring·hard_block_detected docstring 이 모두
+    403/429/캡차/1020 이라고 적고 있어 503 단독 처리는 문서와도 어긋났다. 503 전용
+    소프트 실패 브레이커(_SOFT_FAIL_LIMIT·_SOFT_FAIL_COOLDOWN_SEC)가 이미 별도로 있다."""
+    if status in (403, 429):
         return True
     head = (text or "")[:3000]
     return (
@@ -206,7 +210,7 @@ def _get(url: str, timeout: float, max_retry: int = 3) -> Tuple[Optional[str], b
                 # 확정 차단 신호 기록(소프트 실패와 분리 - 과제2: 사용자 알림용).
                 # status 가 403/429/503 이 아니면 캡차/1020 텍스트 신호로 걸린 것.
                 _hard_block_seen = True
-                _hard_block_status = status if status in (403, 429, 503) else "captcha"
+                _hard_block_status = status if status in (403, 429) else "captcha"
                 logger.warning("[tv] 차단/캡차 신호(status=%s) - 즉시 포기 + %.0f분 쿨다운: %s",
                                status, _BLOCK_COOLDOWN_SEC / 60.0, url)
                 return None, True, False

@@ -133,28 +133,6 @@ def send(text: str, urgency: str = "high") -> bool:
 
 # ── 포맷 유틸 (워쳐 notifier.py 이식) ─────────────────────────────
 
-def _fmt_usd(value) -> str:
-    """달러 표기 - 소수 1자리 (2026-07-23 사용자: 소수점 너무 길다, 한자리까지만).
-    단 $1 미만 코인은 1자리로 반올림하면 값 자체가 뭉개져($0.0888→$0.1) 유효숫자
-    3개만 남긴다 - '짧게'라는 취지 유지."""
-    if value is None or value == 0:
-        return "N/A"
-    v = abs(value)
-    if v >= 1:
-        return f"{value:,.1f}"
-    return f"{value:.3g}"
-
-
-def _fmt_krw_paren(usd_value, usdt_krw) -> str:
-    """'(1,234원)' — 1원 이상은 반올림 정수(사용자 확정), 1원 미만은 소수 4자리."""
-    if not usd_value or not usdt_krw:
-        return ""
-    krw = usd_value * usdt_krw
-    if krw >= 1:
-        return f"({krw:,.0f}원)"
-    return f"({krw:.4f}원)"
-
-
 def _fmt_age(minutes) -> str:
     if minutes is None or minutes < 0:
         return ""
@@ -263,20 +241,6 @@ def _author_block(rep: dict) -> list:
     # 함께 나오므로 비용 0이고, 억제 필터로 승격할 때 바로 쓸 수 있다). 위 자체 승률
     # 게이트가 neff_r 을 쓰는 것도 이 판정과 같은 축을 유지하기 위함이다.
     return lines
-
-
-def _vwidth(s: str) -> int:
-    """대략적 시각 폭 — 한글/CJK 는 2, 그 외 1 (모바일 한 줄 초과 판정용)."""
-    return sum(2 if ord(ch) > 0x1100 else 1 for ch in s)
-
-
-def _price_row(label: str, value: str, wrap_limit: int = 34) -> list:
-    """'라벨: 값' 한 줄 — 폭 초과가 예상되면 라벨 줄 아래 4칸 들여쓰기로 값 줄을
-    내린다(2026-07-23 사용자 지시 #8: 진입가 범위처럼 긴 값이 중간에서 꺾이는 것 방지)."""
-    one = f"{label} {value}"
-    if _vwidth(one) <= wrap_limit:
-        return [one]
-    return [label, f"    {value}"]
 
 
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
@@ -398,7 +362,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)
-    srcs = sorted(cluster, key=lambda l: _fresh_age_min(l) or 1e12)
+    srcs = sorted(cluster, key=lambda l: x if (x := _fresh_age_min(l)) is not None else 1e12)
     links = []
     for i, lv in enumerate(srcs[:5], 1):
         url = html.escape(lv.get("post_url") or "", quote=True)

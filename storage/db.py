@@ -235,6 +235,10 @@ def _migrate(conn) -> None:
             if col not in ds_cols:
                 conn.execute(
                     f"ALTER TABLE daily_stats ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+        # 2026-07-28 수리: updated_at 은 INTEGER 카운터가 아니라 REAL(epoch) 이라 별도 처리.
+        # _DAILY_STATS_COLS 에 포함하면 "DEFAULT 0 INTEGER" 이 붙어 타입이 틀린다.
+        if "updated_at" not in ds_cols:
+            conn.execute("ALTER TABLE daily_stats ADD COLUMN updated_at REAL")
 
     # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
@@ -907,7 +911,10 @@ def recent_alert_exists(conn, coin_symbol: str, kind: str, level_ids: list,
     덮어쓰지 않는다 → 상태 전이보다 한 겹 더 단단한 방어선이다. level_ids 는
     record_alert 와 같은 방식(정렬 없이 그대로 콤마 결합)으로 맞춘다 — 같은
     클러스터면 호출부가 같은 순서로 넘긴다."""
-    key = ",".join(str(i) for i in level_ids)
+    # 2026-07-28 수리: sorted() 로 순서 고정 — build_clusters 출력 순서 변화 시
+    # 같은 클러스터가 다른 키를 만들어 재발송 차단이 조용히 무력화되는 것 방지.
+    # alert_ledger._key 와 record_alert 세 곳 모두 동시 적용해야 계약이 유지된다.
+    key = ",".join(str(i) for i in sorted(level_ids))
     row = conn.execute(
         "SELECT 1 FROM alerts_log WHERE coin_symbol=? AND kind=? AND level_ids=? "
         "AND sent_at >= ? LIMIT 1",
@@ -920,7 +927,7 @@ def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: st
                  now: Optional[float] = None) -> None:
     conn.execute(
         "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
-        (coin_symbol, kind, ",".join(str(i) for i in level_ids), now or time.time(), day_kst),
+        (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)), now or time.time(), day_kst),
     )
 
 

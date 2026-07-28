@@ -20,12 +20,19 @@ _SHORT_HINTS = re.compile(r"\b(short|sell|숏|매도)\b|숏\s*포지션|short\s*
 
 # 라벨 (그룹1 = 라벨종류). 라벨 뒤에 오는 숫자를 그 항목으로 본다.
 _ENTRY_LABEL = re.compile(
-    r"(entry|enter|buy|long\s*entry|진입가?|진입|매수가?|롱\s*진입|buy\s*zone|entry\s*zone)"
-    r"\s*(?:price|zone|구간|가격)?\s*[:=]?\s*",
+    # 2026-07-28 수리: entry/enter/buy 에 단어경계 추가 — center/reenter/buyers 내부
+    # "enter"/"buy" 가 엔트리 라벨로 잡히는 버그(DB 현재 0건, 소스 확장 시 노출면 증가).
+    # (?:\s*\([^)]*\))? — "Buy (zone):" 같은 괄호 주석을 거치고도 is_spec 판정을 통과.
+    r"(\bentry\b|\benter\b|\bbuy\b|long\s*entry|진입가?|진입|매수가?|롱\s*진입|buy\s*zone|entry\s*zone)"
+    r"(?:\s*\([^)]*\))?\s*(?:price|zone|구간|가격)?\s*[:=]?\s*",
     re.I,
 )
 _SL_LABEL = re.compile(
-    r"(stop\s*loss|stop|sl|손절가?|손절|스탑|스톱)\s*[:=]?\s*", re.I,
+    # 2026-07-28 수리: \bsl\b 단어경계 — sloping/previously/slight 내 "sl" 선점 버그
+    # (실측 2건: BTC id=120 S→D 등급 폭락 → min_grade 필터에 막혀 알림 미발송).
+    # (?:\s*\([^)]*\))? — "Stop Loss (SL): $1,820" 괄호 주석이 라벨·콜론 사이에 있어도
+    # m.group(0) 에 콜론이 포함되어 is_spec=True 로 올바르게 분류된다.
+    r"(stop\s*loss|stop|\bsl\b|손절가?|손절|스탑|스톱)(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
 )
 # 복수형 "TARGETS:" 도 받는다 (2026-07-27). 예전엔 `target(?!s)` 로 복수형을 배제했는데,
 # "Take-Profit Targets:" 헤더가 매칭돼 그 뒤 "TP1: 5.298" 대신 라벨 번호를 가리키던
@@ -33,7 +40,11 @@ _SL_LABEL = re.compile(
 # 배제를 유지하면 "TARGETS: 7.15 - 7.45 - …" 형태를 쓰는 소스에서 목표가가 통째로
 # None 이 된다. INJ 재현 케이스가 test_extractor.py 에 남아 회귀를 막는다.
 _TP_LABEL = re.compile(
-    r"(take\s*profit|targets?|tp\d?|목표가?|목표|타겟\s*\d?|익절가?)\s*[:=]?\s*", re.I,
+    # 2026-07-28 수리: \btp\d?\b 단어경계 — http/https URL 내 "tp" 가 목표가 라벨로
+    # 잡히는 버그(URL 숫자가 tp 자리 선점 → 정상 목표가 유실, DB 현재 0건).
+    # (?:\s*\([^)]*\))? — entry/sl 과 일관성 유지.
+    r"(take\s*profit|targets?|\btp\d?\b|목표가?|목표|타겟\s*\d?|익절가?)"
+    r"(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
 )
 
 # 실전 버그(2026-07-23): "TP1: 5.298 / TP2: 5.420 / TP3: 5.560" 처럼 다중 목표가를
@@ -185,11 +196,12 @@ def judgment_window_hours(tf_hours, entry, tp) -> float:
 class _Vals(list):
     """_grab_after 가 돌려주는 값 목록 + 부가정보. list 를 그대로 상속해 기존
     호출부([0]/[-1]/len)는 전혀 바뀌지 않고, 사다리 단계 수만 얹어 나른다."""
-    __slots__ = ("ladder_n",)
+    __slots__ = ("ladder_n", "ladder_last")
 
     def __init__(self, seq=()):
         super().__init__(seq)
         self.ladder_n = 0
+        self.ladder_last = None  # 사다리 마지막 값 — 엔트리 범위 복원에 사용
 
 
 class _Grabbed(list):
@@ -227,7 +239,7 @@ def _clean(text: str) -> str:
 
 
 def _grab_after(label_pat, text: str) -> list:
-    """라벨 뒤 짧은 창(30자) 안에서 첫 숫자(또는 범위)를 검색해 수집. 범위면 [lo, hi].
+    """라벨 뒤 80자 창 안에서 첫 숫자(또는 범위)를 검색해 수집. 범위면 [lo, hi].
     '맨 앞 고정'이 아니라 검색으로 하는 이유: 라벨과 숫자 사이에 '가', 'around', '@',
     통화기호 등 잡토큰이 끼는 경우가 흔하기 때문. 단, 창을 짧게 잡아 무관한 숫자를
     끌어오지 않는다(가장 왼쪽 숫자만 채택).
@@ -237,7 +249,8 @@ def _grab_after(label_pat, text: str) -> list:
     나열을 범위로 넘기면 두 번째 목표가 TP1 자리에 앉는다.
 
     ⚠️ 창 크기가 비대칭이다 — _LADDER 만 '첫 숫자가 있는 줄의 끝'(단 _LADDER_MAX_WINDOW
-    상한)까지 보고, _RANGE·_SINGLE 은 종전대로 30자다 (2026-07-27 교차감사 B-M1 수리).
+    상한)까지 보고, _RANGE·_SINGLE 은 80자 고정이다 (2026-07-27 교차감사 B-M1 수리,
+    2026-07-28 콤마 자릿수 버그 수리로 30→80 확장).
     비대칭은 의도된 것이고 그 상한이 대가다(상수 주석의 ReDoS 실측 참고). 이유:
       · 세 값 나열은 최소 15자를 먹는다("7.15 - 7.45 - 7.85"는 18자). 라벨과 첫 숫자
         사이 필러가 15자를 넘으면 30자 창 안에 세 번째 rung 이 안 들어와 _LADDER 가
@@ -266,8 +279,12 @@ def _grab_after(label_pat, text: str) -> list:
         # 작성자가 콜론으로 명시한 값이 산문 언급보다 항상 더 신뢰할 만하므로,
         # 스펙형이 하나라도 있으면 그것만 쓰고 산문형은 버린다. 스펙형이 없을 때만
         # 종전처럼 전부 쓴다(콜론 없이 "Entry 10.5" 로 쓰는 소스가 실제로 있다).
-        is_spec = m.group(0).rstrip().endswith((":", "=")) or ":" in m.group(0) or "=" in m.group(0)
-        window = text[m.end(): m.end() + 30]
+        is_spec = m.group(0).rstrip().endswith((":", "="))
+        # 2026-07-28 수리: 30자 고정 창이 라벨-값 사이 필러가 길면 숫자를 콤마 경계에서
+        # 잘라 자릿수를 버리는 버그(필러 1글자 차이로 1,234,567→1,234, 1000배 오차).
+        # 줄 끝 대신 단순 확장(30→80)을 쓴다 — 다음 줄에 값이 오는 포맷("Stop-Loss:\n\n5")
+        # 이 실전에 존재하므로 줄 경계로 자르면 회귀가 발생한다.
+        window = text[m.end(): m.end() + 80]
         rng = _RANGE.search(window)
         sng = _SINGLE.search(window)
         lad = None
@@ -293,8 +310,13 @@ def _grab_after(label_pat, text: str) -> list:
                 # 표시용으로 함께 실어 보낸다(2026-07-27 사용자 승인 A안 — 알림에
                 # "1/8단계"). 반환 타입을 리스트 그대로 유지해야 호출부의 [0]/[-1]
                 # 접근이 안 깨지므로, 개수만 속성으로 얹는 얇은 하위 클래스를 쓴다.
+                _nums = _SINGLE.findall(lad.group(0))
                 vals = _Vals([first])
-                vals.ladder_n = len(_SINGLE.findall(lad.group(0)))
+                vals.ladder_n = len(_nums)
+                # 마지막 rung — 엔트리 경로에서 "Entry - $90/95/$100" 같은 슬래시
+                # 구분 존 표기의 범위(90~100)를 복원하는 데 쓴다. TP 경로는 이 값을
+                # 읽지 않으므로 TP 동작에는 영향 없다.
+                vals.ladder_last = _to_float(_nums[-1]) if _nums else None
                 (spec_out if is_spec else out).append(vals)
                 continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
@@ -345,7 +367,13 @@ def parse_setup(text: str, current_price: Optional[float] = None,
 
     # 첫 엔트리 채택 (여러 개면 첫 라벨)
     e = entries[0]
-    entry_low, entry_high = (e[0], e[-1])
+    _elast = getattr(e, "ladder_last", None)
+    if _elast is not None:
+        # 사다리형 엔트리 존("Entry - $90/95/$100" 등) — 첫값·끝값으로 범위를 복원한다.
+        # TP 사다리는 ladder_last 를 무시하므로 TP 동작에는 영향 없다.
+        entry_low, entry_high = min(e[0], _elast), max(e[0], _elast)
+    else:
+        entry_low, entry_high = (e[0], e[-1])
     entry = (entry_low + entry_high) / 2
 
     if not _sanity(entry, current_price, max_dev):

@@ -77,51 +77,56 @@ def _parse_db(db_bytes: bytes) -> dict:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             f.write(db_bytes)
             tmp_path = f.name
+        # 2026-07-28 수리: sqlite3.DatabaseError("file is not a database") 는
+        # OperationalError 의 부모라 내부 핸들러를 통과 → conn.close() 미실행 →
+        # Windows 에서 finally 의 unlink 가 PermissionError. 이제 conn 을 닫는 책임을
+        # try/finally 로 명시해 어떤 예외에서도 close() 가 보장되도록 한다.
         conn = sqlite3.connect(tmp_path)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-
-        out: dict = {}
         try:
-            # 2026-07-23 수정: 실제 스키마는 (username, outcome∈'hit'/'miss', ...) 행 단위.
-            # 워쳐 database.py::get_chartist_accuracy() 와 동일한 집계로 계산한다.
-            hit_miss: dict = {}
-            for username, outcome, cnt in c.execute(
-                "SELECT username, outcome, COUNT(*) FROM chartist_stats "
-                "WHERE outcome IN ('hit','miss') GROUP BY username, outcome"
-            ).fetchall():
-                hit_miss.setdefault(username, {"hit": 0, "miss": 0})[outcome] = cnt
-            for username, hm in hit_miss.items():
-                total = hm["hit"] + hm["miss"]
-                out[username] = {
-                    "hit_rate": (hm["hit"] / total) if total else None,
-                    "hit_count": total,
-                    "whitelisted": False,
-                    "followers": None,
-                }
-        except sqlite3.OperationalError:
-            # 스키마가 다르면(컬럼명 변화) 통계 없이 진행 — 치명 아님
-            logger.warning("[watcher] chartist_stats 스키마 인식 실패 - 적중률 생략")
+            out: dict = {}
+            try:
+                # 2026-07-23 수정: 실제 스키마는 (username, outcome∈'hit'/'miss', ...) 행 단위.
+                # 워쳐 database.py::get_chartist_accuracy() 와 동일한 집계로 계산한다.
+                hit_miss: dict = {}
+                for username, outcome, cnt in c.execute(
+                    "SELECT username, outcome, COUNT(*) FROM chartist_stats "
+                    "WHERE outcome IN ('hit','miss') GROUP BY username, outcome"
+                ).fetchall():
+                    hit_miss.setdefault(username, {"hit": 0, "miss": 0})[outcome] = cnt
+                for username, hm in hit_miss.items():
+                    total = hm["hit"] + hm["miss"]
+                    out[username] = {
+                        "hit_rate": (hm["hit"] / total) if total else None,
+                        "hit_count": total,
+                        "whitelisted": False,
+                        "followers": None,
+                    }
+            except sqlite3.OperationalError:
+                # 스키마가 다르면(컬럼명 변화) 통계 없이 진행 — 치명 아님
+                logger.warning("[watcher] chartist_stats 스키마 인식 실패 - 적중률 생략")
 
-        try:
-            for r in c.execute("SELECT username FROM chartist_whitelist").fetchall():
-                out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
-                                               "whitelisted": False, "followers": None})
-                out[r["username"]]["whitelisted"] = True
-        except sqlite3.OperationalError:
-            pass
+            try:
+                for r in c.execute("SELECT username FROM chartist_whitelist").fetchall():
+                    out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
+                                                   "whitelisted": False, "followers": None})
+                    out[r["username"]]["whitelisted"] = True
+            except sqlite3.OperationalError:
+                pass
 
-        try:
-            for r in c.execute("SELECT username, followers FROM author_cache").fetchall():
-                out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
-                                               "whitelisted": False, "followers": None})
-                out[r["username"]]["followers"] = r["followers"]
-        except sqlite3.OperationalError:
-            pass
+            try:
+                for r in c.execute("SELECT username, followers FROM author_cache").fetchall():
+                    out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
+                                                   "whitelisted": False, "followers": None})
+                    out[r["username"]]["followers"] = r["followers"]
+            except sqlite3.OperationalError:
+                pass
 
-        conn.close()
-        logger.info("[watcher] 작성자 통계 %d명 로드", len(out))
-        return out
+            logger.info("[watcher] 작성자 통계 %d명 로드", len(out))
+            return out
+        finally:
+            conn.close()
     except Exception as e:  # noqa: BLE001
         logger.warning("[watcher] DB 파싱 실패: %s", e)
         return {}

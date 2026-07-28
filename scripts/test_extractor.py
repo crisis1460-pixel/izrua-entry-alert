@@ -74,6 +74,13 @@ REAL_BUG_CASES = [
         5.10,
         {"entry": 5.09, "sl": 5.29, "tp": 4.970, "direction": "short"},
     ),
+    (
+        "실전버그 재현 - AAVE 슬래시 엔트리 존 범위 보존 (Entry - $90/95/$100 → 90~100)",
+        "Long setup\nEntry - $90/95/$100\nTP's - $125/145/155",
+        95.0,
+        {"entry": 95.0, "entry_low": 90.0, "entry_high": 100.0, "sl": None, "tp": 125.0,
+         "direction": "long", "rr_none_ok": True},
+    ),
 ]
 
 def _close(a, b):
@@ -94,6 +101,8 @@ for desc, text, price, expected in REAL_BUG_CASES:
         and _close(r["sl"], expected["sl"])
         and _close(r["tp"], expected["tp"])
         and rr_ok
+        and ("entry_low" not in expected or _close(r.get("entry_low"), expected["entry_low"]))
+        and ("entry_high" not in expected or _close(r.get("entry_high"), expected["entry_high"]))
     )
     got = "None" if r is None else f"entry={r['entry']} sl={r['sl']} tp={r['tp']} rr={r['rr']}"
     mark = "✅" if passed else "❌"

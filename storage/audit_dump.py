@@ -84,7 +84,10 @@ _DEFAULTS = {
 def _cfg(key):
     try:
         from config import settings
-        return settings.get(key)
+        # 2026-07-28 수리: settings.get() 이 예외 없이 None 을 반환하는 경우도 _DEFAULTS 로 폴백.
+        # None 이 그대로 내려가면 prune_raw_text(keep_days=None) → TypeError 로 raw_text 정리 비활성화.
+        v = settings.get(key)
+        return v if v is not None else _DEFAULTS[key]
     except Exception:  # noqa: BLE001 - 설정 부재는 기본값으로 흡수 (덤프가 회차를 죽이면 안 됨)
         return _DEFAULTS[key]
 
@@ -159,7 +162,7 @@ def prune_old_dumps(out_dir, keep_weeks: int) -> list:
     removed = []
     for w, p in files:
         if w not in keep:
-            p.unlink()
+            p.unlink(missing_ok=True)  # 동시 삭제 경합 시 FileNotFoundError 방지
             removed.append(p.name)
     return sorted(removed)
 

@@ -273,25 +273,27 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
         return "skipped"
 
     text = telegram.render_collect_stale_alert(elapsed / 3600, threshold_hours)
-    try:
-        sent = telegram.send(text)
-    except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
-            raise
-        logger.error("수집 정체 경고 발송 실패: %s: %s", type(e).__name__, e)
-        sent = False
-    if not sent:
-        print("::warning::수집 정체 경고 발송 실패")
-        return "failed"
-
+    # 2026-07-28 수리: meta→commit→send 순서로 통일(price_check.py 패턴 승계).
+    # meta 를 먼저 쓰면 send 실패 시 오늘 경보를 한 번 건너뛰더라도 중복 발송이 없다.
+    # send→meta 역순이면 meta 기록 실패 시 다음 회차에도 같은 경보가 반복된다.
     try:
         with db.connect(db_path) as conn:
             db.set_meta(conn, META_COLLECT_STALE_WARNED, day)
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 정체 경고 meta 기록 실패(발송 자체는 완료): %s: %s",
-                     type(e).__name__, e)
+        logger.error("수집 정체 경고 meta 기록 실패(발송 생략): %s: %s", type(e).__name__, e)
+        return "failed"
+
+    try:
+        sent = telegram.send(text)
+    except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("수집 정체 경고 발송 실패(meta는 기록됨): %s: %s", type(e).__name__, e)
+        sent = False
+    if not sent:
+        print("::warning::수집 정체 경고 발송 실패")
         return "failed"
 
     logger.warning("[정체감시] 수집 정체 경고 발송(%.1fh 미갱신)", elapsed / 3600)
@@ -474,7 +476,9 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
     price_status, price_summary = "ok", None
     try:
         price_summary = (price_runner or _default_price_runner)()
-    except Exception as e:  # noqa: BLE001 - 요약을 남기고 종료코드로만 실패를 알린다
+    except BaseException as e:  # noqa: BLE001 - 요약을 남기고 종료코드로만 실패를 알린다
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
         price_status = "failed"
         logger.exception("가격체크 실패: %s", e)
         print(f"::error::가격체크 실패 - {type(e).__name__}")
