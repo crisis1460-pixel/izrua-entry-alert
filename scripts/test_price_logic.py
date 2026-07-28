@@ -30,6 +30,12 @@ settings.SETTINGS["db_path"] = TEST_DB
 settings.SETTINGS["announcement_alert_enabled"] = False
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
+# 발송 원장(2026-07-28)은 DB 밖 파일이라 DB 를 지워도 남는다 — 안 지우면 직전
+# 실행이 남긴 발송 이력이 이번 실행의 알림을 재발송으로 오인해 막는다(실측: 두 번째
+# 실행부터 T2 부터 무너짐). 테스트 시작 시 함께 초기화한다.
+from storage import alert_ledger as _alert_ledger   # noqa: E402
+if os.path.exists(_alert_ledger.ledger_path(TEST_DB)):
+    os.remove(_alert_ledger.ledger_path(TEST_DB))
 db.init_db(TEST_DB)
 
 now = time.time()
@@ -1835,8 +1841,35 @@ price_check.run_once(now + 2000 + price_check._RESEND_BLOCK_SEC + 60)
 check("RS4 차단 창을 넘기면 다시 발송된다(영구 봉인 아님)",
       len(sent_messages) == _before_rs3 + 1)
 
+# ── LG: 발송 원장이 DB 유실을 견디는가 (2026-07-28) ─────────────────────────
+# 위 RS 는 DB(alerts_log) 만으로도 통과한다. 그런데 그 표는 **경합에서 지면 통째로
+# 사라진다** — levels.db 가 바이너리라 커밋백이 전체 파일 교체밖에 못 하기 때문이다
+# (실측: 커밋 28e14a9 와 870e889 의 id 68~70 이 같은 번호에 다른 내용). 그래서 원장을
+# DB 밖 NDJSON 으로 뺐다. 여기서는 그 목적이 실제로 달성됐는지만 본다.
+from storage import alert_ledger as _AL   # noqa: E402
+
+with db.connect(TEST_DB) as conn:
+    _rs_id = conn.execute(
+        "SELECT id FROM levels WHERE coin_symbol='RSND'").fetchone()["id"]
+check("LG1 발송이 DB 와 별개인 원장 파일에도 남는다",
+      _AL.recent_exists(TEST_DB, "RSND", "touch", [_rs_id], 0))
+
+# 사고 재현 — 커밋백이 DB 를 덮어써 alerts_log 행이 사라진 상태.
+# 원장은 합집합 병합으로 살아남으므로, 그것만으로 재발송이 막혀야 한다.
+with db.connect(TEST_DB) as conn:
+    conn.execute("DELETE FROM alerts_log WHERE coin_symbol='RSND'")
+    conn.execute("UPDATE levels SET status='watching', touched_at=NULL "
+                 "WHERE coin_symbol='RSND'")
+    conn.commit()
+_before_lg = len(sent_messages)
+price_check.run_once(now + 2000 + price_check._RESEND_BLOCK_SEC + 120)
+check("LG2 DB 기록이 통째로 사라져도 원장만으로 재발송이 막힌다",
+      len(sent_messages) == _before_lg)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
 os.remove(TEST_DB)
+if os.path.exists(_alert_ledger.ledger_path(TEST_DB)):
+    os.remove(_alert_ledger.ledger_path(TEST_DB))   # 다음 실행 오염 방지(위 주석 참고)
 sys.exit(0 if ok else 1)

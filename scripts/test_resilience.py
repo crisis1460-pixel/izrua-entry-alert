@@ -702,7 +702,22 @@ _pc_yml = (_repo_root / ".github" / "workflows" / "price-check.yml").read_text(e
 check("수리7: push 3회 실패 시 ::warning 대신 ::error 로 실패를 표면화",
       "::warning::상태 커밋 push 3회 실패" not in _pc_yml and "::error::" in _pc_yml)
 _after_error = _pc_yml.split("::error::")[-1] if "::error::" in _pc_yml else ""
-check("수리7: ::error:: 직후 exit 1 로 잡을 실제로 실패시킨다", "exit 1" in _after_error[:200])
+
+
+def _fails_after_error(tail: str) -> bool:
+    """마지막 ::error:: 뒤에 exit 1 이 오고, 그 전에 exit 0 이 끼지 않는가.
+
+    2026-07-28: 예전엔 `"exit 1" in tail[:200]` 으로 쟀는데, 그 사이에 코드가 몇 줄만
+    늘어도(이번엔 push 실패 시 텔레그램 경보 curl) 불변식은 멀쩡한데 테스트가 깨졌다.
+    지켜야 할 성질은 '문구와 exit 1 사이의 물리적 거리'가 아니라 **잡이 실제로
+    실패하는 것**이므로 그걸 직접 잰다."""
+    if "exit 1" not in tail:
+        return False
+    return "exit 0" not in tail[:tail.index("exit 1")]
+
+
+check("수리7: ::error:: 뒤 exit 1 로 잡을 실제로 실패시킨다(중간에 exit 0 없음)",
+      _fails_after_error(_after_error))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1021,8 +1036,39 @@ check("과제3: 예전 '3회 실패' 문구는 사라지고 '6회 실패'로 갱
 check("과제3(수리7 회귀 확인): ::error:: 로 실패 표면화 유지",
       "::error::" in _pc_yml_card2)
 _after_error_card2 = _pc_yml_card2.split("::error::")[-1]
-check("과제3(수리7 회귀 확인): ::error:: 직후 exit 1 여전히 존재",
-      "exit 1" in _after_error_card2[:200])
+check("과제3(수리7 회귀 확인): ::error:: 뒤 exit 1 여전히 존재",
+      _fails_after_error(_after_error_card2))
+
+# ── 2026-07-28 중복알림 사고 후속 3건 (워크플로 쪽 불변식) ────────────────────
+# ① 재동기화가 삭제를 전파해야 한다. `git checkout <tree> -- <path>` 는 삭제를
+#    전파하지 않으므로(git 고유 동작) data/ 를 먼저 지우고 받아야 한다. clean -fd 는
+#    해법이 아니다 — 추적 중인 파일은 안 지운다(실측 확인).
+_sync_block = _pc_yml_card2.split("data/ 최신 상태 재동기화")[-1].split("- name:")[0]
+check("07-28①: 재동기화가 data/ 를 먼저 지워 삭제를 전파한다",
+      "rm -rf data" in _sync_block and "git checkout FETCH_HEAD -- data/" in _sync_block)
+check("07-28①: 최초 부팅(원격에 DB 없음)엔 재동기화를 건너뛴다"
+      " - 아티팩트 복원분 보호",
+      "git cat-file -e FETCH_HEAD:data/levels.db" in _sync_block)
+check("07-28①: 체크아웃 실패 시 지운 data/ 를 되돌린다",
+      "git checkout -- data/" in _sync_block)
+
+# ② push 최종 실패는 텔레그램으로도 알린다. ::error + 액션 실패 메일만으로는 신호가
+#    가지 않는다(07-23~26 사흘 침묵 전력). 이 실패는 '알림은 나갔는데 기록이 유실'
+#    이라 다음 회차가 확정적으로 재발송하는, 사람이 즉시 알아야 할 유일한 모드다.
+check("07-28②: push 6회 실패 시 텔레그램 경보를 쏜다",
+      "api.telegram.org" in _after_error_card2 and "sendMessage" in _after_error_card2)
+check("07-28②: 경보 실패가 exit 1 을 가리지 않는다(|| true)",
+      "|| true" in _after_error_card2[:_after_error_card2.index("exit 1")])
+
+# ③ 발송 원장은 '덮어쓰기'가 아니라 '합집합'으로 되돌려야 한다 — 경합에서 진 회차의
+#    발송 기록이 사라지면 다음 회차가 그걸 모르고 재발송한다(실측: 커밋 28e14a9 의
+#    03:53:50 기록이 870e889 스냅샷에 덮여 영구 소실).
+_backup_block = _pc_yml_card2.split("상태 커밋 백")[-1]
+check("07-28③: 커밋백이 발송 원장을 합집합 병합한다",
+      "alert_ledger" in _backup_block and "merge_files" in _backup_block)
+check("07-28③: 병합 입력으로 원격 원장을 스냅샷 복원 전에 확보한다",
+      "REMOTE_LEDGER" in _backup_block
+      and _backup_block.index("REMOTE_LEDGER") < _backup_block.index("shutil.rmtree"))
 
 
 # ══════════════════════════════════════════════════════════════════

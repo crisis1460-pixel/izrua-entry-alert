@@ -23,7 +23,7 @@ from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 
 from config import settings
 from monitor import announcements, upbit
 from notify import telegram
-from storage import db
+from storage import alert_ledger, db
 
 logger = logging.getLogger("alert.price_check")
 
@@ -551,13 +551,21 @@ def run_once(now: float = None) -> dict:
 
                 # 재발송 차단(2026-07-28 실사고 — DOT·ENA·AAVE 가 03:53·03:54 두 번).
                 # 평시엔 status 전이(touched/previewed)가 막지만, 회차가 겹치면 뒤
-                # 회차가 앞 회차 커밋 '이전' DB로 돌아 그 전이를 못 본다. alerts_log 는
-                # append-only 라 경합에도 양쪽 행이 남으므로 여기서 한 번 더 막는다.
-                # 창을 재발송 간격(2분)이 아니라 넉넉히 잡는 이유: 경합은 앞 회차가
-                # 늦게 끝날수록 벌어지고, 같은 클러스터를 이 창 안에 두 번 알릴
-                # 정당한 사유가 없다(터치는 상태가 종결되고 예고는 dup_preview 가 막는다).
-                if send_ok and db.recent_alert_exists(
-                        conn, coin, kind, ids, now - _RESEND_BLOCK_SEC):
+                # 회차가 앞 회차 커밋 '이전' DB로 돌아 그 전이를 못 본다.
+                #
+                # 두 곳을 본다. DB(alerts_log)는 같은 회차 안에서 빠르지만 **경합에서
+                # 지면 통째로 사라진다** — levels.db 는 바이너리라 커밋백이 전체 파일
+                # 교체밖에 못 하기 때문(실측: 커밋 28e14a9 와 870e889 의 id 68~70 이
+                # 같은 번호에 다른 내용). 그래서 NDJSON 원장을 함께 본다 — 이건 줄
+                # 단위라 커밋백이 두 회차 것을 합집합으로 살릴 수 있다.
+                # 창을 회차 간격이 아니라 넉넉히(10분) 잡는 이유: 경합 폭은 앞 회차가
+                # 늦게 끝날수록 벌어지고(수집 회차는 6~10분), 같은 클러스터를 이 창
+                # 안에 두 번 알릴 정당한 사유가 없다(터치는 상태가 종결되고 예고는
+                # dup_preview 가 막는다).
+                if send_ok and (alert_ledger.recent_exists(
+                        db_path, coin, kind, ids, now - _RESEND_BLOCK_SEC)
+                        or db.recent_alert_exists(
+                            conn, coin, kind, ids, now - _RESEND_BLOCK_SEC)):
                     logger.warning("[체크] %s %s 최근 발송 이력 있음 - 재발송 차단", coin, kind)
                     send_ok = False
                     obs["suppressed_dup"] += 1
@@ -602,6 +610,9 @@ def run_once(now: float = None) -> dict:
                     # 관찰 데이터(daily_stats)에는 영향이 없다.
                     if telegram.send(text, urgency="high" if touched else "low"):
                         db.record_alert(conn, coin, kind, ids, day, now)
+                        # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
+                        # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
+                        alert_ledger.append(db_path, coin, kind, ids, now)
                         summary["touches" if touched else "previews"] += 1
                     else:
                         summary["suppressed"] += 1
