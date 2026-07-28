@@ -81,6 +81,17 @@ REAL_BUG_CASES = [
         {"entry": 95.0, "entry_low": 90.0, "entry_high": 100.0, "sl": None, "tp": 125.0,
          "direction": "long", "rr_none_ok": True},
     ),
+    # 2026-07-29 실사고 재현 - ONDO id=30: "Profit level 0.3981" 형식에서
+    # `targets?`가 서술부 동사 "the thesis targets the 0.75 premium zone"을 라벨로
+    # 오인해 tp=0.75(정답 0.3981)로 저장됐다. \bprofit\s*level\b 추가로 수리.
+    (
+        "실전버그 재현 - ONDO (Profit level 서술부 targets 동사 오인)",
+        "Long trade\nEntry 0.3099\nProfit level 0.3981 (28.46%)\n"
+        "Stop level 0.3046 (1.71%)\nRR 16.64\n\n"
+        "The trade thesis targets the 0.75 premium zone as the exit level.",
+        0.32,
+        {"entry": 0.3099, "sl": 0.3046, "tp": 0.3981, "direction": "long"},
+    ),
 ]
 
 def _close(a, b):

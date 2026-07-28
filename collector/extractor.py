@@ -43,7 +43,11 @@ _TP_LABEL = re.compile(
     # 2026-07-28 수리: \btp\d?\b 단어경계 — http/https URL 내 "tp" 가 목표가 라벨로
     # 잡히는 버그(URL 숫자가 tp 자리 선점 → 정상 목표가 유실, DB 현재 0건).
     # (?:\s*\([^)]*\))? — entry/sl 과 일관성 유지.
-    r"(take\s*profit|targets?|\btp\d?\b|목표가?|목표|타겟\s*\d?|익절가?)"
+    # 2026-07-29 수리: "Profit level 0.3981" 형식에서 `targets?`가 서술부 동사
+    # "the thesis targets 0.75" 를 라벨로 오인해 0.75 를 TP 로 잡는 버그.
+    # \bprofit\s*level\b 추가 → "Profit level" 이 텍스트에 먼저 나오면 우선 채택.
+    # (Take-Profit 케이스: "Profit" 뒤가 "Targets/zone/…" 이지 "level" 이 아니라 불일치 ✓)
+    r"(take\s*profit|\bprofit\s*level\b|targets?|\btp\d?\b|목표가?|목표|타겟\s*\d?|익절가?)"
     r"(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
 )
 
