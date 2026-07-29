@@ -903,7 +903,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     _tp_day = _day_kst(now)
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                        resolve_price, entry_krw, usdt_krw)
+                        resolve_price, entry_krw)
                     telegram.send(text, urgency="high")
                     db.record_alert(conn, lv["coin_symbol"],
                                     f"tp{_tp_alert_idx + 1}", [lv["id"]], _tp_day, now)

@@ -709,7 +709,7 @@ def render_outcome_chain_alert(mismatch: dict) -> str:
 
 
 def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
-                            tp_krw: float, entry_krw: float, usdt_krw: float) -> str:
+                            tp_krw: float, entry_krw: float) -> str:
     """다단계 TP 중간·최종 도달 알림.
 
     tp_n: 방금 도달한 TP 번호(1-indexed). tp_total: 전체 TP 수.

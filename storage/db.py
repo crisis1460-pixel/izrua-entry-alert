@@ -1105,9 +1105,20 @@ def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
 
 
 def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float) -> None:
-    """터치 알림 발송 후 거래량 급증 감시 목록에 추가. 이미 있으면 무시(중복 등록 안전)."""
+    """터치 알림 발송 후 거래량 급증 감시 목록에 추가.
+
+    이미 감시 중(alerted=0)이면 건드리지 않는다 — 기존 감시 타이머를 재설정하지 않아야
+    "72h 내 한 번"이라는 창이 유지된다. 이미 발송된(alerted=1) 행이면 리셋한다 —
+    같은 ticker 라도 새 터치는 새 감시 대상이다. 없으면 INSERT."""
     conn.execute(
-        "INSERT OR IGNORE INTO volume_watch (ticker, coin_symbol, added_at) VALUES (?,?,?)",
+        """INSERT INTO volume_watch (ticker, coin_symbol, added_at)
+           VALUES (?,?,?)
+           ON CONFLICT(ticker) DO UPDATE SET
+             coin_symbol=excluded.coin_symbol,
+             added_at=excluded.added_at,
+             alerted=0,
+             alerted_at=NULL
+           WHERE alerted=1""",
         (ticker, coin_symbol, now),
     )
 
