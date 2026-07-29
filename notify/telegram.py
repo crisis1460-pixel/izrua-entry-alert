@@ -269,6 +269,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         f"{kind_kr} <b>{html.escape(coin_symbol)}</b>",
         head_meta,
     ]
+    # TP 도달 훈장 — 작성자의 자체 적중 1회 이상이면 상단에 배지 표시.
+    # author_self_wins 는 price_check.py 가 db.get_author_self_stats 로 주입한다.
+    _tp_wins = rep.get("author_self_wins") or 0
+    if _tp_wins >= 1:
+        lines.append(f"🏅 TP도달 {_tp_wins}회")
     lines.extend(_author_block(rep))
     lines.append(_SEP)
 
