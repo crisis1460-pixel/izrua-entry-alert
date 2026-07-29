@@ -915,6 +915,17 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             else:
                 # 최종 TP 또는 단일 TP 적중 — 종결
                 _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
+                if _is_multi_tp:
+                    # 최종 목표 달성 알림 (중간 TP 경로와 동일 패턴)
+                    _tp_day = _day_kst(now)
+                    text = telegram.render_tp_partial_alert(
+                        lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
+                        resolve_price, entry_krw)
+                    telegram.send(text, urgency="high")
+                    db.record_alert(conn, lv["coin_symbol"],
+                                    f"tp{_tp_alert_idx + 1}", [lv["id"]], _tp_day, now)
+                    alert_ledger.append(db_path, lv["coin_symbol"],
+                                        f"tp{_tp_alert_idx + 1}", [lv["id"]], now)
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
                 resolved += 1

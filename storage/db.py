@@ -1126,10 +1126,10 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float) -> None:
 def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
     """미발송(alerted=0) 항목 중 max_age_sec 이내에 등록된 것만 반환."""
     cutoff = now - max_age_sec
-    return conn.execute(
+    return [dict(r) for r in conn.execute(
         "SELECT ticker, coin_symbol, added_at FROM volume_watch "
         "WHERE alerted=0 AND added_at >= ?", (cutoff,)
-    ).fetchall()
+    ).fetchall()]
 
 
 def mark_volume_alerted(conn, ticker: str, now: float) -> None:
