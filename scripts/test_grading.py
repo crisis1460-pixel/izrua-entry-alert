@@ -1,8 +1,9 @@
-# collector/grading 단위 테스트 — 2026-07-26 등급 배점 재조정(SL 없는 글의
-# 구조적 등급 상한 해소) 회귀 방어. 기대값은 전부 손계산.
+# collector/grading 단위 테스트 — 2026-07-29 R:R 제거(표시전용 유지) 회귀 방어.
+# 기대값은 전부 손계산.
 #
-# 배점 요약: 팔로워(1~10) + R:R(0~55, SL 필요) + 가격근접도(0~20)
-#            + 목표거리(-6 ~ +25) + 데이터완결성(2/8/20/30), 컷 S85/A70/B55/C40
+# 배점 요약: 팔로워(1~10) + 가격근접도(0~20)
+#            + 목표거리(-6 ~ +25, SL 유무 무관 전 신호 적용)
+#            + 데이터완결성(2/8/20/30), 컷 S85/A70/B55/C40
 import sys
 from pathlib import Path
 
@@ -169,21 +170,22 @@ check("G6b 감점 구간이 대체배점으로 상쇄되지 않는다",
 check("G6c 2.5%/4.0% 도 C 이하 유지", s(2.5)[1] == 39 and s(4.0)[1] == 41
       and s(2.5)[0] == "D" and s(4.0)[0] == "C")
 
-# ── G7: R:R 경로(SL 있는 글)는 이번 변경으로 바뀌지 않는다 ───────
-# entry100/sl90/tp150 → risk10 reward50 → rr=5 → +55. 3 + 55 + 20 + 30 = 108 → S
+# ── G7: SL 있는 글도 목표거리 배점 전면 적용(2026-07-29 R:R 제거) ──
+# entry100/sl90/tp150 → rr=5(표시용, 점수無). tp_pct=50% → (60,9)밴드 → +9
+# score = 3(팔로워) + 0(R:R 제거) + 20(근접) + 9(TP) + 30(완결) = 62 → B
 _g_rr, _s_rr, _rr = calculate_grade(500, "long", 100.0, 90.0, 150.0, 100.0)
-check("G7 R:R 5 이상 만점 경로 불변", eq(_s_rr, 108) and _g_rr == "S" and eq(_rr, 5.0))
-# 과대목표 감점은 이번 범위 밖 — R:R 경로는 먼 목표에도 그대로 만점(백로그 이월)
+check("G7 SL 있어도 R:R 점수無, rr 표시용 유지(62/B)", eq(_s_rr, 62) and _g_rr == "B" and eq(_rr, 5.0))
+# 과대목표 +185.7% → (inf,3)밴드 → +3. score = 3 + 20 + 3 + 30 = 56 → B
 _, _s_rr_far, _rr_far = calculate_grade(500, "long", 100.0, 90.0, 285.7, 100.0)
-check("G7b R:R 경로의 과대목표는 이번 범위 밖(현행 유지)",
-      eq(_s_rr_far, 108) and _rr_far > 5)
-# SL 있는 글의 초근접 TP 감점도 그대로 (rr<1 이라 R:R 가점 0, 감점 -6)
-_, _s_rr_close, _rr_close = calculate_grade(500, "long", 100.0, 99.0, 101.5, 100.0)
-check("G7c SL 있는 초근접 TP: 감점 유지 + 대체배점 없음",
-      eq(_s_rr_close, 3 + 22 + 20 - 6 + 30) and eq(_rr_close, 1.5))
-# 역전된 SL(risk<=0)이면 rr 계산 불가 → 대체배점 경로로 넘어간다
+check("G7b 과대목표 SL 있음: tp_pct 185.7% → +3, score=56/B",
+      eq(_s_rr_far, 56) and _ == "B" and _rr_far > 5)
+# 초근접 TP +1.5% → (2,-6)밴드 → -6. rr=1.5 표시용. score = 3 + 20 - 6 + 30 = 47 → C
+_g_close, _s_rr_close, _rr_close = calculate_grade(500, "long", 100.0, 99.0, 101.5, 100.0)
+check("G7c SL 있는 초근접 TP: 감점(-6) 유지, R:R 점수無, score=47/C",
+      eq(_s_rr_close, 3 + 20 - 6 + 30) and _g_close == "C" and eq(_rr_close, 1.5))
+# 역전된 SL(risk<=0)이면 rr 계산 불가 → R:R 제거 후에도 동일(tp_distance 정상 적용)
 _, _s_bad_sl, _rr_bad = calculate_grade(500, "long", 100.0, 110.0, 120.0, 100.0)
-check("G7d 잘못된 SL(리스크<=0)로 R:R 불가 시 대체배점 적용(+데이터완결성 30 유지)",
+check("G7d 잘못된 SL(리스크<=0)로 R:R 불가 시 TP 배점 정상 적용(78/A)",
       _rr_bad is None and eq(_s_bad_sl, 3 + 20 + 25 + 30))
 
 # ── G8: 데이터완결성/근접도 배점 불변 ────────────────────────────

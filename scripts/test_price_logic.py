@@ -916,37 +916,16 @@ clustering.build_clusters = _orig_bc
 check("T31 price_check._build_clusters 가 analytics.clustering.build_clusters 로 실제 위임"
       "(재구현 아님)", len(_calls31) == 1)
 
-# ── T32: TP 거리 감점 폭 로컬 재현 함수가 실제 grading.py 와 계속 일치하는지 교차검증 ──
-# price_check._tp_distance_penalty 는 collector/grading.py 를 건드리지 않으려고
-# 감점 규칙(2%/-6, 3%/-4, 5%/-2)을 로컬에 복제했다(2026-07-26). 개발자A 가 같은 날
-# grading.py 의 등급 배점을 재조정 중이라 드리프트(값이 벌어짐) 위험이 있는데,
-# 이 테스트가 실제 calculate_grade() 결과와 매번 대조해 드리프트를 즉시 잡아준다
-# (거리별 점수차 = target 을 아주 멀리(감점 0) 뒀을 때와의 점수 차이).
-from collector.grading import calculate_grade as _cg32  # noqa: E402
-
-
-def _score32(tp_pct):
-    """감점 폭만 순수하게 분리하기 위한 픽스처 — SL 을 반드시 둔다.
-
-    2026-07-26 등급 배점 재조정 후, SL 없는 글에는 목표거리 '대체 가점'이 붙어
-    (5%↑ 구간) 점수차로 감점만 역산할 수 없게 됐다. SL 을 목표거리의 1/10 로 두면
-    rr=10 으로 고정돼 R:R·완결성·근접도 항이 전부 불변 → 점수차 = 감점 폭뿐."""
-    target = 100.0 * (1 + tp_pct / 100.0)
-    sl = 100.0 - (target - 100.0) / 10.0
-    return _cg32(500, "long", 100.0, sl, target, 100.0)[1]
-
-
-_far_score32 = _score32(8.0)  # 감점 0 기준선 (5%↑ 이라 감점 없음)
-
-
-def _actual_penalty32(entry, target):
-    tp_pct = (target - entry) / entry * 100.0
-    return _far_score32 - _score32(tp_pct)
-
+# ── T32: TP 거리 감점 폭 — grading.tp_distance_points 직접 교차검증 ──
+# _tp_distance_penalty 는 grading.tp_distance_points(has_rr=True) 에 직접 위임한다.
+# 2026-07-29 R:R 제거로 calculate_grade 가 has_rr=False 로 전환되어,
+# 종전의 'SL 고정 score 차이' 방식(기준선 8%도 TP 보너스 포함으로 변함)은 폐기.
+# tp_distance_points(has_rr=True) 를 직접 비교해 드리프트를 잡는다.
+from collector.grading import tp_distance_points as _tdp32  # noqa: E402
 
 for _tp_pct32 in (0.5, 1.99, 2.0, 2.5, 2.99, 3.0, 4.0, 4.99, 5.0, 8.0):
     _target32 = 100.0 * (1 + _tp_pct32 / 100.0)
-    _want32 = _actual_penalty32(100.0, _target32)
+    _want32 = -_tdp32("long", 100.0, _target32, has_rr=True)  # 감점 폭(양수)
     _got32 = price_check._tp_distance_penalty("long", 100.0, _target32)
     check(f"T32 TP거리감점 로컬재현 일치 (tp_pct={_tp_pct32}%)", abs(_got32 - _want32) < 1e-9)
 
@@ -954,7 +933,7 @@ check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
       price_check._tp_distance_penalty("long", None, 105.0) == 0
       and price_check._tp_distance_penalty("long", 100.0, None) == 0)
 check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
-      - _actual_penalty32(100.0, 101.5)) < 1e-9)  # 숏 -1.5% == 롱 +1.5% 와 감점 대칭
+      - (-_tdp32("short", 100.0, 98.5, has_rr=True))) < 1e-9)
 
 # ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정) ────────────────────────
 # 단일 TP < 5% 또는 다중 TP 에서 마지막(가장 먼) TP < 5% 이면 스윙 신호로 보지 않아
