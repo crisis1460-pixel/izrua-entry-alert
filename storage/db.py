@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
+-- 거래량 급증 알림 감시 목록 (Feature 4, 2026-07-29).
+-- 진입가 터치 알림 발송 후 자동 등록, 7일 평균 대비 급증 시 별도 알림 발송.
+CREATE TABLE IF NOT EXISTS volume_watch (
+    ticker      TEXT PRIMARY KEY,
+    coin_symbol TEXT NOT NULL,
+    added_at    REAL NOT NULL,
+    alerted     INTEGER DEFAULT 0,
+    alerted_at  REAL
+);
+
 -- 관찰 집계 (스프린트5 "알림량 관찰기" — 조용히 누적만, 발송 없음).
 -- 신규 수집 건수(levels.collected_at)와 발송 건수(alerts_log)는 이미 원본이 있어
 -- 여기 중복 저장하지 않고 조회 시점에 집계한다(get_observation_report). 여기엔
@@ -1092,6 +1102,35 @@ def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
         "ORDER BY day_kst DESC LIMIT ?", (days,)
     ).fetchall()
     return {r["day_kst"]: r["n"] for r in rows}
+
+
+def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float) -> None:
+    """터치 알림 발송 후 거래량 급증 감시 목록에 추가. 이미 있으면 무시(중복 등록 안전)."""
+    conn.execute(
+        "INSERT OR IGNORE INTO volume_watch (ticker, coin_symbol, added_at) VALUES (?,?,?)",
+        (ticker, coin_symbol, now),
+    )
+
+
+def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
+    """미발송(alerted=0) 항목 중 max_age_sec 이내에 등록된 것만 반환."""
+    cutoff = now - max_age_sec
+    return conn.execute(
+        "SELECT ticker, coin_symbol, added_at FROM volume_watch "
+        "WHERE alerted=0 AND added_at >= ?", (cutoff,)
+    ).fetchall()
+
+
+def mark_volume_alerted(conn, ticker: str, now: float) -> None:
+    """거래량 급증 알림 발송 완료 표시."""
+    conn.execute(
+        "UPDATE volume_watch SET alerted=1, alerted_at=? WHERE ticker=?", (now, ticker))
+
+
+def prune_volume_watch(conn, now: float, max_age_sec: float) -> None:
+    """만료(추가 후 max_age_sec 초과)된 항목 제거."""
+    cutoff = now - max_age_sec
+    conn.execute("DELETE FROM volume_watch WHERE added_at < ?", (cutoff,))
 
 
 def get_observation_report(conn, days: int = 30) -> list:

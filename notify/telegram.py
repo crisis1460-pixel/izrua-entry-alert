@@ -728,6 +728,20 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
     return "\n".join(lines)
 
 
+def render_volume_spike_alert(coin: str, multiplier: float,
+                               current_bil: float, avg_bil: float) -> str:
+    """거래량 급증 알림 (Feature 4 — 진입가 터치 후 2단계 알림).
+    coin: 코인 심볼, multiplier: 현재/평균 배수, current_bil/avg_bil: 단위 억원."""
+    lines = [
+        _SEP,
+        f"🔥 <b>[거래량 급증]</b> <b>{html.escape(coin)}</b>",
+        f"    현재 24h:  {current_bil:.1f}억  ({multiplier:.1f}x 급증)",
+        f"    7일 평균:  {avg_bil:.1f}억",
+        _SEP,
+    ]
+    return "\n".join(lines)
+
+
 def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float) -> str:
     """직전 회차와의 공백이 임계를 넘었을 때의 경고. gap_minutes: 감지된 공백(분),
     threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes)."""

@@ -59,6 +59,39 @@ def fetch_volume_ranks(timeout: float) -> dict:
 _ORDERBOOK_PACE_SEC = 0.12  # 초당 ~8콜 (한도 10의 80%) — 실측 헤더상 별도 그룹
 
 
+def fetch_volume_data(market: str, timeout: float) -> Optional[dict]:
+    """현재 24h 롤링 거래대금 + 최근 7일 일평균 거래대금 (KRW).
+    반환: {'current_24h': float, 'avg_7d': float} | None.
+    2콜: /v1/ticker + /v1/candles/days — 거래량 급증 감시(Feature 4) 전용."""
+    try:
+        resp = requests.get(f"{_BASE}/ticker", params={"markets": market}, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return None
+        current_24h = float(data[0].get("acc_trade_price_24h") or 0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[upbit] %s 24h 거래대금 조회 실패: %s", market, e)
+        return None
+
+    try:
+        resp = requests.get(
+            f"{_BASE}/candles/days", params={"market": market, "count": 8}, timeout=timeout)
+        resp.raise_for_status()
+        candles = resp.json()
+        time.sleep(_CANDLE_PACE_SEC)
+        # 오늘(진행 중) 캔들을 제외하고 이전 7일 평균
+        past = candles[1:8] if len(candles) > 1 else candles
+        if not past:
+            return None
+        avg_7d = sum(float(c.get("candle_acc_trade_price") or 0) for c in past) / len(past)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[upbit] %s 7일 일봉 조회 실패: %s", market, e)
+        return None
+
+    return {"current_24h": current_24h, "avg_7d": avg_7d}
+
+
 def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:
     """호가 매수/매도 잔량비 = total_bid_size / total_ask_size. 실패 시 None.
 

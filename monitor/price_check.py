@@ -640,6 +640,9 @@ def run_once(now: float = None) -> dict:
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
                         alert_ledger.append(db_path, coin, kind, ids, now)
                         summary["touches" if touched else "previews"] += 1
+                        # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4)
+                        if touched and cfg_get("volume_spike_enabled"):
+                            db.add_volume_watch(conn, ticker, coin, now)
                     else:
                         summary["suppressed"] += 1
                         obs["suppressed_send_fail"] += 1
@@ -703,6 +706,14 @@ def run_once(now: float = None) -> dict:
                 summary["outcome_chain_alert"] = True
         except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
             logger.warning("[체크] 해시체인 검증 실패(무시하고 진행): %s", e)
+
+        # 거래량 급증 감시 (Feature 4) — 터치 후 등록된 티커들을 2분마다 확인.
+        # 이 기능의 예외가 핫패스를 죽이지 않도록 통째로 격리한다.
+        if cfg_get("volume_spike_enabled"):
+            try:
+                _check_volume_spikes(conn, now, cfg_get)
+            except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+                logger.warning("[체크] 거래량 급증 감시 실패(무시하고 진행): %s", e)
 
         _save_last_check(conn, now)
 
@@ -920,3 +931,42 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     if resolved:
         logger.info("[적중판정] %d건 종결", resolved)
     return resolved
+
+
+def _check_volume_spikes(conn, now: float, cfg_get) -> None:
+    """감시 목록(volume_watch)에서 거래량 급증 티커 찾아 알림 발송.
+
+    설계 원칙(Feature 4, 2026-07-29):
+    - 조건: 현재 24h 거래대금 > 7일 일평균 × volume_spike_multiplier
+    - meta→commit→send 패턴 (price_check 전역 원칙 — 다른 경보와 동일)
+    - 발송 실패해도 mark_volume_alerted 는 유지(중복 발송 방지 우선)
+    - API 실패(네트워크, 상폐 등)는 조용히 넘김 — 핫패스 생존 최우선"""
+    max_age_sec = cfg_get("volume_spike_watch_hours") * 3600
+    multiplier = cfg_get("volume_spike_multiplier")
+    timeout = cfg_get("http_timeout_sec")
+    watched = db.get_volume_watch_active(conn, now, max_age_sec)
+    for row in watched:
+        ticker = row["ticker"]
+        coin = row["coin_symbol"]
+        try:
+            vol = upbit.fetch_volume_data(ticker, timeout)
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[거래량감시] %s 조회 실패(무시): %s", ticker, e)
+            continue
+        if not vol or vol["avg_7d"] <= 0:
+            continue
+        ratio = vol["current_24h"] / vol["avg_7d"]
+        if ratio < multiplier:
+            continue
+        current_bil = vol["current_24h"] / 1e8
+        avg_bil = vol["avg_7d"] / 1e8
+        db.mark_volume_alerted(conn, ticker, now)
+        conn.commit()
+        text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil)
+        if telegram.send(text, urgency="high"):
+            logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (현재 %.1f억, 평균 %.1f억)",
+                        ticker, ratio, current_bil, avg_bil)
+        else:
+            logger.warning("[거래량급증] %s 알림 발송 실패 (DB 기록은 완료)", ticker)
+    db.prune_volume_watch(conn, now, max_age_sec)
+    conn.commit()

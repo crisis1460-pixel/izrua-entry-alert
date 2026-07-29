@@ -209,6 +209,13 @@ SETTINGS = {
     # 회수한다. 덤프 주기(7일)의 2배 — 한 주 덤프가 실패해도 다음 주가 담고 지나간다.
     "audit_raw_text_keep_days": 14,
 
+    # 거래량 급증 2단계 알림 (Feature 4, 2026-07-29).
+    # 진입가 터치 알림 발송 후 해당 티커를 감시 목록에 올리고, 이후 회차마다
+    # 현재 24h 거래대금이 직전 7일 일평균 대비 multiplier 배 이상이면 별도 알림.
+    "volume_spike_enabled": True,
+    "volume_spike_multiplier": 3.0,       # 현재 24h > 7일 평균 × 이 배수 → 급증 판정
+    "volume_spike_watch_hours": 72,        # 터치 후 이 시간(3일) 동안만 감시, 초과 시 만료
+
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
     "universe_cache_path": "data/universe.json",
