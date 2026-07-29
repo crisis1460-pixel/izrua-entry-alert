@@ -596,6 +596,11 @@ def run_once(now: float = None) -> dict:
                     send_ok = False
                     obs["suppressed_dup"] += 1
 
+                # 터치 시점 시장 심리 스냅샷 — send_ok 시 포착, mark_touched 에 전달
+                _snap_sentiment = None
+                _snap_kimchi = None
+                _snap_volume_rank = None
+
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
                     for lv in cluster:
@@ -625,10 +630,13 @@ def run_once(now: float = None) -> dict:
                     if usd_global and usd_global > 0 and usdt_krw:
                         effective = current / usd_global
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
+                    _snap_sentiment = _sentiment()
+                    _snap_kimchi = kimchi
+                    _snap_volume_rank = _volume_ranks().get(ticker)
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
-                                                 sentiment=_sentiment(), week52=week52,
-                                                 kimchi_pct=kimchi,
-                                                 volume_rank=_volume_ranks().get(ticker))
+                                                 sentiment=_snap_sentiment, week52=week52,
+                                                 kimchi_pct=_snap_kimchi,
+                                                 volume_rank=_snap_volume_rank)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
@@ -680,8 +688,13 @@ def run_once(now: float = None) -> dict:
                                 ticker, cfg_get("http_timeout_sec"))
                         except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                             logger.warning("[체크] %s 호가 기록 실패(무시): %s", ticker, e)
+                    _sent = _snap_sentiment or {}
                     db.mark_touched(conn, touches, now, usdt_krw=usdt_krw,
-                                    bid_ask_ratio=ratio)
+                                    bid_ask_ratio=ratio,
+                                    fear_greed=_sent.get("fear_greed"),
+                                    kimchi_pct=_snap_kimchi,
+                                    btc_dominance=_sent.get("btc_dominance"),
+                                    volume_rank=_snap_volume_rank)
                 else:
                     for lid in ids:
                         db.mark_previewed(conn, lid, now)

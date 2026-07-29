@@ -237,6 +237,13 @@ _EXTRA_COLUMNS = {
     # TP1 적중 시 1로 전진, TP2 적중 시 2로 전진 … 마지막 TP 적중 시 종결.
     # 단일 TP 레벨은 항상 0 으로 유지되며 기존 판정 경로와 완전히 동일하게 동작한다.
     "tp_alert_idx": "INTEGER DEFAULT 0",
+    # 터치 시점 시장 심리 스냅샷 — 표시에만 쓰고 버리던 값을 장기 사후분석용으로 보존.
+    # 순수 로깅 컬럼: 알림·필터·등급·판정 어디에도 쓰이지 않는다.
+    # 나중에 "F&G 낮을 때 신호 적중률이 더 높은가" 같은 조건부 분석의 원천 데이터.
+    "touch_fear_greed": "REAL",       # alternative.me 공포탐욕지수 (0~100)
+    "touch_kimchi_pct": "REAL",       # 김치프리미엄 (%)
+    "touch_btc_dominance": "REAL",    # BTC 시총 점유율 (%)
+    "touch_volume_rank": "INTEGER",   # 업비트 KRW 거래대금 순위
 }
 
 
@@ -439,7 +446,11 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
 
 def mark_touched(conn, touches: list, now: Optional[float] = None,
                  usdt_krw: Optional[float] = None,
-                 bid_ask_ratio: Optional[float] = None) -> None:
+                 bid_ask_ratio: Optional[float] = None,
+                 fear_greed: Optional[float] = None,
+                 kimchi_pct: Optional[float] = None,
+                 btc_dominance: Optional[float] = None,
+                 volume_rank: Optional[int] = None) -> None:
     """touches: [(level_id, touch_price_krw|None, touched_at|None), ...].
 
     2026-07-24 감사 수정: 클러스터 상단 터치 시 하단 레벨(자기 엔트리 미도달)까지
@@ -464,9 +475,11 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
         else:
             conn.execute(
                 "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
-                "touch_usdt_krw=?, touch_bid_ask_ratio=? "
+                "touch_usdt_krw=?, touch_bid_ask_ratio=?, "
+                "touch_fear_greed=?, touch_kimchi_pct=?, touch_btc_dominance=?, touch_volume_rank=? "
                 "WHERE id=? AND status IN ('watching','previewed')",
-                (t_anchor or now, price, usdt_krw, bid_ask_ratio, lid))
+                (t_anchor or now, price, usdt_krw, bid_ask_ratio,
+                 fear_greed, kimchi_pct, btc_dominance, volume_rank, lid))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────
