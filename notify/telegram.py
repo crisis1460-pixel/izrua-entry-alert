@@ -329,7 +329,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
             lines.append(f"    저가  {from_low:+.1f}% ({low52:,.0f}원)")
             if high52 > low52:
                 pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
-                filled = max(1, min(10, round(pos / 10)))
+                filled = max(0, min(10, round(pos / 10)))
                 lines.append("")
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
