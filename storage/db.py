@@ -11,6 +11,7 @@ KRW 환산은 가격체크 시점의 실시간 USDT/KRW 로 그때그때 계산�
 """
 
 import hashlib
+import json
 import logging
 import sqlite3
 import time
@@ -116,6 +117,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- 이 값을 포함한 채로 그대로 유지(둘 다 봐야 "감점 때문에 억제 vs 원래도 미달"이
     -- 갈린다).
     suppressed_grade_tp_penalty_only INTEGER NOT NULL DEFAULT 0,
+    -- 스윙 미달 TP 억제 (2026-07-29 B안) — last TP 기준 5% 미만 신호.
+    -- tps_usd 사용 가능 시 전체 목록 중 마지막(가장 먼) TP 기준, 없으면 tp_usd 폴백.
+    suppressed_tp_too_close  INTEGER NOT NULL DEFAULT 0,
     -- 동시터치(같은 1분봉 TP·SL 동시 도달) 재검사 결과 — 판정 신뢰도 지표.
     -- magnified   : 체결내역으로 실제 순서를 복원해 hit/miss 확정
     -- unresolved  : 체결내역을 봤는데도 순서를 못 가려 보수적 miss+ambiguous 유지
@@ -215,6 +219,10 @@ _EXTRA_COLUMNS = {
     # (바꾸면 기존 34건 표본과 축이 어긋난다). 0/1 이면 꼬리표가 안 붙어 기존 알림과
     # 완전히 동일하다. 기존 행은 DEFAULT 0 이고 raw_text 가 있으면 재파싱이 채운다.
     "tp_ladder_count": "INTEGER DEFAULT 0",
+    # 전체 TP 목표가 목록 JSON (2026-07-29 B안). 엔트리 기준 가까운 순으로 정렬된
+    # Python list 를 json.dumps 한 TEXT. 빈 목록이면 "[]". 기존 행은 NULL 이다가
+    # reparse_all 이 raw_text 로 소급 채운다.
+    "tps_usd": "TEXT",
 }
 
 
@@ -286,8 +294,8 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source, tp_ladder_count)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source, tp_ladder_count, tps_usd)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -302,6 +310,7 @@ def upsert_level(conn, level: dict) -> bool:
                 # 소스 미지정이면 tradingview (기존 호출부 무수정 호환)
                 level.get("source") or "tradingview",
                 level.get("tp_ladder_count") or 0,   # 표시 전용(알림 "1/N단계")
+                level.get("tps_usd") or "[]",         # 전체 TP 목표가 목록 JSON
             ),
         )
         return True
@@ -315,14 +324,15 @@ def upsert_level(conn, level: dict) -> bool:
     # 으로 사후 변경되면 '판정 기준 골대 이동'이라 안티게이밍 원칙 위반.
     conn.execute(
         """UPDATE levels SET
-             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, author_followers=?,
-             author_hit_rate=?, author_hit_count=?, author_whitelisted=?,
-             mcap_rank=?, mcap_tier_icon=?, judgment_window_hours=?,
-             raw_text=COALESCE(?, raw_text)
+             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, tps_usd=?,
+             author_followers=?, author_hit_rate=?, author_hit_count=?,
+             author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
+             judgment_window_hours=?, raw_text=COALESCE(?, raw_text)
            WHERE signal_key=? AND status IN ('watching','previewed')""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
             level.get("sl_usd"), level.get("tp_usd"),
+            level.get("tps_usd") or "[]",
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
@@ -348,7 +358,8 @@ def reparse_all(conn) -> int:
     # long 규칙을 적용하면 유효한 숏 sl/tp 를 NULL 로 파괴). 이 봇은 long 만 알림하나
     # DB 무결성을 위해 방향 한정.
     rows = conn.execute(
-        "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text, tp_ladder_count "
+        "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text, "
+        "tp_ladder_count, tps_usd "
         "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
         "AND direction='long'"
     ).fetchall()
@@ -367,19 +378,20 @@ def reparse_all(conn) -> int:
         if new_sl and new_tp and entry > new_sl:
             rr = round((new_tp - entry) / (entry - new_sl), 2)
         win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]), entry, new_tp)
-        # 표시 전용 사다리 단계 수도 함께 치유한다(2026-07-27) — 컬럼 신설 전에
-        # 수집된 기존 레벨은 0 이라 알림에 꼬리표가 안 붙는데, 원문이 남아 있으면
-        # 여기서 채워진다. tp 가 위 재검증에서 폐기됐으면 0(값 없는데 단계만 남으면
-        # 표시가 거짓말을 한다).
+        # 사다리 단계 수 치유 (tp 폐기 시 0으로)
         new_lad = (setup.get("tp_ladder_count") or 0) if new_tp is not None else 0
+        # 전체 TP 목록 치유 (tp 폐기 시 [])
+        new_tps_usd = json.dumps(setup.get("tps_all") or []) if new_tp is not None else "[]"
+        old_tps_usd = r["tps_usd"] or "[]"
         if (new_sl == r["sl_usd"] and new_tp == r["tp_usd"]
                 and rr == r["rr"] and win == r["judgment_window_hours"]
-                and new_lad == (r["tp_ladder_count"] or 0)):
+                and new_lad == (r["tp_ladder_count"] or 0)
+                and new_tps_usd == old_tps_usd):
             continue
         conn.execute(
             "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=?, "
-            "tp_ladder_count=? WHERE id=?",
-            (new_sl, new_tp, rr, win, new_lad, r["id"]),
+            "tp_ladder_count=?, tps_usd=? WHERE id=?",
+            (new_sl, new_tp, rr, win, new_lad, new_tps_usd, r["id"]),
         )
         changed += 1
     return changed
@@ -963,7 +975,7 @@ def stats(conn) -> dict:
 
 _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "suppressed_cap", "suppressed_dup", "suppressed_send_fail",
-                     "suppressed_grade_tp_penalty_only",
+                     "suppressed_grade_tp_penalty_only", "suppressed_tp_too_close",
                      "preview_dwell",
                      # 동시터치(같은 1분봉에 TP·SL 동시 도달) 재검사 결과.
                      # magnified = 체결내역으로 실제 순서를 복원해 확정한 건,

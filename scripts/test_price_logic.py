@@ -955,6 +955,56 @@ check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
 check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
       - _actual_penalty32(100.0, 101.5)) < 1e-9)  # 숏 -1.5% == 롱 +1.5% 와 감점 대칭
 
+# ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정) ────────────────────────
+# 단일 TP < 5% 또는 다중 TP 에서 마지막(가장 먼) TP < 5% 이면 스윙 신호로 보지 않아
+# 알림을 억제한다. 다중 TP 에서 마지막이 5%+ 이면 TP1 이 가깝더라도 허용(스윙 사다리).
+# tps_usd 가 NULL 인 구버전 레벨은 tp_usd 단일 값으로 폴백한다.
+#
+# 점수 계산: followers=5000(+5) / sl=95(rr=0.3<1, +0) / proximity≈0%(<2%, +20) /
+# TP 1.5%(0~2% 감점 -6) / 완결성 entry+target+stop(+20+10=+30) = 49점 → C ≥ 'C' 기준
+import json as _json33
+
+# T33: 전체 TP 목표가가 5% 이내 → 억제
+with db.connect(TEST_DB) as conn:
+    lv33 = dict(coin_symbol="ZTPNR", ticker="KRW-ZTPNR", direction="long",
+                entry_usd=100.0, sl_usd=95.0, tp_usd=101.5, rr=0.3, grade="B", score=62,
+                author="Auth33", author_followers=5000, author_hit_rate=None,
+                author_hit_count=None, author_whitelisted=False, mcap_rank=19,
+                mcap_tier_icon="🥇", post_url="https://tv.com/u33", post_age_minutes=10,
+                collected_at=now - 600,
+                tps_usd=_json33.dumps([101.5, 102.0, 104.0]))  # all < 5%
+    lv33["signal_key"] = db.make_signal_key("ZTPNR", 100.0, "Auth33", "u33")
+    db.upsert_level(conn, lv33)
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 100.0 * USDT_KRW * 0.999   # 엔트리 터치 + 등급 C 통과권
+_tp_before33 = (_obs_row() or {}).get("suppressed_tp_too_close", 0)
+sent_before33 = len(sent_messages)
+price_check.run_once(now + 1400)
+row33 = _obs_row()
+check("T33 TP 스윙 미달(all TPs 4%) - 무알림",
+      len(sent_messages) == sent_before33)
+check("T33b 관찰집계 - suppressed_tp_too_close +1",
+      row33 is not None and row33["suppressed_tp_too_close"] == _tp_before33 + 1)
+
+# T34: 다중 TP 에서 마지막 TP 가 5%+ → 통과 (TP1 이 가깝더라도 허용)
+with db.connect(TEST_DB) as conn:
+    lv34 = dict(coin_symbol="ZTPLAD", ticker="KRW-ZTPLAD", direction="long",
+                entry_usd=100.0, sl_usd=95.0, tp_usd=106.0, rr=1.2, grade="B", score=62,
+                author="Auth34", author_followers=5000, author_hit_rate=None,
+                author_hit_count=None, author_whitelisted=False, mcap_rank=19,
+                mcap_tier_icon="🥇", post_url="https://tv.com/u34", post_age_minutes=10,
+                collected_at=now - 600,
+                tps_usd=_json33.dumps([101.5, 106.0, 113.0]))  # last=13% ≥ 5%
+    lv34["signal_key"] = db.make_signal_key("ZTPLAD", 100.0, "Auth34", "u34")
+    db.upsert_level(conn, lv34)
+fake["price"] = 100.0 * USDT_KRW * 0.999
+sent_before34 = len(sent_messages)
+price_check.run_once(now + 1460)
+check("T34 다중 TP 마지막 13% - 알림 발송됨",
+      len(sent_messages) == sent_before34 + 1)
+check("T34b suppressed_tp_too_close 불변(T33b 이후 그대로)",
+      (_obs_row() or {})["suppressed_tp_too_close"] == _tp_before33 + 1)
+
 # ── BM: 동시터치 하위 타임프레임 재검사 (Bar Magnifier, 2026-07-26) ──────────
 # 한 캔들 안에서 TP·SL 이 둘 다 닿으면 예전엔 무조건 보수적 miss+ambiguous 였다.
 # 이제 그 구간의 체결내역(틱)으로 실제 도달 순서를 복원한다. 복원 실패 시에만

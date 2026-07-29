@@ -12,6 +12,7 @@
 """
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -261,6 +262,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "sl_usd": setup.get("sl"),
             "tp_usd": setup.get("tp"),
             "tp_ladder_count": setup.get("tp_ladder_count") or 0,  # 표시 전용(1/N단계)
+            "tps_usd": json.dumps(setup.get("tps_all") or []),     # 전체 TP 목록 JSON
             "rr": rr,
             "grade": grade,
             "score": score,

@@ -14,6 +14,7 @@
   upbit_bot watcher_feed 검증 방식).
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -419,7 +420,8 @@ def run_once(now: float = None) -> dict:
         # 억제돼도 여기엔 반드시 잡힌다(방금 들어간 TP 근접도 감점의 효과 측정 등).
         obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
                "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
-               "suppressed_grade_tp_penalty_only": 0, "preview_dwell": 0,
+               "suppressed_grade_tp_penalty_only": 0, "suppressed_tp_too_close": 0,
+               "preview_dwell": 0,
                "ambiguous_magnified": 0, "ambiguous_unresolved": 0,
                "ambiguous_skipped": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
@@ -543,6 +545,26 @@ def run_once(now: float = None) -> dict:
                         reverted_grade = grade_from_score((rep.get("score") or 0) + tp_penalty)
                         if meets_min_grade(reverted_grade, min_grade):
                             obs["suppressed_grade_tp_penalty_only"] += 1
+                # 2026-07-29 판정 B안: 마지막 TP 기준 5% 미만 신호 억제.
+                # 단일 TP < 5% → 스칼핑·초단타 신호, 스윙 알림 불필요.
+                # 다중 TP → 가장 먼 마지막 TP 기준으로 판단:
+                #   TP1 이 가까워도 TP_last 가 5%+ 이면 스윙 사다리 셋업으로 허용.
+                # tps_usd 미기록(NULL) 구버전 행은 tp_usd 단일 값으로 폴백.
+                if send_ok and (rep.get("entry_usd") or 0) > 0:
+                    _e = rep["entry_usd"]
+                    _tps = (json.loads(rep["tps_usd"]) if rep.get("tps_usd")
+                            else ([rep["tp_usd"]] if rep.get("tp_usd") else []))
+                    if _tps:
+                        _last = _tps[-1]
+                        _last_pct = ((_last - _e) / _e * 100
+                                     if rep.get("direction") == "long"
+                                     else (_e - _last) / _e * 100)
+                        if 0 < _last_pct < 5.0:
+                            logger.info("[체크] %s TP 스윙 미달(last %.2f%%) 알림 억제",
+                                        coin, _last_pct)
+                            send_ok = False
+                            obs["suppressed_tp_too_close"] += 1
+
                 if send_ok and kind == "touch" and \
                         db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
                     logger.info("[체크] %s 일일 본알림 상한 도달 - 억제", coin)

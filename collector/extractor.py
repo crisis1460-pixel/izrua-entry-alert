@@ -453,6 +453,35 @@ def parse_setup(text: str, current_price: Optional[float] = None,
                 if 1 < len(_firsts) <= _LADDER_MAX_STEPS:
                     tp_ladder_count = len(_firsts)
 
+    # 전체 TP 목표가 목록 — 가장 가까운 것부터 먼 것 순. B안 필터에서 "마지막 TP가
+    # 스윙급(5%+)인가"를 판단하는 데 쓴다. tp 가 sanity 로 폐기됐으면 전체를 비운다
+    # (대표값 없는데 목록만 남기면 후처리가 혼선).
+    tps_all: list = []
+    if tps and tp is not None and entry and entry > 0:
+        _lo, _hi = entry * 0.25, entry * 4
+        _n = getattr(tps[0], "ladder_n", 0)
+        if _n > 1:
+            _cands = list(tps[0])          # 한 줄 나열형("a - b - c")
+        elif tps.is_spec:
+            _cands = [v[0] for v in tps if v]   # 줄바꿈 스펙형: 각 줄 대표 값
+        else:
+            _cands = [tps[0][-1]] if tps[0] else []  # 단순 TP 단일 값
+        # 방향·크기 sanity 적용 (tp 에 적용한 것과 동일 기준)
+        _valid = []
+        for _c in _cands:
+            if not (_lo <= _c <= _hi):
+                continue
+            if direction == "long" and _c > entry:
+                _valid.append(_c)
+            elif direction == "short" and _c < entry:
+                _valid.append(_c)
+        # 중복 제거 + 정렬(closest first: long=오름차순, short=내림차순)
+        _seen: set = set()
+        for _c in (sorted(_valid) if direction == "long" else sorted(_valid, reverse=True)):
+            if _c not in _seen:
+                _seen.add(_c)
+                tps_all.append(_c)
+
     return {
         "direction": direction,
         "entry": entry,
@@ -462,4 +491,5 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         "tp": tp,
         "rr": rr,
         "tp_ladder_count": tp_ladder_count,
+        "tps_all": tps_all,
     }
