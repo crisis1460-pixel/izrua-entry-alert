@@ -223,6 +223,10 @@ _EXTRA_COLUMNS = {
     # Python list 를 json.dumps 한 TEXT. 빈 목록이면 "[]". 기존 행은 NULL 이다가
     # reparse_all 이 raw_text 로 소급 채운다.
     "tps_usd": "TEXT",
+    # 다단계 TP 알림: 현재 감시 중인 TP 인덱스 (0-based, DEFAULT 0 = TP1).
+    # TP1 적중 시 1로 전진, TP2 적중 시 2로 전진 … 마지막 TP 적중 시 종결.
+    # 단일 TP 레벨은 항상 0 으로 유지되며 기존 판정 경로와 완전히 동일하게 동작한다.
+    "tp_alert_idx": "INTEGER DEFAULT 0",
 }
 
 
@@ -743,6 +747,19 @@ def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
     )
     if cur.rowcount:
         _set_chain_tip(conn, chain_hash)
+
+
+def advance_tp_alert_idx(conn, level_id: int, old_idx: int, new_idx: int) -> bool:
+    """tp_alert_idx 를 old_idx → new_idx 로 원자적으로 전진시킨다.
+
+    WHERE tp_alert_idx = old_idx 조건으로 경합 회차가 동시에 같은 TP 를 두 번
+    알림 보내는 것을 방지한다. 반환 True = 전진 성공(이 회차가 알림 전송 권한을
+    가짐), False = 이미 다른 회차가 전진시켰거나 레벨 상태 불일치."""
+    cur = conn.execute(
+        "UPDATE levels SET tp_alert_idx=? WHERE id=? AND tp_alert_idx=? AND outcome IS NULL",
+        (new_idx, level_id, old_idx),
+    )
+    return cur.rowcount > 0
 
 
 def get_author_self_stats(conn, author: str) -> dict:

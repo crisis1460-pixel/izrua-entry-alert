@@ -708,6 +708,26 @@ def render_outcome_chain_alert(mismatch: dict) -> str:
 # 이건 2분 주기 회차(가격체크) 자체가 멈춘 것을 본다.
 
 
+def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
+                            tp_krw: float, entry_krw: float, usdt_krw: float) -> str:
+    """다단계 TP 중간·최종 도달 알림.
+
+    tp_n: 방금 도달한 TP 번호(1-indexed). tp_total: 전체 TP 수.
+    tp_krw: 도달가(KRW). entry_krw: 진입가(KRW, 대비 % 계산용)."""
+    is_last = (tp_n >= tp_total)
+    pct = (tp_krw - entry_krw) / entry_krw * 100 if entry_krw and entry_krw > 0 else 0
+    step_label = "🏁 최종목표 달성" if is_last else f"({tp_n}/{tp_total}단계)"
+    lines = [
+        _SEP,
+        f"✅ <b>[TP{tp_n} 적중]</b> <b>{html.escape(coin)}</b>  {step_label}",
+        f"    달성가:  {tp_krw:,.0f}원  ({pct:+.1f}%)",
+    ]
+    if not is_last:
+        lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
+    lines.append(_SEP)
+    return "\n".join(lines)
+
+
 def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float) -> str:
     """직전 회차와의 공백이 임계를 넘었을 때의 경고. gap_minutes: 감지된 공백(분),
     threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes)."""

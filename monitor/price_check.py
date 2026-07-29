@@ -733,6 +733,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     obs.setdefault("ambiguous_unresolved", 0)
     obs.setdefault("ambiguous_skipped", 0)
     resolved = 0
+    db_path = cfg_get("db_path")  # 다단계 TP 알림 로깅용 (alert_ledger)
     default_window_sec = cfg_get("outcome_window_hours") * 3600
     r_lo, r_hi = cfg_get("r_clip_low"), cfg_get("r_clip_high")
     # 동시터치 재검사 예산 — 회차당 상한. 시장 전체 급변으로 ambiguous 가 한꺼번에
@@ -798,6 +799,23 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 sl_usd = 0
         tp_krw = tp_usd * usdt_krw
         sl_krw = sl_usd * usdt_krw
+
+        # ── 다단계 TP 설정 (2026-07-29) ─────────────────────────────────────
+        # tps_usd 배열에서 현재 감시 중인 TP 를 결정한다.
+        # · is_multi_tp=True 이면 tp_krw 를 tps_valid[tp_alert_idx] 로 오버라이드.
+        # · 단일 TP / tps_usd 없음 / 인덱스 초과: tp_usd 그대로(기존 동작 유지).
+        _tp_alert_idx = lv.get("tp_alert_idx") or 0
+        try:
+            _tps_raw = json.loads(lv["tps_usd"]) if lv.get("tps_usd") else []
+        except (ValueError, TypeError):
+            _tps_raw = []
+        _tps_valid = (
+            [t for t in _tps_raw if entry_usd > 0 and entry_usd < t <= entry_usd * 4]
+            if lv.get("direction") == "long" else []
+        )
+        _is_multi_tp = len(_tps_valid) > 1
+        if _is_multi_tp and _tp_alert_idx < len(_tps_valid):
+            tp_krw = _tps_valid[_tp_alert_idx] * usdt_krw
 
         def _r(resolve_krw):
             if sl_krw <= 0 or entry_krw <= sl_krw:
@@ -866,9 +884,29 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 else "tp_only" if tp_krw > 0 else "timeboxed")
 
         if outcome == "hit":
-            db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
-                               r_multiple=_r(resolve_price), best_tp_hit=1, now=now)
-            resolved += 1
+            if _is_multi_tp and _tp_alert_idx < len(_tps_valid) - 1:
+                # 중간 TP 적중 — 다음 TP 로 진행, 아직 종결하지 않는다.
+                _next_idx = _tp_alert_idx + 1
+                if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
+                    conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
+                    _tp_day = _day_kst(now)
+                    text = telegram.render_tp_partial_alert(
+                        lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
+                        resolve_price, entry_krw, usdt_krw)
+                    telegram.send(text, urgency="high")
+                    db.record_alert(conn, lv["coin_symbol"],
+                                    f"tp{_tp_alert_idx + 1}", [lv["id"]], _tp_day, now)
+                    alert_ledger.append(db_path, lv["coin_symbol"],
+                                        f"tp{_tp_alert_idx + 1}", [lv["id"]], now)
+                    conn.commit()
+                    logger.info("[적중판정] %s TP%d 적중 → TP%d 감시 계속",
+                                ticker, _tp_alert_idx + 1, _next_idx + 1)
+            else:
+                # 최종 TP 또는 단일 TP 적중 — 종결
+                _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
+                db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
+                                   r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
+                resolved += 1
         elif outcome == "miss":
             db.resolve_outcome(conn, lv["id"], "miss", resolve_price, mode,
                                r_multiple=_r(resolve_price), ambiguous=ambiguous, now=now)
