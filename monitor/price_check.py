@@ -929,16 +929,25 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 # 최종 TP 또는 단일 TP 적중 — 종결
                 _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
                 if _is_multi_tp:
-                    # 최종 목표 달성 알림 (중간 TP 경로와 동일 패턴)
-                    _tp_day = _day_kst(now)
-                    text = telegram.render_tp_partial_alert(
-                        lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                        resolve_price, entry_krw)
-                    telegram.send(text, urgency="high")
-                    db.record_alert(conn, lv["coin_symbol"],
-                                    f"tp{_tp_alert_idx + 1}", [lv["id"]], _tp_day, now)
-                    alert_ledger.append(db_path, lv["coin_symbol"],
-                                        f"tp{_tp_alert_idx + 1}", [lv["id"]], now)
+                    # 최종 목표 달성 알림.
+                    # 중간 TP 는 advance_tp_alert_idx CAS 가 중복 발송을 막지만,
+                    # 최종 TP 는 advance 가 없으므로 alert_ledger 를 idempotency 가드로 쓴다:
+                    # send 성공 후 크래시로 resolve_outcome 이 커밋되지 않아도 다음 회차에서
+                    # ledger 가 재발송을 막고 resolve 만 재시도한다.
+                    _kind = f"tp{_tp_alert_idx + 1}"
+                    if not alert_ledger.recent_exists(
+                            db_path, lv["coin_symbol"], _kind, [lv["id"]],
+                            now - _RESEND_BLOCK_SEC):
+                        _tp_day = _day_kst(now)
+                        text = telegram.render_tp_partial_alert(
+                            lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
+                            resolve_price, entry_krw)
+                        telegram.send(text, urgency="high")
+                        db.record_alert(conn, lv["coin_symbol"],
+                                        _kind, [lv["id"]], _tp_day, now)
+                        alert_ledger.append(db_path, lv["coin_symbol"],
+                                            _kind, [lv["id"]], now)
+                        conn.commit()  # 발송 기록 확정 후 resolve (중간 TP 패턴과 동일)
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
                 resolved += 1
