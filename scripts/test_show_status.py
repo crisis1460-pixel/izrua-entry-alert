@@ -71,7 +71,7 @@ fresh_db()
 with db.connect(TEST_DB) as conn:
     db.bump_daily_stats(conn, "2026-07-25", touches_total=8, previews_total=2,
                         suppressed_grade=3, suppressed_cap=1, preview_dwell=1,
-                        suppressed_send_fail=1)
+                        suppressed_send_fail=1, suppressed_tp_too_close=2)
     db.record_alert(conn, "BTC", "touch", [1], "2026-07-25", NOW)
     db.record_alert(conn, "BTC", "touch", [2], "2026-07-25", NOW)
 code, out = capture(days=7)
@@ -79,7 +79,7 @@ check("S3 날짜 행 표시", "2026-07-25" in out)
 # 발송 2건 / (터치8+예고2=10) = 20%
 check("S3 전환율 20% 계산", "20%" in out)
 # 2026-07-26 감사 MAJOR-1: 중복예고는 억제가 아니라 체류 관측이라 열이 분리됐다
-check("S3 억제 사유 열 표시(등급/상한/실패)", "3/1/1" in out)
+check("S3 억제 사유 열 표시(등급/상한/실패/근접TP)", "3/1/1/2" in out)
 check("S3b 체류 열은 억제와 분리 표시", "체류" in out)
 check("S3 발송실패 있으면 경고 아이콘", "⚠️" in out)
 

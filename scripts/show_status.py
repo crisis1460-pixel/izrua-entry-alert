@@ -109,36 +109,36 @@ def print_observation(conn, days: int) -> None:
         return
 
     header = (f"{'날짜':<12}{'수집':>6}{'터치':>6}{'예고':>6}{'발송':>6}"
-              f"{'전환율':>8}  {'억제(등급/상한/실패)':<20} {'체류':>5}")
+              f"{'전환율':>8}  {'억제(등급/상한/실패/근접TP)':<26} {'체류':>5}")
     print(header)
     print("-" * len(header))
 
     tot = {"collected": 0, "touches_total": 0, "previews_total": 0, "alerts_sent": 0,
            "suppressed_grade": 0, "suppressed_cap": 0, "preview_dwell": 0,
-           "suppressed_send_fail": 0}
+           "suppressed_send_fail": 0, "suppressed_tp_too_close": 0}
     for r in rows:
         for k in tot:
             tot[k] += r.get(k, 0) or 0
         raw_events = (r["touches_total"] or 0) + (r["previews_total"] or 0)
         conv = f"{r['alerts_sent'] / raw_events * 100:.0f}%" if raw_events else "-"
         supp = (f"{r['suppressed_grade']}/{r['suppressed_cap']}/"
-                f"{r['suppressed_send_fail']}"
+                f"{r['suppressed_send_fail']}/{r.get('suppressed_tp_too_close', 0)}"
                 f"  {r.get('preview_dwell', 0):>5}")
         flag = " ⚠️" if r["suppressed_send_fail"] else ""
         print(f"{r['day_kst']:<12}{_n(r['collected']):>6}{_n(r['touches_total']):>6}"
               f"{_n(r['previews_total']):>6}{_n(r['alerts_sent']):>6}"
-              f"{conv:>8}  {supp:<24}{flag}")
+              f"{conv:>8}  {supp:<26}{flag}")
 
     print("-" * len(header))
     raw_total = tot["touches_total"] + tot["previews_total"]
     conv_total = f"{tot['alerts_sent'] / raw_total * 100:.0f}%" if raw_total else "-"
     supp_total = (f"{tot['suppressed_grade']}/{tot['suppressed_cap']}/"
-                  f"{tot['suppressed_send_fail']}"
+                  f"{tot['suppressed_send_fail']}/{tot['suppressed_tp_too_close']}"
                   f"  {tot.get('preview_dwell', 0):>5}")
     print(f"{'합계':<12}{_n(tot['collected']):>6}{_n(tot['touches_total']):>6}"
           f"{_n(tot['previews_total']):>6}{_n(tot['alerts_sent']):>6}"
-          f"{conv_total:>8}  {supp_total:<24}")
-    print("  (전환율 = 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패)")
+          f"{conv_total:>8}  {supp_total:<26}")
+    print("  (전환율 = 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패/근접TP(B안))")
     print("   체류 = 예고 밴드에 머문 회차 — 억제가 아니라 관측 지표")
     _print_bid_ask_pressure(conn)
 
