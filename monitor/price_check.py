@@ -552,8 +552,11 @@ def run_once(now: float = None) -> dict:
                 # tps_usd 미기록(NULL) 구버전 행은 tp_usd 단일 값으로 폴백.
                 if send_ok and (rep.get("entry_usd") or 0) > 0:
                     _e = rep["entry_usd"]
-                    _tps = (json.loads(rep["tps_usd"]) if rep.get("tps_usd")
-                            else ([rep["tp_usd"]] if rep.get("tp_usd") else []))
+                    try:
+                        _tps = (json.loads(rep["tps_usd"]) if rep.get("tps_usd")
+                                else ([rep["tp_usd"]] if rep.get("tp_usd") else []))
+                    except (ValueError, TypeError):
+                        _tps = [rep["tp_usd"]] if rep.get("tp_usd") else []
                     if _tps:
                         _last = _tps[-1]
                         _last_pct = ((_last - _e) / _e * 100

@@ -324,7 +324,8 @@ def upsert_level(conn, level: dict) -> bool:
     # 으로 사후 변경되면 '판정 기준 골대 이동'이라 안티게이밍 원칙 위반.
     conn.execute(
         """UPDATE levels SET
-             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?, tps_usd=?,
+             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?,
+             tps_usd=COALESCE(?, tps_usd),
              author_followers=?, author_hit_rate=?, author_hit_count=?,
              author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
              judgment_window_hours=?, raw_text=COALESCE(?, raw_text)
@@ -332,7 +333,9 @@ def upsert_level(conn, level: dict) -> bool:
         (
             level.get("grade"), level.get("score"), level.get("rr"),
             level.get("sl_usd"), level.get("tp_usd"),
-            level.get("tps_usd") or "[]",
+            # None → COALESCE 가 기존 값을 보존 (backfill 값 보호).
+            # "[]" → 명시적 클리어(유효 TP 없는 재수집 결과)라 그대로 덮어씀.
+            level.get("tps_usd"),
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
