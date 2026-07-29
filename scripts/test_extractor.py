@@ -123,6 +123,56 @@ for desc, text, price, expected in REAL_BUG_CASES:
     if not passed:
         print(f"    (기대: {expected})")
 
+# ── tps_all 회귀 검증 (2026-07-29 B안) ─────────────────────────────────
+# parse_setup 이 tps_all(전체 TP 가까운 순 정렬 목록)을 올바르게 반환하는지.
+# 이 키가 없으면 tps_usd 컬럼이 항상 "[]" 로 저장돼 B안 필터가 무용지물이 된다.
+TPSALL_CASES = [
+    (
+        "tps_all - INJ LONG 4단계 TP 가까운 순 정렬",
+        "INJ USDT LONG SIGNAL\n#105  INJ/USDT – Trade Setup (LONG)\n\n"
+        "📈 Position Type: LONG\n🕒 Timeframe: 1H\n📊 Market: Futures\n\n"
+        "💰 Entry Zone:\n\n5.207\n\n\n\n🛑 Stop-Loss:\n\n5\n\n"
+        "🎯 Take-Profit Targets:\n\n• TP1:  5.298\n\n• TP2: 5.420\n\n"
+        "• TP3: 5.560\n\n• TP4: 5.700\n\n⚙️ Leverage:\n\n5 *10",
+        5.20,
+        [5.298, 5.420, 5.560, 5.700],
+    ),
+    (
+        "tps_all - INJ SHORT 4단계 TP 가까운 순(엔트리→아래) 정렬",
+        "INJ USDT SHORT SIGNAL\n#81.  INJ/USDT – Trade Setup (SHORT)\n\n"
+        "📈 Position Type: SHORT\n🕒 Timeframe: 1H\n📊 Market: Futures\n\n"
+        "💰 Entry Zone:\n\n5.090\n\n\n5.185\n\n🛑 Stop-Loss:\n\n5.290\n\n"
+        "🎯 Take-Profit Targets:\n\n• TP1: 4.970\n\n• TP2: 4.828\n\n"
+        "• TP3: 4.663\n\n• TP4: 4.434\n\n⚙️ Leverage:\n\n5 *10",
+        5.10,
+        [4.970, 4.828, 4.663, 4.434],
+    ),
+    (
+        "tps_all - 사다리 하이픈 LONG 4단계",
+        "$ETC/USDT LONG\nENTRY: 6.81 - 6.85\nTARGETS: 7.15 - 7.45 - 7.85 - 8.25\nSTOP LOSS: 6.25",
+        7.0,
+        [7.15, 7.45, 7.85, 8.25],
+    ),
+    (
+        "tps_all - 레벨 없으면 빈 리스트",
+        "BTC looking bullish, might pump soon. No clear levels.",
+        60000,
+        [],
+    ),
+]
+for desc, text, price, exp_tpsall in TPSALL_CASES:
+    r = parse_setup(text, current_price=price)
+    got_tpsall = (r or {}).get("tps_all", [])
+    if not exp_tpsall:
+        ta_ok = got_tpsall == []
+    else:
+        ta_ok = (len(got_tpsall) == len(exp_tpsall)
+                 and all(_close(a, b) for a, b in zip(got_tpsall, exp_tpsall)))
+    mark = "✅" if ta_ok else "❌"
+    print(f"{mark} tps_all {desc}\n    → {got_tpsall} (기대 {exp_tpsall})")
+    if ta_ok:
+        ok += 1
+
 # 타임프레임 파싱 + 판정 창 정책 (2026-07-23 B안)
 from collector.extractor import judgment_window_hours, parse_timeframe_hours
 
@@ -374,6 +424,6 @@ for desc, text, price, exp_n in LADDER_N_CASES:
 
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
-         + len(LADDER_N_CASES))
+         + len(LADDER_N_CASES) + len(TPSALL_CASES))
 print(f"\n{ok}/{TOTAL} 통과")
 sys.exit(0 if ok == TOTAL else 1)

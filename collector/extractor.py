@@ -200,12 +200,13 @@ def judgment_window_hours(tf_hours, entry, tp) -> float:
 class _Vals(list):
     """_grab_after 가 돌려주는 값 목록 + 부가정보. list 를 그대로 상속해 기존
     호출부([0]/[-1]/len)는 전혀 바뀌지 않고, 사다리 단계 수만 얹어 나른다."""
-    __slots__ = ("ladder_n", "ladder_last")
+    __slots__ = ("ladder_n", "ladder_last", "ladder_values")
 
     def __init__(self, seq=()):
         super().__init__(seq)
         self.ladder_n = 0
-        self.ladder_last = None  # 사다리 마지막 값 — 엔트리 범위 복원에 사용
+        self.ladder_last = None   # 사다리 마지막 값 — 엔트리 범위 복원에 사용
+        self.ladder_values = []   # 인라인 사다리 전체 값 — tps_all 계산용
 
 
 class _Grabbed(list):
@@ -321,6 +322,8 @@ def _grab_after(label_pat, text: str) -> list:
                 # 구분 존 표기의 범위(90~100)를 복원하는 데 쓴다. TP 경로는 이 값을
                 # 읽지 않으므로 TP 동작에는 영향 없다.
                 vals.ladder_last = _to_float(_nums[-1]) if _nums else None
+                # 전체 rung 값 — tps_all(B안 필터) 계산용. None 제거 후 보존.
+                vals.ladder_values = [v for v in (_to_float(n) for n in _nums) if v is not None]
                 (spec_out if is_spec else out).append(vals)
                 continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
@@ -461,7 +464,9 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         _lo, _hi = entry * 0.25, entry * 4
         _n = getattr(tps[0], "ladder_n", 0)
         if _n > 1:
-            _cands = list(tps[0])          # 한 줄 나열형("a - b - c")
+            # ladder_values: _grab_after 에서 저장한 인라인 사다리 전체 값 목록.
+            # list(tps[0])=[first] 은 tp 계산용 하나뿐이라 tps_all 에는 불충분.
+            _cands = getattr(tps[0], "ladder_values", None) or list(tps[0])
         elif tps.is_spec:
             _cands = [v[0] for v in tps if v]   # 줄바꿈 스펙형: 각 줄 대표 값
         else:

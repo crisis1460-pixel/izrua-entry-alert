@@ -553,10 +553,11 @@ def run_once(now: float = None) -> dict:
                 if send_ok and (rep.get("entry_usd") or 0) > 0:
                     _e = rep["entry_usd"]
                     try:
-                        _tps = (json.loads(rep["tps_usd"]) if rep.get("tps_usd")
-                                else ([rep["tp_usd"]] if rep.get("tp_usd") else []))
+                        _raw = json.loads(rep["tps_usd"]) if rep.get("tps_usd") else []
                     except (ValueError, TypeError):
-                        _tps = [rep["tp_usd"]] if rep.get("tp_usd") else []
+                        _raw = []
+                    # "[]" (빈 JSON) 는 truthy 이지만 유효 TP 없음 → tp_usd 단일값 폴백
+                    _tps = _raw if _raw else ([rep["tp_usd"]] if rep.get("tp_usd") else [])
                     if _tps:
                         _last = _tps[-1]
                         _last_pct = ((_last - _e) / _e * 100

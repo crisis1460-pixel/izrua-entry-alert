@@ -325,6 +325,7 @@ def upsert_level(conn, level: dict) -> bool:
     conn.execute(
         """UPDATE levels SET
              grade=?, score=?, rr=?, sl_usd=?, tp_usd=?,
+             tp_ladder_count=?,
              tps_usd=COALESCE(?, tps_usd),
              author_followers=?, author_hit_rate=?, author_hit_count=?,
              author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
@@ -333,6 +334,7 @@ def upsert_level(conn, level: dict) -> bool:
         (
             level.get("grade"), level.get("score"), level.get("rr"),
             level.get("sl_usd"), level.get("tp_usd"),
+            level.get("tp_ladder_count") or 0,
             # None → COALESCE 가 기존 값을 보존 (backfill 값 보호).
             # "[]" → 명시적 클리어(유효 TP 없는 재수집 결과)라 그대로 덮어씀.
             level.get("tps_usd"),
@@ -1099,5 +1101,12 @@ def get_observation_report(conn, days: int = 30) -> list:
             "suppressed_send_fail": s.get("suppressed_send_fail", 0),
             # suppressed_grade 의 부분집합(합산 대상 아님) - TP 거리 감점 효과 분리용
             "suppressed_grade_tp_penalty_only": s.get("suppressed_grade_tp_penalty_only", 0),
+            # B안(2026-07-29) 마지막 TP 5% 미달 억제 카운터
+            "suppressed_tp_too_close":          s.get("suppressed_tp_too_close", 0),
+            # MAJOR-1(2026-07-26): 예고 체류 회차·Bar Magnifier 집계
+            "preview_dwell":                    s.get("preview_dwell", 0),
+            "ambiguous_magnified":              s.get("ambiguous_magnified", 0),
+            "ambiguous_unresolved":             s.get("ambiguous_unresolved", 0),
+            "ambiguous_skipped":                s.get("ambiguous_skipped", 0),
         })
     return out

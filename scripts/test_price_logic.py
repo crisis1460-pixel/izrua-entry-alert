@@ -676,7 +676,8 @@ check("T25b 급감경고 HTML 안전",
 #                + T20(수집전 캔들 차단 검증용 신규 LINK 9.5, 상한억제) = 5
 #                (T8~T18/T21은 add_touched() 로 곧장 'touched' 상태로 꽂아 활성
 #                레벨 루프를 타지 않는다 — 재채점/집계 대상이 아니라 raw 카운트 무관)
-# previews_total: T2(LINK 예고) + T3(중복 예고 시도) + T22(EGLD 재채점 예고) = 3
+# previews_total: T2(LINK 예고) + T22(EGLD 재채점 예고) = 2
+# (T3 은 dup_preview → preview_dwell +1, MAJOR-1 수정으로 previews_total 미포함)
 # suppressed_dup: T3 하나(이미 예고된 클러스터 재시도)
 # suppressed_cap: T7 + T19 + T20 = 3건(모두 일일상한 2건을 이미 채운 LINK)
 # suppressed_grade / suppressed_send_fail 은 이 구간엔 발생 안 함(T27/T28에서 별도 검증)
@@ -977,6 +978,12 @@ with db.connect(TEST_DB) as conn:
     db.upsert_level(conn, lv33)
 fake["low"] = fake["high"] = fake["candles"] = None
 fake["price"] = 100.0 * USDT_KRW * 0.999   # 엔트리 터치 + 등급 C 통과권
+# T33-pre: B안 필터가 실행되려면 grade 필터를 먼저 통과해야 한다.
+# grading 로직이 변경돼 이 픽스처가 D 등급을 받으면 T33 는 grade 차단으로도
+# 무알림이 돼 T33b(suppressed_tp_too_close +1)가 실패 원인 불명으로 보인다.
+from collector.grading import meets_min_grade as _mgcheck33
+check("T33-pre grade B ≥ min_grade 통과(B안 필터 도달 전제)",
+      _mgcheck33(lv33.get("grade"), settings.get("alert_min_grade")))
 _tp_before33 = (_obs_row() or {}).get("suppressed_tp_too_close", 0)
 sent_before33 = len(sent_messages)
 price_check.run_once(now + 1400)

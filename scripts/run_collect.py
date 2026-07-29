@@ -263,7 +263,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "tp_usd": setup.get("tp"),
             "tp_ladder_count": setup.get("tp_ladder_count") or 0,  # 표시 전용(1/N단계)
             "tps_usd": json.dumps(setup.get("tps_all") or []),     # 전체 TP 목록 JSON
-            "rr": rr,
+            "rr": round(rr, 2) if rr is not None else None,
             "grade": grade,
             "score": score,
             "author": idea.get("author"),
