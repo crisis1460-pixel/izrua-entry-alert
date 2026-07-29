@@ -273,7 +273,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # author_self_wins 는 price_check.py 가 db.get_author_self_stats 로 주입한다.
     _tp_wins = rep.get("author_self_wins") or 0
     if _tp_wins >= 1:
-        lines.append(f"🏅 TP도달 {_tp_wins}회")
+        lines.append(f"🏅 TP도달: {_tp_wins}회")
     lines.extend(_author_block(rep))
     lines.append(_SEP)
 
