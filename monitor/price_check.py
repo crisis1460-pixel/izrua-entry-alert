@@ -267,8 +267,8 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     같은 날 배점표가 grading.TP_DISTANCE_BANDS 로 단일화되면서 위임으로 정리했다 —
     출처가 하나뿐이라 드리프트 자체가 발생할 수 없다."""
     from collector.grading import tp_distance_points  # 순환 import 방지 지연 로드
-    # has_rr=True → 감점 구간(<5%)만 반환하고 SL 미기재 글의 대체 가점은 제외한다.
-    # (이 함수의 용도는 '감점 폭 역산' 하나뿐)
+    # has_rr=True → 감점 구간(<5%)만 반환하고 보상 구간(5%+)은 0 반환.
+    # (이 함수의 용도는 '감점 폭 역산' 하나뿐 — 등급 채점은 항상 has_rr=False)
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 

@@ -115,7 +115,7 @@ check("G1j-2 감점 밴드는 역산으로 정확히 상쇄(score+penalty = 감�
 check("G1j-3 가점/무감점 밴드는 되돌릴 것이 없다(유령 되돌림 0)", _inv_ghost)
 
 # ── G2: 목표거리 감점 (모든 글 공통, 기존 규칙 불변) ─────────────
-# has_rr=True(=SL 있어 R:R 산출됨)면 감점만 적용되고 대체배점은 0
+# has_rr=True 경로 = 감점 구간만 반환, 보상 구간 0 (관찰 역산 전용, 등급 채점과 무관)
 check("G2 초근접 TP 감점 -6", eq(tp_distance_points("long", 100.0, 101.5, True), -6))
 check("G2b 2~3% -4", eq(tp_distance_points("long", 100.0, 102.5, True), -4))
 check("G2c 3~5% -2", eq(tp_distance_points("long", 100.0, 104.0, True), -2))
@@ -149,7 +149,7 @@ check("G4b 실측 환상목표(SOL +56.8%, BCH +185.7%)가 스윙 스윗스팟(+
 check("G4c 극단 목표(+1000%)도 만점 아님",
       tp_distance_points("long", 100.0, 1100.0, False) == 3)
 
-# ── G5: SL 없는 글의 구조적 등급 상한 해소 (이번 변경의 핵심) ────
+# ── G5: SL 없는 글의 구조적 등급 상한 해소 (2026-07-26 변경) ────
 # 변경 전: SL 없는 글 최고점 = 팔로워10 + 근접도20 + 완결성20 = 50 → B컷(55) 미달
 _g_max, _s_max, _rr_max = s(20.0, followers=200_000)   # 10 + 20 + 20 + 25 = 75
 check("G5 SL 없는 최상급 글이 A 도달 (변경 전 구조적 상한 50=C)",
@@ -176,9 +176,9 @@ check("G6c 2.5%/4.0% 도 C 이하 유지", s(2.5)[1] == 39 and s(4.0)[1] == 41
 _g_rr, _s_rr, _rr = calculate_grade(500, "long", 100.0, 90.0, 150.0, 100.0)
 check("G7 SL 있어도 R:R 점수無, rr 표시용 유지(62/B)", eq(_s_rr, 62) and _g_rr == "B" and eq(_rr, 5.0))
 # 과대목표 +185.7% → (inf,3)밴드 → +3. score = 3 + 20 + 3 + 30 = 56 → B
-_, _s_rr_far, _rr_far = calculate_grade(500, "long", 100.0, 90.0, 285.7, 100.0)
+_g_rr_far, _s_rr_far, _rr_far = calculate_grade(500, "long", 100.0, 90.0, 285.7, 100.0)
 check("G7b 과대목표 SL 있음: tp_pct 185.7% → +3, score=56/B",
-      eq(_s_rr_far, 56) and _ == "B" and _rr_far > 5)
+      eq(_s_rr_far, 56) and _g_rr_far == "B" and _rr_far > 5)
 # 초근접 TP +1.5% → (2,-6)밴드 → -6. rr=1.5 표시용. score = 3 + 20 - 6 + 30 = 47 → C
 _g_close, _s_rr_close, _rr_close = calculate_grade(500, "long", 100.0, 99.0, 101.5, 100.0)
 check("G7c SL 있는 초근접 TP: 감점(-6) 유지, R:R 점수無, score=47/C",
