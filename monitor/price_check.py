@@ -254,9 +254,16 @@ def _build_clusters(levels: list, band_pct: float) -> list:
     return clustering.build_clusters(levels, band_pct)
 
 
-def _rep(cluster: list) -> dict:
-    """대표 레벨 = 등급점수 최고 (필터/표시 기준)."""
-    return max(cluster, key=lambda l: l.get("score") or 0)
+def _rep(cluster: list, current_usd: float = 0.0) -> dict:
+    """대표 레벨 = 터치 시점 재채점 등급점수 최고 (필터·표시 기준).
+
+    current_usd 가 주어지면 모든 멤버를 재채점해 비교 — 수집 시점 score 를 그대로
+    쓰면 수집 후 가격 변동으로 근접도 점수가 달라진 멤버를 잘못 선택할 수 있다.
+    단일 멤버 클러스터 또는 current_usd=0 이면 수집 시점 score 로 폴백(경량 경로)."""
+    if not current_usd or len(cluster) == 1:
+        return max(cluster, key=lambda l: l.get("score") or 0)
+    from collector.grading import regrade_current  # 순환 import 방지 지연 로드
+    return max(cluster, key=lambda l: regrade_current(l, current_usd)[1])
 
 
 def _tp_distance_penalty(direction: str, entry, target) -> float:
@@ -498,7 +505,8 @@ def run_once(now: float = None) -> dict:
                 if not (touched or previewing):
                     continue
 
-                rep = _rep(cluster)
+                current_usd = current / usdt_krw
+                rep = _rep(cluster, current_usd)  # 재채점 기준 대표 선정
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"
 
@@ -524,8 +532,7 @@ def run_once(now: float = None) -> dict:
                 # DB 원본 grade/score 는 보존한다 — 판정(hit/miss/r_multiple)은 entry/sl/tp
                 # 만으로 결정돼 등급과 무관하고, 수집 시점 등급은 그 자체로 사후분석
                 # 가치(등급-실제성과 상관관계 검증)가 있어 덮어쓰지 않는 편이 낫다.
-                # rep(표시·필터 대표) 하나만 in-memory 로 재계산 - DB 쓰기 없음, 가벼움.
-                current_usd = current / usdt_krw
+                # _rep 에서 이미 재채점해 선택했으므로, 여기선 rep 의 grade/score 를 update
                 cur_grade, cur_score, _cur_rr = regrade_current(rep, current_usd)
                 rep["grade"], rep["score"] = cur_grade, cur_score
 
@@ -545,10 +552,10 @@ def run_once(now: float = None) -> dict:
                         reverted_grade = grade_from_score((rep.get("score") or 0) + tp_penalty)
                         if meets_min_grade(reverted_grade, min_grade):
                             obs["suppressed_grade_tp_penalty_only"] += 1
-                # 2026-07-29 판정 B안: 마지막 TP 기준 5% 미만 신호 억제.
-                # 단일 TP < 5% → 스칼핑·초단타 신호, 스윙 알림 불필요.
+                # 2026-07-29 판정 B안: 마지막 TP 기준 2% 미만 신호 억제(2026-07-30 5%→2% 조정).
+                # 단일 TP < 2% → 초단타성 신호, 스윙 알림 불필요.
                 # 다중 TP → 가장 먼 마지막 TP 기준으로 판단:
-                #   TP1 이 가까워도 TP_last 가 5%+ 이면 스윙 사다리 셋업으로 허용.
+                #   TP1 이 가까워도 TP_last 가 2%+ 이면 스윙 사다리 셋업으로 허용.
                 # tps_usd 미기록(NULL) 구버전 행은 tp_usd 단일 값으로 폴백.
                 if send_ok and (rep.get("entry_usd") or 0) > 0:
                     _e = rep["entry_usd"]
@@ -563,7 +570,7 @@ def run_once(now: float = None) -> dict:
                         _last_pct = ((_last - _e) / _e * 100
                                      if rep.get("direction") == "long"
                                      else (_e - _last) / _e * 100)
-                        if 0 < _last_pct < 5.0:
+                        if 0 < _last_pct < 2.0:
                             logger.info("[체크] %s TP 스윙 미달(last %.2f%%) 알림 억제",
                                         coin, _last_pct)
                             send_ok = False

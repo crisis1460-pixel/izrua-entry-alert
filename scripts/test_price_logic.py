@@ -935,16 +935,16 @@ check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
 check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
       - (-_tdp32("short", 100.0, 98.5, has_rr=True))) < 1e-9)
 
-# ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정) ────────────────────────
-# 단일 TP < 5% 또는 다중 TP 에서 마지막(가장 먼) TP < 5% 이면 스윙 신호로 보지 않아
-# 알림을 억제한다. 다중 TP 에서 마지막이 5%+ 이면 TP1 이 가깝더라도 허용(스윙 사다리).
+# ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정, 2026-07-30 5%→2% 조정) ─────
+# 단일 TP < 2% 또는 다중 TP 에서 마지막(가장 먼) TP < 2% 이면 초단타 신호로 보아
+# 알림을 억제한다. 다중 TP 에서 마지막이 2%+ 이면 TP1 이 가깝더라도 허용(스윙 사다리).
 # tps_usd 가 NULL 인 구버전 레벨은 tp_usd 단일 값으로 폴백한다.
 #
 # 점수 계산: followers=5000(+5) / sl=95(rr=0.3<1, +0) / proximity≈0%(<2%, +20) /
 # TP 1.5%(0~2% 감점 -6) / 완결성 entry+target+stop(+20+10=+30) = 49점 → C ≥ 'C' 기준
 import json as _json33
 
-# T33: 전체 TP 목표가가 5% 이내 → 억제
+# T33: 전체 TP 목표가가 2% 이내 → 억제
 with db.connect(TEST_DB) as conn:
     lv33 = dict(coin_symbol="ZTPNR", ticker="KRW-ZTPNR", direction="long",
                 entry_usd=100.0, sl_usd=95.0, tp_usd=101.5, rr=0.3, grade="B", score=62,
@@ -952,7 +952,7 @@ with db.connect(TEST_DB) as conn:
                 author_hit_count=None, author_whitelisted=False, mcap_rank=19,
                 mcap_tier_icon="🥇", post_url="https://tv.com/u33", post_age_minutes=10,
                 collected_at=now - 600,
-                tps_usd=_json33.dumps([101.5, 102.0, 104.0]))  # all < 5%
+                tps_usd=_json33.dumps([100.5, 101.0, 101.5]))  # all < 2% (last=1.5%)
     lv33["signal_key"] = db.make_signal_key("ZTPNR", 100.0, "Auth33", "u33")
     db.upsert_level(conn, lv33)
 fake["low"] = fake["high"] = fake["candles"] = None
@@ -967,7 +967,7 @@ _tp_before33 = (_obs_row() or {}).get("suppressed_tp_too_close", 0)
 sent_before33 = len(sent_messages)
 price_check.run_once(now + 1400)
 row33 = _obs_row()
-check("T33 TP 스윙 미달(all TPs 4%) - 무알림",
+check("T33 TP 스윙 미달(all TPs ≤1.5%) - 무알림",
       len(sent_messages) == sent_before33)
 check("T33b 관찰집계 - suppressed_tp_too_close +1",
       row33 is not None and row33["suppressed_tp_too_close"] == _tp_before33 + 1)
