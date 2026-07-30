@@ -1940,6 +1940,103 @@ check("MG4 out_path=입력파일(커밋백 패턴): 자기 자신에 써도 데�
 
 _shutil_mg.rmtree(_tmp_mg, ignore_errors=True)
 
+# ── T35~T35b: TP 클러스터 중복 차단 (2026-07-30) ────────────────────────────
+# 같은 코인 ±1% 엔트리 레벨 2건이 동시에 TP1 도달해도 알림은 1건만 발송돼야 한다.
+# 재현 사고: AERO TP1 적중 2건(levels 110·111 — BitmexSignalsFee 가 동일 신호를
+# URL 달리해 두 번 게시 → 별개 signal_key 로 DB 2행 → TP 알림 2건 발송).
+import json as _json35
+
+_T35_DB = "cache/_test_t35_tpdup.db"
+if os.path.exists(_T35_DB):
+    os.remove(_T35_DB)
+_t35_ledger = _alert_ledger.ledger_path(_T35_DB)
+if os.path.exists(_t35_ledger):
+    os.remove(_t35_ledger)
+db.init_db(_T35_DB)
+_t35_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _T35_DB
+
+_t35_now = now + 50000
+with db.connect(_T35_DB) as conn:
+    # Level A: entry=100.0, tps=[103.0, 108.0]
+    _lv35a = dict(
+        coin_symbol="ZDUPX", ticker="KRW-ZDUPX", direction="long",
+        entry_usd=100.0, sl_usd=95.0, tp_usd=108.0, rr=1.5,
+        grade="B", score=62, author="AuthDupA", author_followers=5000,
+        author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+        mcap_rank=50, mcap_tier_icon="🥇",
+        post_url="https://tv.com/dupa", post_age_minutes=10,
+        collected_at=_t35_now - 3600,
+        tps_usd=_json35.dumps([103.0, 108.0]),
+    )
+    _lv35a["signal_key"] = db.make_signal_key("ZDUPX", 100.0, "AuthDupA", "dupa")
+    db.upsert_level(conn, _lv35a)
+    _id35a = conn.execute(
+        "SELECT id FROM levels WHERE signal_key=?", (_lv35a["signal_key"],)
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? WHERE id=?",
+        (_t35_now - 1800, 100.0 * USDT_KRW, _id35a))
+
+    # Level B: entry=100.3 (0.3% 차이, ±1% 클러스터 내)
+    _lv35b = dict(
+        coin_symbol="ZDUPX", ticker="KRW-ZDUPX", direction="long",
+        entry_usd=100.3, sl_usd=95.3, tp_usd=108.3, rr=1.5,
+        grade="B", score=60, author="AuthDupB", author_followers=5000,
+        author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+        mcap_rank=50, mcap_tier_icon="🥇",
+        post_url="https://tv.com/dupb", post_age_minutes=10,
+        collected_at=_t35_now - 3600,
+        tps_usd=_json35.dumps([103.3, 108.3]),
+    )
+    _lv35b["signal_key"] = db.make_signal_key("ZDUPX", 100.3, "AuthDupB", "dupb")
+    db.upsert_level(conn, _lv35b)
+    _id35b = conn.execute(
+        "SELECT id FROM levels WHERE signal_key=?", (_lv35b["signal_key"],)
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? WHERE id=?",
+        (_t35_now - 1800, 100.3 * USDT_KRW, _id35b))
+
+# 현재가 = TP1 초과(104.0), TP2 미달(108.0): 양쪽 TP1 모두 도달
+_t35_price_saved = fake["price"]
+_t35_candles_saved = fake["candles"]
+_t35_high_saved = fake["high"]
+_t35_low_saved = fake["low"]
+fake["price"] = 104.0 * USDT_KRW
+fake["candles"] = [(_t35_now - 1801, _t35_now - 10,
+                    104.0 * USDT_KRW, 98.0 * USDT_KRW)]
+fake["high"] = None
+fake["low"] = None
+
+_t35_before = len(sent_messages)
+price_check.run_once(_t35_now)
+_t35_sent = len(sent_messages) - _t35_before
+
+fake["price"] = _t35_price_saved
+fake["candles"] = _t35_candles_saved
+fake["high"] = _t35_high_saved
+fake["low"] = _t35_low_saved
+
+check("T35 TP 클러스터 중복 차단 — ±1% 엔트리 2건 TP1 동시 도달, 알림 1건만 발송",
+      _t35_sent == 1)
+
+with db.connect(_T35_DB) as conn:
+    _r35a = conn.execute(
+        "SELECT tp_alert_idx FROM levels WHERE id=?", (_id35a,)
+    ).fetchone()["tp_alert_idx"]
+    _r35b = conn.execute(
+        "SELECT tp_alert_idx FROM levels WHERE id=?", (_id35b,)
+    ).fetchone()["tp_alert_idx"]
+check("T35b 두 레벨 모두 tp_alert_idx=1 전진(차단된 레벨도 다음 TP 감시 이어감)",
+      _r35a == 1 and _r35b == 1)
+
+settings.SETTINGS["db_path"] = _t35_prev_db
+if os.path.exists(_T35_DB):
+    os.remove(_T35_DB)
+if os.path.exists(_t35_ledger):
+    os.remove(_t35_ledger)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)

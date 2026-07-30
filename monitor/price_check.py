@@ -279,6 +279,29 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
+                    band_pct: float, since: float) -> bool:
+    """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
+
+    같은 코인·±band_pct% 엔트리 내 다른 레벨이 해당 author 가 동일 신호를 URL만
+    달리해 두 번 게시한 경우(AERO 2026-07-30 사례) TP 알림이 2건 나가는 것을
+    막는다. 형제 ID 각각에 대해 alert_ledger 를 확인한다."""
+    e = lv.get("entry_usd") or 0
+    if not e:
+        return False
+    lo, hi = e * (1 - band_pct / 100), e * (1 + band_pct / 100)
+    coin = lv["coin_symbol"]
+    lid = lv["id"]
+    for other in all_touched:
+        if (other["coin_symbol"] == coin
+                and other["id"] != lid
+                and lo <= (other.get("entry_usd") or 0) <= hi
+                and alert_ledger.recent_exists(
+                    db_path, coin, kind, [other["id"]], since)):
+            return True
+    return False
+
+
 def _magnify_feasible(scan_from: float, c_end: float, cfg_get) -> bool:
     """체결내역 재검사를 '시도할 수 있는' 구간인지 — 예산과 무관한 길이 제약만 본다.
 
@@ -797,7 +820,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         w = (lv_.get("judgment_window_hours") or 0) * 3600 or default_window_sec
         return w - (now - (lv_["touched_at"] or now))
 
-    for lv in sorted(db.get_unresolved_touched(conn), key=_urgency):
+    _tp_loop_levels = db.get_unresolved_touched(conn)
+    _cluster_band_pct = cfg_get("cluster_band_pct")
+    for lv in sorted(_tp_loop_levels, key=_urgency):
         if lv["touched_at"] > now:
             continue  # 터치 캔들이 아직 진행 중 — 완성 후(다음 회차) 판정
         window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
@@ -918,7 +943,17 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             if _is_multi_tp and _tp_alert_idx < len(_tps_valid) - 1:
                 # 중간 TP 적중 — 다음 TP 로 진행, 아직 종결하지 않는다.
                 _next_idx = _tp_alert_idx + 1
-                if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
+                _kind_inter = f"tp{_tp_alert_idx + 1}"
+                _sib_dup = _tp_cluster_dup(
+                    lv, _tp_loop_levels, _kind_inter, db_path,
+                    _cluster_band_pct, now - _RESEND_BLOCK_SEC)
+                if _sib_dup:
+                    # 클러스터 내 중복: 인덱스만 전진, 알림 생략
+                    if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
+                        conn.commit()
+                    logger.info("[적중판정] %s %s 클러스터 중복 차단 (level_id=%d)",
+                                lv["coin_symbol"], _kind_inter, lv["id"])
+                elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
                     _tp_day = _day_kst(now)
                     text = telegram.render_tp_partial_alert(
@@ -926,9 +961,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         resolve_price, entry_krw)
                     telegram.send(text, urgency="high")
                     db.record_alert(conn, lv["coin_symbol"],
-                                    f"tp{_tp_alert_idx + 1}", [lv["id"]], _tp_day, now)
+                                    _kind_inter, [lv["id"]], _tp_day, now)
                     alert_ledger.append(db_path, lv["coin_symbol"],
-                                        f"tp{_tp_alert_idx + 1}", [lv["id"]], now)
+                                        _kind_inter, [lv["id"]], now)
                     conn.commit()
                     logger.info("[적중판정] %s TP%d 적중 → TP%d 감시 계속",
                                 ticker, _tp_alert_idx + 1, _next_idx + 1)
@@ -942,7 +977,10 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     # send 성공 후 크래시로 resolve_outcome 이 커밋되지 않아도 다음 회차에서
                     # ledger 가 재발송을 막고 resolve 만 재시도한다.
                     _kind = f"tp{_tp_alert_idx + 1}"
-                    if not alert_ledger.recent_exists(
+                    _sib_dup = _tp_cluster_dup(
+                        lv, _tp_loop_levels, _kind, db_path,
+                        _cluster_band_pct, now - _RESEND_BLOCK_SEC)
+                    if not _sib_dup and not alert_ledger.recent_exists(
                             db_path, lv["coin_symbol"], _kind, [lv["id"]],
                             now - _RESEND_BLOCK_SEC):
                         _tp_day = _day_kst(now)
