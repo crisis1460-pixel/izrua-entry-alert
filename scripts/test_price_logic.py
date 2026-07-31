@@ -2122,13 +2122,14 @@ check("PV4 예고 OFF 이후 터치 본알림 정상 발송(유음)",
 # 터치 시점 환율 1400 고정 → band_low 10×0.9×1400=12600, band_high 11.5×1400=16100)
 with db.connect(_PV_DB) as conn:
     _pv_vw = conn.execute(
-        "SELECT band_low_krw, band_high_krw, alerted, tp1_krw, tp_count "
+        "SELECT band_low_krw, band_high_krw, alerted, tp1_krw, tp_count, tps_krw "
         "FROM volume_watch WHERE ticker='KRW-PVX'").fetchone()
-check("PV5 터치 등록 시 감시 밴드 저장 [entry-10%, TP1] (터치 환율 고정)",
+check("PV5 터치 등록 시 감시 밴드 저장 [entry-10%, 마지막TP] (터치 환율 고정)",
       _pv_vw is not None and abs(_pv_vw["band_low_krw"] - 12600.0) < 1e-6
       and abs(_pv_vw["band_high_krw"] - 16100.0) < 1e-6 and _pv_vw["alerted"] == 0)
 check("PV5b 급증 알림 TP 표시용 스냅샷 저장 (tp_usd 단일 폴백 → 1단계)",
-      abs(_pv_vw["tp1_krw"] - 16100.0) < 1e-6 and _pv_vw["tp_count"] == 1)
+      abs(_pv_vw["tp1_krw"] - 16100.0) < 1e-6 and _pv_vw["tp_count"] == 1
+      and _json.loads(_pv_vw["tps_krw"]) == [16100.0])
 
 # 스위치를 되돌리면(True) 예고가 즉시 재개된다 — 새 코인으로 기존 동작 확인
 settings.SETTINGS["preview_alert_enabled"] = True
@@ -2141,6 +2142,33 @@ check("PV6 스위치 True 복귀 - 예고 발송 즉시 재개(무음)",
       and "진입가 접근" in sent_messages[-1] and sent_urgency[-1] == "low")
 check("PV7 재개 후에도 관찰집계는 연속(previews_total 누적 2)",
       _pv_stats("previews_total") == 2)
+
+# PV9: 멀티TP 사다리 셋업 — 밴드 상단은 마지막 유효 TP (2026-07-31 2차 결정.
+# 백테스트: TP1 상단이면 짧은 TP1 셋업의 TP2~N 구간이 급증 감시 사각지대).
+# entry 30.0, tps [31.0, 33.0, 36.0] → 상단 36×1400=50400, tps_krw 3단계 전부 저장
+with db.connect(_PV_DB) as conn:
+    lv9 = dict(coin_symbol="PVZ", ticker="KRW-PVZ", direction="long",
+               entry_usd=30.0, sl_usd=28.0, tp_usd=31.0,
+               tps_usd="[31.0, 33.0, 36.0]",
+               rr=2.4, grade="B", score=62, author="PV_pv_z",
+               author_followers=5000, author_hit_rate=0.67, author_hit_count=12,
+               author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇",
+               post_url="https://tv.com/pv_z", post_age_minutes=100,
+               collected_at=now - 600)
+    lv9["signal_key"] = db.make_signal_key("PVZ", 30.0, lv9["author"], lv9["post_url"])
+    db.upsert_level(conn, lv9)
+fake["price"] = 30.0 * USDT_KRW * 1.002
+fake["low"] = 29.7 * USDT_KRW
+s_pv9 = price_check.run_once(now + 3480)
+with db.connect(_PV_DB) as conn:
+    _pv9_vw = conn.execute(
+        "SELECT band_high_krw, tp1_krw, tp_count, tps_krw FROM volume_watch "
+        "WHERE ticker='KRW-PVZ'").fetchone()
+check("PV9 멀티TP - 밴드 상단 = 마지막 TP(50400), tps_krw 3단계 저장",
+      s_pv9["touches"] == 1 and _pv9_vw is not None
+      and abs(_pv9_vw["band_high_krw"] - 50400.0) < 1e-6
+      and abs(_pv9_vw["tp1_krw"] - 43400.0) < 1e-6 and _pv9_vw["tp_count"] == 3
+      and _json.loads(_pv9_vw["tps_krw"]) == [43400.0, 46200.0, 50400.0])
 
 settings.SETTINGS["db_path"] = _pv_prev_db
 os.remove(_PV_DB)
@@ -2427,8 +2455,22 @@ _vs_run({"KRW-VSR": 8500.0})
 check("VS12 재터치 합집합 밴드 - 같은 회차 삭제 없이 급증 알림 발송(감사 major 재현)",
       _vs_row("KRW-VSR") is not None and _vs_row("KRW-VSR")["alerted"] == 1
       and "KRW-VSR" in _vs_calls and "거래량 급증" in sent_messages[-1])
-check("VS12b TP 스냅샷 - 재터치 fill-if-null(첫 터치 값 유지) + TP 행 렌더",
-      "TP:  11,500원 (1/3단계)" in sent_messages[-1])
+check("VS12b TP 스냅샷 - 재터치 fill-if-null + 과도기 행(tps_krw 없음) TP1 폴백 렌더",
+      "다음 TP:  11,500원 (1/3단계)" in sent_messages[-1])
+
+# VS13: 다음 TP 동적 선정 (2026-07-31 2차) — tps_krw 스냅샷이 있으면 알림 시점
+# 현재가 바로 위의 TP 를 (k/N단계)로 표시. cur 10,500 → 2단계 TP 11,000 선택
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VST", "VST", _vs_now,
+                        band_low_krw=9000.0, band_high_krw=13000.0,
+                        tp1_krw=10000.0, tp_count=3,
+                        tps_krw="[10000.0, 11000.0, 13000.0]")
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}
+_vs_run({"KRW-VST": 10500.0})
+check("VS13 다음 TP 동적 선정 - 현재가 위 2단계 TP 표시",
+      _vs_row("KRW-VST")["alerted"] == 1
+      and "다음 TP:  11,000원 (2/3단계)" in sent_messages[-1])
 
 upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원
 os.remove(_VS_DB)

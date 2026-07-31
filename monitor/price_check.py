@@ -697,7 +697,7 @@ def run_once(now: float = None) -> dict:
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1
-                        # (유효 TP1 없으면 +10%)] 를 터치 시점 환율로 KRW 고정 저장
+                        # (유효 TP 없으면 +10%)] 를 터치 시점 환율로 KRW 고정 저장
                         # — touch_price_krw 관례와 동일. 72h 창의 환율 드리프트
                         # (<1% 수준)는 밴드 폭(±10%+) 대비 무의미해 보정하지 않는다.
                         # 밴드 계산 실패가 발송 경로를 죽이면 안 되므로 방어적으로
@@ -706,7 +706,7 @@ def run_once(now: float = None) -> dict:
                         # 이라 숏 밴드 반전은 불필요.
                         if touched and cfg_get("volume_spike_enabled"):
                             band_low_krw = band_high_krw = None
-                            _tp1_krw = _tp_count = None
+                            _tp1_krw = _tp_count = _tps_krw = None
                             try:  # noqa: SIM105
                                 _e_usd = rep.get("entry_usd") or 0
                                 if _e_usd > 0:
@@ -715,24 +715,31 @@ def run_once(now: float = None) -> dict:
                                     # 방지 (2026-07-31 감사 minor)
                                     _lo = _e_usd * 0.90 * usdt_krw
                                     _tps = _volume_band_tps(rep)
-                                    _tp1 = _tps[0] if _tps else None
-                                    _hi = (_tp1 if _tp1 else _e_usd * 1.10) * usdt_krw
+                                    # 상단 = 마지막 유효 TP (2026-07-31 2차 결정 —
+                                    # 처음엔 TP1 이었으나 백테스트(에피소드 57건)에서
+                                    # 25%가 TP1 상향 이탈로 1시간 내 조기종료, 짧은
+                                    # TP1 + 긴 사다리 셋업의 TP2~N 구간이 사각지대.
+                                    # 오염 방어선(entry×4)은 _volume_band_tps 담당)
+                                    _hi = (_tps[-1] if _tps else _e_usd * 1.10) * usdt_krw
                                     band_low_krw, band_high_krw = _lo, _hi
-                                    # 급증 알림 "TP: 가격 (1/N단계)" 표시용 스냅샷
-                                    # (2026-07-31 사용자 요청) — 유효 TP 없으면 NULL
-                                    if _tp1:
-                                        _tp1_krw = _tp1 * usdt_krw
+                                    # 급증 알림 "다음 TP: 가격 (k/N단계)" 표시용
+                                    # 스냅샷 (2026-07-31) — 유효 TP 없으면 NULL
+                                    if _tps:
+                                        _tp1_krw = _tps[0] * usdt_krw
                                         _tp_count = len(_tps)
+                                        _tps_krw = json.dumps(
+                                            [round(t * usdt_krw, 6) for t in _tps])
                             except Exception as e:  # noqa: BLE001 - 발송 경로 보호
                                 band_low_krw = band_high_krw = None
-                                _tp1_krw = _tp_count = None
+                                _tp1_krw = _tp_count = _tps_krw = None
                                 logger.warning("[체크] %s 감시 밴드 계산 실패(밴드 없이 등록): %s",
                                                ticker, e)
                             db.add_volume_watch(conn, ticker, coin, now,
                                                 band_low_krw=band_low_krw,
                                                 band_high_krw=band_high_krw,
                                                 tp1_krw=_tp1_krw,
-                                                tp_count=_tp_count)
+                                                tp_count=_tp_count,
+                                                tps_krw=_tps_krw)
                     else:
                         summary["suppressed"] += 1
                         obs["suppressed_send_fail"] += 1
@@ -1158,9 +1165,32 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
         avg_bil = vol["avg_20h"] / 1e8
         db.mark_volume_alerted(conn, ticker, now)
         conn.commit()
+        # 다음 TP 선정 (2026-07-31 2차): 알림 시점 현재가 바로 위의 TP 를 (k/N단계)
+        # 로 표시 — 사다리 중간 급증에서 "다음 목표까지 얼마"를 바로 보여준다.
+        # tps_krw 스냅샷이 없는 과도기 행은 TP1 정적 폴백. 현재가 미보유(레거시
+        # NULL 밴드 행)면 첫 TP 기준. 전부 실패하면 행 생략 — 표시 실패가 발송을
+        # 막으면 안 된다.
+        _next_tp = _next_idx = _n_total = None
+        _tps_raw = row.get("tps_krw")
+        if _tps_raw:
+            try:
+                _tp_list = [t for t in json.loads(_tps_raw)
+                            if isinstance(t, (int, float))]
+                _n_total = len(_tp_list) or None
+                _ref = cur if cur is not None else 0
+                for _i, _t in enumerate(_tp_list):
+                    if _t > _ref:
+                        _next_tp, _next_idx = _t, _i + 1
+                        break
+            except (ValueError, TypeError):
+                pass
+        elif row.get("tp1_krw"):
+            _next_tp, _next_idx = row["tp1_krw"], 1
+            _n_total = row.get("tp_count") or 1
         text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil,
-                                                  tp1_krw=row.get("tp1_krw"),
-                                                  tp_count=row.get("tp_count"))
+                                                  next_tp_krw=_next_tp,
+                                                  tp_idx=_next_idx,
+                                                  tp_count=_n_total)
         if telegram.send(text, urgency="high"):
             logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",
                         ticker, ratio, current_bil, avg_bil)
