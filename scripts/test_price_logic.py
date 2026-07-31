@@ -1352,8 +1352,22 @@ _keep = _an_level("LINK", 8.0, "an_keep")   # 무관한 코인은 그대로 살�
 announcements._fetch = lambda timeout, per_page: _an_notices
 sent_messages.clear()
 with db.connect(TEST_DB) as conn:
+    # m-6 (2026-08-01 재검토): 리스크 공지 코인은 거래량 급증 감시도 즉시 종료
+    # — 안 끄면 최대 72h 상폐성 펌핑에 🔥 알림이 나간다. 무관 코인 감시는 보존.
+    db.add_volume_watch(conn, "KRW-ZIL", "ZIL", now,
+                        band_low_krw=1.0, band_high_krw=2.0)
+    db.add_volume_watch(conn, "KRW-LINK", "LINK", now)
+    conn.commit()
     r5 = announcements.check_announcements(conn, now, settings.get)
+    _vw_zil = conn.execute(
+        "SELECT 1 FROM volume_watch WHERE ticker='KRW-ZIL'").fetchone()
+    _vw_link = conn.execute(
+        "SELECT 1 FROM volume_watch WHERE ticker='KRW-LINK'").fetchone()
+    db.remove_volume_watch(conn, "KRW-LINK")   # 이후 케이스 오염 방지
+    conn.commit()
 check("AN5 경보 1회 발송", r5["alerted"] == 1 and len(sent_messages) == 1)
+check("AN5b 리스크 공지 코인 - 거래량 감시 즉시 제거(무관 코인은 보존)",
+      _vw_zil is None and _vw_link is not None)
 check("AN5 경보 본문(대상·제목·만료건수)",
       "업비트 리스크 공지" in sent_messages[0] and "ZIL" in sent_messages[0]
       and "유의 종목 지정" in sent_messages[0] and "2건" in sent_messages[0])
@@ -2216,8 +2230,13 @@ def _vcandle(ts, acc_price):
 def _rv_get_factory(minute_candles, hour_candles):
     def _get(url, params=None, timeout=None):
         if url.endswith("/candles/minutes/1"):
+            # 2026-08-01 재검토: count 회귀 방어 — 61 미만이면 분 경계에서 최고령
+            # 캔들이 절단된다(B-3). 팩토리가 params 를 무시해 뮤테이션을 못 잡던
+            # 공백을 assert 로 봉인.
+            assert (params or {}).get("count", 0) >= 61, "minutes/1 count>=61 필요"
             return _FakeResp(minute_candles)
         if url.endswith("/candles/minutes/60"):
+            assert (params or {}).get("count", 0) >= 22, "minutes/60 count>=22 필요"
             return _FakeResp(hour_candles)
         raise AssertionError(f"예상 밖 URL: {url}")
     return _get
@@ -2385,7 +2404,7 @@ with db.connect(_VS_DB) as conn:
     db.add_volume_watch(conn, "KRW-VSC", "VSC", _vs_now,
                         band_low_krw=90.0, band_high_krw=120.0)
     conn.commit()
-_vs_vol["val"] = {"last_60m": 3e7, "avg_20h": 5e6}    # 6.0x 지만 0.3억 < 0.5억
+_vs_vol["val"] = {"last_60m": 3e7, "avg_20h": 5e6}    # 6.0x 지만 0.3억 < 하한 2억
 _vs_run({"KRW-VSC": 100.0})
 check("VS6 저유동 절대 하한 가드 - 6.0x 여도 미발송",
       len(sent_messages) == sent_before_vs + 2 and _vs_row("KRW-VSC")["alerted"] == 0)
@@ -2513,6 +2532,23 @@ check("VS14b 신선 활성 행 - 합집합·타이머 유지 불변",
       _vss2["added_at"] == _vs_now and _vss2["band_low_krw"] == 800.0
       and _vss2["band_high_krw"] == 1200.0)
 
+# VS15/VS15b: 하한 2억 상향 (2026-08-01 사용자 확정 — 첫날 실사례 ETHFI 02:04,
+# 최근 1h 5,437만·평균 790만/h·6.9x 가 구 하한 5천만을 9% 차로 통과한 새벽
+# 저유동 위양성) — 실사례 수치 차단 + 정확 경계(2억) 통과를 고정
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSE2", "VSE2", _vs_now,
+                        band_low_krw=90.0, band_high_krw=120.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 5.437e7, "avg_20h": 7.9e6}   # ETHFI 실측값
+_vs_before15 = len(sent_messages)
+_vs_run({"KRW-VSE2": 100.0})
+check("VS15 ETHFI 위양성 실사례(0.54억, 6.9x) - 2억 하한이 차단",
+      len(sent_messages) == _vs_before15 and _vs_row("KRW-VSE2")["alerted"] == 0)
+_vs_vol["val"] = {"last_60m": 2e8, "avg_20h": 3e7}         # 6.7x, 정확히 2억
+_vs_run({"KRW-VSE2": 100.0})
+check("VS15b 하한 정확 경계(2억) - 발송(이상 경계)",
+      len(sent_messages) == _vs_before15 + 1 and _vs_row("KRW-VSE2")["alerted"] == 1)
+
 upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원
 os.remove(_VS_DB)
 
@@ -2616,6 +2652,122 @@ settings.SETTINGS["db_path"] = _sa_prev_db
 os.remove(_SA_DB)
 if os.path.exists(_sa_ledger):
     os.remove(_sa_ledger)
+
+# ── SB1~SB4: 2026-08-01 재검토 후속 (R-1 원장 폴백 / R-2 승계 TP 게이트 /
+# M-1 역전 픽스처 / B-2 감시 티커 시세 공급) ─────────────────────────────
+_SB_DB = "cache/_test_sb_rereview.db"
+if os.path.exists(_SB_DB):
+    os.remove(_SB_DB)
+_sb_ledger = _alert_ledger.ledger_path(_SB_DB)
+if os.path.exists(_sb_ledger):
+    os.remove(_sb_ledger)
+db.init_db(_SB_DB)
+_sb_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _SB_DB
+_sb_now = time.time()
+
+
+def _sb_level(coin, entry, key, tps, tp, followers=5000, grade="B", score=60,
+              touched=False):
+    with db.connect(_SB_DB) as conn:
+        lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
+                  entry_usd=entry, sl_usd=entry * 0.94, tp_usd=tp, rr=1.5,
+                  grade=grade, score=score, author=f"SB_{key}",
+                  author_followers=followers, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇",
+                  post_url=f"https://tv.com/{key}", post_age_minutes=10,
+                  collected_at=_sb_now - 3600,
+                  tps_usd=_json.dumps(tps) if tps is not None else None)
+        lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], key)
+        db.upsert_level(conn, lv)
+        _id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (lv["signal_key"],)).fetchone()["id"]
+        if touched:
+            conn.execute("UPDATE levels SET status='touched', touched_at=?, "
+                         "touch_price_krw=? WHERE id=?",
+                         (_sb_now - 1800, entry * USDT_KRW, _id))
+        return _id
+
+
+# SB1 (R-1): alerts_log 유실(커밋백 경합 재현 — DB 에 touch 행 없음) 시에도
+# NDJSON 원장의 터치 기록이 폴백으로 잡혀 TP 알림이 나간다
+_sb1 = _sb_level("SBA", 100.0, "sb_ledger", [103.0, 108.0], 103.0, touched=True)
+_alert_ledger.append(_SB_DB, "SBA", "touch", [_sb1], _sb_now - 1800)
+fake["price"] = 104.0 * USDT_KRW
+fake["candles"] = [(_sb_now - 1801, _sb_now - 10, 104.0 * USDT_KRW, 98.0 * USDT_KRW)]
+fake["high"] = fake["low"] = None
+_sb_before = len(sent_messages)
+price_check.run_once(_sb_now)
+check("SB1 R-1 원장 폴백 - DB 유실이어도 원장 터치 기록으로 TP 알림 발송",
+      len(sent_messages) == _sb_before + 1 and "TP1" in sent_messages[-1])
+with db.connect(_SB_DB) as conn:   # 잔여 TP2 가 이후 케이스에 섞이지 않게 종결
+    conn.execute("UPDATE levels SET outcome='hit' WHERE id=?", (_sb1,))
+    conn.commit()
+
+# SB2 (R-2): 승계 발송 클러스터의 초단타 형제 — 터치 기록(ids 포함)이 있어도
+# 자신이 스윙 미달이면 TP 알림 차단(판정·인덱스 전진은 유지)
+_sb2a = _sb_level("SBH", 400.0, "sb_scalp", [402.0, 404.0], 402.0, followers=100000)
+_sb2b = _sb_level("SBH", 401.5, "sb_swing", [414.0], 414.0, followers=100)
+fake["price"] = 400.2 * USDT_KRW
+fake["low"] = 399.0 * USDT_KRW
+fake["candles"] = None
+_sb_before = len(sent_messages)
+s_sb2 = price_check.run_once(_sb_now + 120)
+check("SB2 사전조건 - 초단타 대표는 승계, 스윙 형제 명의로 본알림 1건",
+      s_sb2["touches"] == 1 and len(sent_messages) == _sb_before + 1
+      and "SB_sb_swing" in sent_messages[-1])
+fake["price"] = 405.0 * USDT_KRW
+fake["candles"] = [(_sb_now + 121, _sb_now + 250, 405.0 * USDT_KRW, 400.0 * USDT_KRW)]
+fake["low"] = None
+_sb_before = len(sent_messages)
+price_check.run_once(_sb_now + 360)
+with db.connect(_SB_DB) as conn:
+    _sb2_idx = conn.execute("SELECT tp_alert_idx FROM levels WHERE id=?",
+                            (_sb2a,)).fetchone()["tp_alert_idx"]
+check("SB2b R-2 스윙 게이트 - 초단타 형제의 TP 적중은 무알림·인덱스만 전진",
+      len(sent_messages) == _sb_before and _sb2_idx == 1)
+
+# SB3 (M-1 역전 픽스처): 형제의 수집 등급이 D(30점, stale)여도 재채점으로 C 가
+# 되면 승계된다 — 전 멤버 재채점(M-1)을 rep 단독으로 되돌리면 이 케이스가 잡는다
+_sb3a = _sb_level("SBI", 500.0, "sb_short2", [507.5], 507.5, followers=100000)
+_sb3b = _sb_level("SBI", 501.0, "sb_stale", [518.0], 518.0, followers=100,
+                  grade="D", score=30)
+fake["price"] = 500.2 * USDT_KRW
+fake["low"] = 499.0 * USDT_KRW
+fake["candles"] = None
+_sb_before = len(sent_messages)
+s_sb3 = price_check.run_once(_sb_now + 480)
+check("SB3 M-1 전멤버 재채점 - 수집 D 형제가 재채점 C 로 승계 발송",
+      s_sb3["touches"] == 1 and len(sent_messages) == _sb_before + 1
+      and "SB_sb_stale" in sent_messages[-1])
+
+# SB4 (B-2): 감시 전용 티커(활성 레벨 없음)가 시세 조회 markets 에 합류하는지 —
+# 빠지면 밴드 판정이 '현재가 미보유 유예'로 상시 표류한다
+with db.connect(_SB_DB) as conn:
+    db.add_volume_watch(conn, "KRW-SBW", "SBW", _sb_now + 500,
+                        band_low_krw=100.0, band_high_krw=200.0)
+    conn.commit()
+_sb_markets = {}
+_orig_sb_fp = upbit.fetch_prices
+
+
+def _cap_fp(markets, timeout):
+    _sb_markets["m"] = list(markets)
+    return _orig_sb_fp(markets, timeout)
+
+
+upbit.fetch_prices = _cap_fp
+price_check.run_once(_sb_now + 600)
+upbit.fetch_prices = _orig_sb_fp
+check("SB4 B-2 - 감시 전용 티커가 시세 조회 markets 에 포함",
+      "KRW-SBW" in _sb_markets.get("m", []))
+
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+settings.SETTINGS["db_path"] = _sb_prev_db
+os.remove(_SB_DB)
+if os.path.exists(_sb_ledger):
+    os.remove(_sb_ledger)
 
 print()
 print("── 본알림 실제 렌더링 ──")

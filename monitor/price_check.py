@@ -1032,7 +1032,16 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             # 필터로 본알림을 억제한 신호가 TP1~TP5 고음량 알림을 그대로 발송했다
             # (실측: S9 후 TP 알림 14건 중 10건이 본알림 무발송 신호 — BTC 157 등).
             # 적중 판정·상태 전진·종결은 게이트와 무관하게 전부 수행(통계 무손상).
-            _touch_sent = db.touch_alert_sent(conn, lv["id"])
+            # 원장 폴백 (2026-08-01 재검토 R-1): alerts_log 는 커밋백 경합에서
+            # 유실될 수 있어(원장 도입 사유 그 자체) NDJSON 원장을 OR 로 본다 —
+            # 본알림을 받았는데 TP 알림만 무음이 되는 위음성 창 봉쇄.
+            # 스윙 게이트 (2026-08-01 재검토 R-2): 승계 발송 시 record_alert ids
+            # 에 B안 미달(초단타) 형제도 실리므로, TP 발송은 레벨 자신이 스윙
+            # 필터를 통과할 때만 — "초단타 신호 무알림" 정책의 레벨 단위 일관화.
+            _touch_sent = (db.touch_alert_sent(conn, lv["id"])
+                           or alert_ledger.touch_exists(
+                               db_path, lv["coin_symbol"], lv["id"])) \
+                and _b_swing_pass(lv)
             if _is_multi_tp and _tp_alert_idx < len(_tps_valid) - 1:
                 # 중간 TP 적중 — 다음 TP 로 진행, 아직 종결하지 않는다.
                 _next_idx = _tp_alert_idx + 1
@@ -1046,7 +1055,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         conn.commit()
                     logger.info("[적중판정] %s %s %s (level_id=%d)",
                                 lv["coin_symbol"], _kind_inter,
-                                "클러스터 중복 차단" if _sib_dup else "본알림 무발송 신호 - TP 알림 생략",
+                                "클러스터 중복 차단" if _sib_dup
+                                else "게이트 차단(본알림 무발송·초단타) - TP 알림 생략",
                                 lv["id"])
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)

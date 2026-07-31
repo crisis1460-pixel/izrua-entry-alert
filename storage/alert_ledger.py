@@ -83,6 +83,32 @@ def recent_exists(db_path: str, coin_symbol: str, kind: str, level_ids: Iterable
     return False
 
 
+def touch_exists(db_path: str, coin_symbol: str, level_id) -> bool:
+    """이 코인의 터치 발송 원장 줄 중 level_id 를 포함한 것이 있는가.
+
+    TP 단계 알림 게이트(M-2)의 DB 유실 폴백 (2026-08-01 재검토 R-1) — alerts_log
+    는 커밋백 경합에서 통째로 사라질 수 있고(위 헤더의 id 68~70 실측) 그때 원장은
+    합집합 병합으로 생존한다. 원장 보존 7일 ≥ 판정창(168h)이라 창 전체를 커버.
+    ids 는 CSV 라 split 으로 경계 포함 비교(62 vs 162 오탐 방지)."""
+    prefix = f"{coin_symbol}|touch|"
+    want = str(level_id)
+    try:
+        with open(ledger_path(db_path), encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    k = json.loads(line).get("k") or ""
+                except (ValueError, AttributeError, TypeError):
+                    continue          # 손상 줄은 건너뛴다(위 설계 원칙)
+                if k.startswith(prefix) and want in k[len(prefix):].split(","):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _load(path: str) -> dict:
     """경로 → {줄 문자열: 시각}. 중복 제거와 시간 정렬을 동시에 하기 위한 형태."""
     out = {}

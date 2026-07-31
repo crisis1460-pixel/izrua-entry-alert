@@ -432,7 +432,8 @@ def render_tv_block_alert(reason) -> str:
         _SEP,
         "🚫 <b>[TradingView 차단 감지]</b>",
         f"신호: {reason_kr}",
-        "봇이 30분 쿨다운 후 자동 재시도합니다. 반복되면 TV_COOKIE 등록을 검토하세요.",
+        "봇이 30분 쿨다운 후 자동 재시도합니다. 3단계 폴백으로 수집은 계속됩니다 - "
+        "장기 반복 시 TV_COOKIE 갱신(재로그인 쿠키 재등록)을 검토하세요.",
         _SEP,
     ]
     return "\n".join(lines)
