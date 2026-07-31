@@ -729,16 +729,27 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
 
 
 def render_volume_spike_alert(coin: str, multiplier: float,
-                               current_bil: float, avg_bil: float) -> str:
+                               current_bil: float, avg_bil: float,
+                               tp1_krw=None, tp_count=None) -> str:
     """거래량 급증 알림 (Feature 4 — 진입가 터치 후 2단계 알림).
-    coin: 코인 심볼, multiplier: 현재/평균 배수, current_bil/avg_bil: 단위 억원."""
+    2026-07-31 지표 교체: "현재 24h vs 7일 평균" → "최근 1시간 vs 직전 20시간
+    (완결 60분봉) 평균"(RVOL 관례). 숫자만 갈면 오독하므로 라벨을 함께 교체.
+    coin: 코인 심볼, multiplier: 최근1h/20h평균 배수, current_bil/avg_bil: 단위 억원.
+    tp1_krw/tp_count (2026-07-31 사용자 요청): 터치 셋업의 TP1 원화가·전체 TP 단계
+    수 — "지금 급증 중인데 목표까지 얼마 남았나"를 알림 안에서 바로 보게. 유효 TP
+    가 없던 셋업(+10% 폴백 등록)은 None 으로 들어와 행 자체를 생략한다."""
     lines = [
         _SEP,
         f"🔥 <b>[거래량 급증]</b> <b>{html.escape(coin)}</b>",
-        f"    현재 24h:  {current_bil:.1f}억  ({multiplier:.1f}x 급증)",
-        f"    7일 평균:  {avg_bil:.1f}억",
-        _SEP,
+        f"    최근 1시간:  {current_bil:.1f}억  ({multiplier:.1f}x 급증)",
+        f"    20시간 평균:  {avg_bil:.1f}억",
     ]
+    if tp1_krw:
+        # 원화 표기는 타점 블록 _krw 관례와 동일 (1원 미만 소수 4자리)
+        _p = f"{tp1_krw:,.0f}" if tp1_krw >= 1 else f"{tp1_krw:.4f}"
+        _n = f" (1/{tp_count}단계)" if tp_count else ""
+        lines.append(f"    TP:  {_p}원{_n}")
+    lines.append(_SEP)
     return "\n".join(lines)
 
 

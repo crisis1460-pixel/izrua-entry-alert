@@ -59,37 +59,75 @@ def fetch_volume_ranks(timeout: float) -> dict:
 _ORDERBOOK_PACE_SEC = 0.12  # 초당 ~8콜 (한도 10의 80%) — 실측 헤더상 별도 그룹
 
 
-def fetch_volume_data(market: str, timeout: float) -> Optional[dict]:
-    """현재 24h 롤링 거래대금 + 최근 7일 일평균 거래대금 (KRW).
-    반환: {'current_24h': float, 'avg_7d': float} | None.
-    2콜: /v1/ticker + /v1/candles/days — 거래량 급증 감시(Feature 4) 전용."""
+_RVOL_MIN_COMPLETED = 12  # 완결 60분봉이 이보다 적으면 평균 신뢰 불가(신규상장 가드)
+
+
+def fetch_rvol_1h(market: str, timeout: float) -> Optional[dict]:
+    """최근 1시간 거래대금 + 직전 20시간(완결 60분봉) 시간당 평균 거래대금 (KRW).
+    반환: {'last_60m': float, 'avg_20h': float} | None.
+    2콜: /v1/candles/minutes/1 + /v1/candles/minutes/60 — 거래량 급증 감시
+    (Feature 4, 2026-07-31 RVOL 지표 교체) 전용.
+
+    시간창·완결 판정은 인덱스가 아니라 candle_date_time_utc 기반이다:
+    - 업비트는 무거래 분에 캔들을 만들지 않아 "1분봉 60개"가 60분을 보장하지 않는다
+      (fetch_range_since 2026-07-26 재감사 #9 와 동일 함정) → now-3600 시간창 필터.
+      무거래 분은 자연히 0 취급(합산에서 빠짐). count=60 은 60분 구간 내 캔들 수의
+      이론적 상한이라 추가 페이징 불필요.
+    - 60분봉 분모 창은 [now-21h, now-1h] **종료 기준** — 진행 중 캔들은 물론,
+      직전 완결봉 1개도 제외한다(start+3600 <= now-3600). 직전 완결봉은 분자
+      (최근 60분 롤링)와 최대 59분 겹쳐, 정각 직후 판정 시 급증 거래량이 분모를
+      끌어올려 ratio 를 스스로 희석했다(2026-07-31 감사 minor — 표준 RVOL 처럼
+      분자·분모 구간을 분리). 평균은 "창 내 완결봉 평균"이다 — 무거래 시간
+      (캔들 미생성)은 0 이 아니라 표본에서 제외돼 저유동 마켓에서 평균이 다소
+      높게(=판정이 보수적으로) 나온다. 의도된 방향(위양성 억제 우선).
+    - 시간창 하한(now-21h)은 저유동 마켓에서 count 가 아주 먼 과거까지 확대돼
+      평균이 낡은 시장 국면으로 오염되는 것을 방지. 완결 12개 미만이면
+      None(신규상장/저유동 가드 — 호출부가 조용히 skip).
+    - 두 except 경로도 페이싱 슬립을 지킨다 — 감시 루프에서 API 장애 시 무페이싱
+      연사로 스로틀을 연장시키지 않기 위함(fetch_range_since 관례와 동일)."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+
     try:
-        resp = requests.get(f"{_BASE}/ticker", params={"markets": market}, timeout=timeout)
+        resp = requests.get(
+            f"{_BASE}/candles/minutes/1",
+            params={"market": market, "count": 60}, timeout=timeout)
         resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            return None
-        current_24h = float(data[0].get("acc_trade_price_24h") or 0)
+        candles = resp.json()
+        time.sleep(_CANDLE_PACE_SEC)
+        last_60m = 0.0
+        for c in candles:
+            start = datetime.fromisoformat(c["candle_date_time_utc"]).replace(
+                tzinfo=timezone.utc).timestamp()
+            if start >= now_ts - 3600:
+                last_60m += float(c.get("candle_acc_trade_price") or 0)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[upbit] %s 24h 거래대금 조회 실패: %s", market, e)
+        time.sleep(_CANDLE_PACE_SEC)
+        logger.warning("[upbit] %s 최근 1시간 거래대금 조회 실패: %s", market, e)
         return None
 
     try:
         resp = requests.get(
-            f"{_BASE}/candles/days", params={"market": market, "count": 8}, timeout=timeout)
+            f"{_BASE}/candles/minutes/60",
+            params={"market": market, "count": 22}, timeout=timeout)
         resp.raise_for_status()
         candles = resp.json()
         time.sleep(_CANDLE_PACE_SEC)
-        # 오늘(진행 중) 캔들을 제외하고 이전 7일 평균
-        past = candles[1:8] if len(candles) > 1 else candles
-        if not past:
+        completed = []
+        for c in candles:
+            start = datetime.fromisoformat(c["candle_date_time_utc"]).replace(
+                tzinfo=timezone.utc).timestamp()
+            # 종료가 1시간 이상 지난 완결봉만 — 직전 완결봉은 분자와 겹쳐 제외
+            if start + 3600 <= now_ts - 3600 and start >= now_ts - 21 * 3600:
+                completed.append(float(c.get("candle_acc_trade_price") or 0))
+        if len(completed) < _RVOL_MIN_COMPLETED:
             return None
-        avg_7d = sum(float(c.get("candle_acc_trade_price") or 0) for c in past) / len(past)
+        avg_20h = sum(completed) / len(completed)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[upbit] %s 7일 일봉 조회 실패: %s", market, e)
+        time.sleep(_CANDLE_PACE_SEC)
+        logger.warning("[upbit] %s 20시간 60분봉 조회 실패: %s", market, e)
         return None
 
-    return {"current_24h": current_24h, "avg_7d": avg_7d}
+    return {"last_60m": last_60m, "avg_20h": avg_20h}
 
 
 def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:

@@ -28,6 +28,11 @@ settings.SETTINGS["db_path"] = TEST_DB
 # 전용 블록(AN*/OB*)에서만 켠다 — 안 그러면 아래 T1~T23 의 run_once 가 업비트
 # 공지·호가 API 를 실제로 때린다(이 테스트는 네트워크 없이 도는 것이 원칙).
 settings.SETTINGS["announcement_alert_enabled"] = False
+# 2026-07-31 예고 발송 스위치 — 운영 기본값이 False(예고 완전 제거)가 됐지만
+# T1~T35 회귀는 예고 발송을 전제로 짜여 있다. 여기서 True 로 되돌려 기존 검증
+# (True 면 기존 동작 그대로임의 증명이기도 하다)을 보존하고, False 동작은 전용
+# 블록(PV*)에서 검증한다.
+settings.SETTINGS["preview_alert_enabled"] = True
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 # 발송 원장(2026-07-28)은 DB 밖 파일이라 DB 를 지워도 남는다 — 안 지우면 직전
@@ -96,6 +101,12 @@ _real_fetch_orderbook = upbit.fetch_orderbook_ratio  # OB2~OB4 에서 실물 로
 upbit.fetch_orderbook_ratio = lambda m, t: None  # 호가 스냅샷 기본 스텁 (OB* 에서 교체)
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
+# 거래량 급증 감시(Feature 4) — 2026-07-31 스텁 추가. 구 fetch_volume_data 시절엔
+# 스텁이 빠져 있어 run_once 가 터치 후 매 회차 실제 업비트 API 를 때리는 잠복
+# 네트워크 결합이 있었다("네트워크 없이 도는 것이 원칙"과 모순). None = 조회 실패
+# 취급이라 감시 로직이 조용히 skip — RVOL 실물 로직은 RV*, 판정은 VS* 블록에서 검증.
+_real_fetch_rvol_1h = upbit.fetch_rvol_1h
+upbit.fetch_rvol_1h = lambda m, t: None
 from monitor import binance
 binance.fetch_usdt_price = lambda s, t: (fake["price"] / USDT_KRW) * 0.997  # 김프 +0.3%대
 
@@ -2036,6 +2047,391 @@ if os.path.exists(_T35_DB):
     os.remove(_T35_DB)
 if os.path.exists(_t35_ledger):
     os.remove(_t35_ledger)
+
+# ── PV1~PV7: 접근 예고 발송 스위치 (2026-07-31 사용자 결정 — 예고 완전 제거) ──
+# preview_alert_enabled=False 면 예고는 발송·기록(alerts_log/원장) 없이 상태 전이
+# (previewed)와 관찰 집계(previews_total/preview_dwell)만 수행하고, 이후 터치
+# 본알림은 정상 발송돼야 한다. True 면 기존 동작(T2/T3 가 증명) 그대로.
+_PV_DB = "cache/_test_pv_preview.db"
+if os.path.exists(_PV_DB):
+    os.remove(_PV_DB)
+_pv_ledger = _alert_ledger.ledger_path(_PV_DB)
+if os.path.exists(_pv_ledger):
+    os.remove(_pv_ledger)
+db.init_db(_PV_DB)
+_pv_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _PV_DB
+settings.SETTINGS["preview_alert_enabled"] = False
+
+
+def _pv_level(coin, entry, key, tp=None):
+    with db.connect(_PV_DB) as conn:
+        lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
+                  entry_usd=entry, sl_usd=entry * 0.94, tp_usd=tp or entry * 1.15,
+                  rr=2.4, grade="B", score=62, author=f"PV_{key}",
+                  author_followers=5000, author_hit_rate=0.67, author_hit_count=12,
+                  author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇",
+                  post_url=f"https://tv.com/{key}", post_age_minutes=100,
+                  collected_at=now - 600)
+        lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], lv["post_url"])
+        db.upsert_level(conn, lv)
+        return conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                            (lv["signal_key"],)).fetchone()["id"]
+
+
+def _pv_stats(key):
+    """PV DB daily_stats 를 전 행 합산(자정 경계 무관) — _amb_totals 와 같은 방식."""
+    with db.connect(_PV_DB) as conn:
+        rows = db.get_daily_stats(conn, days=60)
+    return sum(r.get(key, 0) or 0 for r in rows)
+
+
+_pvx = _pv_level("PVX", 10.0, "pv_x", tp=11.5)
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 10.0 * USDT_KRW * 1.006   # +0.6% - 예고 밴드 진입
+sent_before_pv = len(sent_messages)
+s_pv1 = price_check.run_once(now + 3000)
+with db.connect(_PV_DB) as conn:
+    _pv_status = conn.execute("SELECT status FROM levels WHERE id=?", (_pvx,)).fetchone()[0]
+    _pv_alerts = conn.execute("SELECT COUNT(*) FROM alerts_log").fetchone()[0]
+check("PV1 예고 OFF - 무발송·발송기록(alerts_log/원장) 없음",
+      len(sent_messages) == sent_before_pv and s_pv1["previews"] == 0
+      and _pv_alerts == 0 and not os.path.exists(_pv_ledger)
+      and s_pv1.get("preview_disabled") == 1)
+check("PV1b 예고 OFF 는 suppressed 에 안 섞임(억제 지표 오염 방지)",
+      s_pv1.get("suppressed") == 0)
+check("PV2 예고 OFF 여도 상태 전이(mark_previewed)는 수행", _pv_status == "previewed")
+check("PV2b 관찰집계 - previews_total 은 그대로 +1(시계열 연속)",
+      _pv_stats("previews_total") == 1)
+
+# 밴드 체류 회차 — dup_preview 경로는 스위치와 무관하게 동일해야 한다
+s_pv2 = price_check.run_once(now + 3120)
+check("PV3 예고 OFF 상태의 밴드 체류 - preview_dwell 로 집계(무발송)",
+      len(sent_messages) == sent_before_pv and _pv_stats("preview_dwell") == 1
+      and s_pv2.get("preview_disabled") is None)
+
+# 이어지는 터치 - 본알림은 정상 발송 (첫 알림 = 터치 본알림)
+fake["price"] = 10.0 * USDT_KRW * 1.002
+fake["low"] = 9.90 * USDT_KRW
+s_pv3 = price_check.run_once(now + 3240)
+check("PV4 예고 OFF 이후 터치 본알림 정상 발송(유음)",
+      s_pv3["touches"] == 1 and len(sent_messages) == sent_before_pv + 1
+      and "진입가 터치" in sent_messages[-1] and sent_urgency[-1] == "high")
+
+# 터치 시 거래량 감시 등록에 밴드가 함께 저장된다 (대표 레벨 entry 10.0 / TP1 11.5,
+# 터치 시점 환율 1400 고정 → band_low 10×0.9×1400=12600, band_high 11.5×1400=16100)
+with db.connect(_PV_DB) as conn:
+    _pv_vw = conn.execute(
+        "SELECT band_low_krw, band_high_krw, alerted, tp1_krw, tp_count "
+        "FROM volume_watch WHERE ticker='KRW-PVX'").fetchone()
+check("PV5 터치 등록 시 감시 밴드 저장 [entry-10%, TP1] (터치 환율 고정)",
+      _pv_vw is not None and abs(_pv_vw["band_low_krw"] - 12600.0) < 1e-6
+      and abs(_pv_vw["band_high_krw"] - 16100.0) < 1e-6 and _pv_vw["alerted"] == 0)
+check("PV5b 급증 알림 TP 표시용 스냅샷 저장 (tp_usd 단일 폴백 → 1단계)",
+      abs(_pv_vw["tp1_krw"] - 16100.0) < 1e-6 and _pv_vw["tp_count"] == 1)
+
+# 스위치를 되돌리면(True) 예고가 즉시 재개된다 — 새 코인으로 기존 동작 확인
+settings.SETTINGS["preview_alert_enabled"] = True
+_pvy = _pv_level("PVY", 20.0, "pv_y")
+fake["low"] = fake["high"] = fake["candles"] = None
+fake["price"] = 20.0 * USDT_KRW * 1.006
+s_pv4 = price_check.run_once(now + 3360)
+check("PV6 스위치 True 복귀 - 예고 발송 즉시 재개(무음)",
+      s_pv4["previews"] == 1 and len(sent_messages) == sent_before_pv + 2
+      and "진입가 접근" in sent_messages[-1] and sent_urgency[-1] == "low")
+check("PV7 재개 후에도 관찰집계는 연속(previews_total 누적 2)",
+      _pv_stats("previews_total") == 2)
+
+settings.SETTINGS["db_path"] = _pv_prev_db
+os.remove(_PV_DB)
+if os.path.exists(_pv_ledger):
+    os.remove(_pv_ledger)
+
+# ── PV8: _volume_band_tp1 오염 방어선 직접 검증 (2026-07-31 감사 minor — 이
+# 헬퍼의 존재 이유인 sanity 필터가 스위트에서 한 번도 안 돌던 커버리지 공백) ──
+_bt = price_check._volume_band_tp1
+check("PV8 서수 오염 tps [1.0, 11.5] - 1.0 걸러지고 11.5",
+      _bt({"entry_usd": 10.0, "tps_usd": "[1.0, 11.5]"}) == 11.5)
+check("PV8b 전부 무효(상한 4x 밖) + tp_usd 도 무효 - None(+10% 폴백行)",
+      _bt({"entry_usd": 10.0, "tps_usd": "[50.0]", "tp_usd": 999.0}) is None)
+check("PV8c 비수치 원소 혼입 - 조용히 스킵하고 유효값 채택",
+      _bt({"entry_usd": 10.0, "tps_usd": "[\"a\", 11.5]"}) == 11.5)
+check("PV8d tp == entry (미만 경계) - None",
+      _bt({"entry_usd": 10.0, "tps_usd": "[10.0]", "tp_usd": 10.0}) is None)
+check("PV8e tps 없음 - tp_usd 단일값 폴백",
+      _bt({"entry_usd": 10.0, "tps_usd": None, "tp_usd": 11.0}) == 11.0)
+
+# ── RV1~RV5: upbit.fetch_rvol_1h 실물 로직 (가짜 requests.get, HTTP 없음) ──────
+# 2026-07-31 Feature 4 판정 지표 교체(24h/7일평균 → 최근 1h/20h 완결 60분봉 평균).
+# fetch_range_since 와 같은 함정을 공유한다 — 업비트는 무거래 분에 캔들을 만들지
+# 않아 count 기반 요청이 의도 구간보다 먼 과거를 덮는다 → 시간창 필터 필수.
+
+
+def _vcandle(ts, acc_price):
+    return {"candle_date_time_utc": _iso(ts), "candle_acc_trade_price": acc_price}
+
+
+def _rv_get_factory(minute_candles, hour_candles):
+    def _get(url, params=None, timeout=None):
+        if url.endswith("/candles/minutes/1"):
+            return _FakeResp(minute_candles)
+        if url.endswith("/candles/minutes/60"):
+            return _FakeResp(hour_candles)
+        raise AssertionError(f"예상 밖 URL: {url}")
+    return _get
+
+
+_rv_now = time.time()
+# RV1 정상 케이스: 1분봉 60개 전부 최근 60분 이내(각 5백만) + 60분봉은 [0] 진행 중
+# (30분 전 시작, 완결 판정에서 제외돼야) + 완결 20개(각 5천만). 이 중 최신 완결봉
+# (-1.5h 시작)은 분모 자기희석 제거 필터(종료 1h 경과)에 걸려 제외되고 19개 평균
+# — 전부 같은 값이라 avg 는 동일 (희석 제거 자체는 RV6 이 검증).
+# +30초 오프셋: 함수 내부의 now 는 _rv_now 보다 약간 뒤라, 정확히 경계(-3600)에
+# 걸친 캔들은 실행 지연에 따라 포함/제외가 흔들린다 — 경계 밖 판정은 RV3 몫.
+_rv1_min = [_vcandle(_rv_now - (i + 1) * 60 + 30, 5e6) for i in range(60)]
+_rv1_hr = ([_vcandle(_rv_now - 1800, 9e9)]            # 진행 중 — 평균에 섞이면 안 됨
+           + [_vcandle(_rv_now - 1800 - (i + 1) * 3600, 5e7) for i in range(20)])
+_requests_mod.get = _rv_get_factory(_rv1_min, _rv1_hr)
+_rv1 = _real_fetch_rvol_1h("KRW-RV", 5.0)
+check("RV1 최근 1h 합산 + 완결 60분봉 평균(진행 중 [0] 제외)",
+      _rv1 is not None and abs(_rv1["last_60m"] - 60 * 5e6) < 1
+      and abs(_rv1["avg_20h"] - 5e7) < 1)
+
+# RV2 신규상장 가드: 완결 60분봉 12개 미만이면 None
+_rv2_hr = [_vcandle(_rv_now - (i + 1) * 3600, 5e7) for i in range(11)]
+_requests_mod.get = _rv_get_factory(_rv1_min, _rv2_hr)
+check("RV2 완결 60분봉 12개 미만(신규상장) - None", _real_fetch_rvol_1h("KRW-RV", 5.0) is None)
+
+# RV3 저유동성: 1분봉 60개 중 60분 밖 캔들은 합산 제외(무거래 분 캔들 미생성 함정)
+_rv3_min = ([_vcandle(_rv_now - (i + 1) * 60, 1e6) for i in range(10)]        # 최근 10분
+            + [_vcandle(_rv_now - 3600 - (i + 1) * 600, 1e6) for i in range(50)])  # 60분 밖
+_requests_mod.get = _rv_get_factory(_rv3_min, _rv1_hr)
+_rv3 = _real_fetch_rvol_1h("KRW-RV", 5.0)
+check("RV3 60분 시간창 필터 - 구간 밖 캔들 미합산", abs(_rv3["last_60m"] - 10 * 1e6) < 1)
+
+# RV4 낡은 60분봉(21h 밖)은 평균에서 제외 — 완결 12개 규칙도 시간창 안에서만 센다
+_rv4_hr = ([_vcandle(_rv_now - 1800 - (i + 1) * 3600, 5e7) for i in range(5)]      # 창 안 5개
+           + [_vcandle(_rv_now - 40 * 3600 - i * 3600, 9e9) for i in range(16)])   # 창 밖 16개
+_requests_mod.get = _rv_get_factory(_rv1_min, _rv4_hr)
+check("RV4 21h 시간창 - 낡은 캔들 제외로 완결 12개 미달 → None",
+      _real_fetch_rvol_1h("KRW-RV", 5.0) is None)
+
+# RV5 조회 실패는 예외 없이 None (핫패스 격리 관례)
+_requests_mod.get = _u4_get
+check("RV5 조회 실패 - None", _real_fetch_rvol_1h("KRW-RV", 5.0) is None)
+
+# RV6 분모 자기희석 제거 (2026-07-31 감사 minor): 직전 완결 60분봉은 분자(최근
+# 60분 롤링)와 최대 59분 겹치므로 분모에서 제외 — 정각 직후 급증 봉이 완결되며
+# 스스로 평균을 끌어올려 ratio 를 임계 아래로 희석하던 창을 없앤다. 직전 완결봉에
+# 90억을 넣어도 평균은 나머지 19개(각 5천만)로만 계산돼야 한다.
+_rv6_hr = ([_vcandle(_rv_now - 1800, 9e9),          # 진행 중 — 제외
+            _vcandle(_rv_now - 5400, 9e9)]          # 직전 완결(분자와 중첩) — 제외
+           + [_vcandle(_rv_now - 5400 - (i + 1) * 3600, 5e7) for i in range(19)])
+_requests_mod.get = _rv_get_factory(_rv1_min, _rv6_hr)
+_rv6 = _real_fetch_rvol_1h("KRW-RV", 5.0)
+check("RV6 직전 완결봉 분모 제외 - 급증 자기희석 없음",
+      _rv6 is not None and abs(_rv6["avg_20h"] - 5e7) < 1)
+_requests_mod.get = _orig_requests_get
+
+# ── VS1~VS10: _check_volume_spikes 판정 (RVOL ×5 + 절대 하한 + 감시 제외 밴드) ──
+_VS_DB = "cache/_test_volspike.db"
+if os.path.exists(_VS_DB):
+    os.remove(_VS_DB)
+db.init_db(_VS_DB)
+
+_vs_vol = {"val": None}
+_vs_calls = []
+
+
+def _vs_rvol(m, t):
+    _vs_calls.append(m)
+    return _vs_vol["val"]
+
+
+upbit.fetch_rvol_1h = _vs_rvol
+_vs_now = time.time()
+
+
+def _vs_row(ticker):
+    with db.connect(_VS_DB) as conn:
+        r = conn.execute("SELECT * FROM volume_watch WHERE ticker=?", (ticker,)).fetchone()
+        return dict(r) if r else None
+
+
+def _vs_run(prices):
+    with db.connect(_VS_DB) as conn:
+        price_check._check_volume_spikes(conn, _vs_now + 60, settings.get, prices)
+
+
+# VS1: add_volume_watch 가 밴드를 저장한다
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSA", "VSA", _vs_now,
+                        band_low_krw=9000.0, band_high_krw=12000.0)
+    conn.commit()
+_vsa = _vs_row("KRW-VSA")
+check("VS1 add_volume_watch 밴드 저장",
+      _vsa["band_low_krw"] == 9000.0 and _vsa["band_high_krw"] == 12000.0)
+
+# VS2: 활성 감시(alerted=0) 중 재터치 — 타이머(added_at)는 유지, 밴드는 합집합 확장
+# (2026-07-31 감사 major 수정: 첫 터치 밴드 고정이면 아래쪽 클러스터 재터치 직후
+# 같은 회차 밴드 이탈 판정이 방금 유효해진 감시를 삭제하는 무성 커버리지 소실)
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSA", "VSA", _vs_now + 30,
+                        band_low_krw=7650.0, band_high_krw=9350.0)
+    conn.commit()
+_vsa2 = _vs_row("KRW-VSA")
+check("VS2 활성 행 재터치 - 타이머 유지 + 밴드 합집합 [7650, 12000]",
+      _vsa2["added_at"] == _vs_now and _vsa2["band_low_krw"] == 7650.0
+      and _vsa2["band_high_krw"] == 12000.0)
+
+# VS2b: 합집합에서 NULL(무경계)은 우선한다 — 재터치 밴드 계산 실패(None) 시
+# 좁은 옛 밴드가 새 셋업을 자르지 않도록 양쪽 다 무경계로 넓어져야 한다
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSN", "VSN", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0)
+    db.add_volume_watch(conn, "KRW-VSN", "VSN", _vs_now + 30)   # 밴드 None 재터치
+    conn.commit()
+_vsn = _vs_row("KRW-VSN")
+check("VS2b 합집합의 NULL 우선 - 무경계로 확장",
+      _vsn["band_low_krw"] is None and _vsn["band_high_krw"] is None)
+with db.connect(_VS_DB) as conn:
+    db.remove_volume_watch(conn, "KRW-VSN")
+    conn.commit()
+
+# VS3: 발송 완료(alerted=1) 행은 새 터치가 리셋하며 밴드도 새 값으로 교체
+with db.connect(_VS_DB) as conn:
+    db.mark_volume_alerted(conn, "KRW-VSA", _vs_now + 40)
+    db.add_volume_watch(conn, "KRW-VSA", "VSA", _vs_now + 50,
+                        band_low_krw=9500.0, band_high_krw=13000.0)
+    conn.commit()
+_vsa3 = _vs_row("KRW-VSA")
+check("VS3 발송완료 행 리셋 시 밴드 교체",
+      _vsa3["alerted"] == 0 and _vsa3["band_low_krw"] == 9500.0
+      and _vsa3["band_high_krw"] == 13000.0)
+
+# VS4: 밴드 내 + ratio ≥5 + 절대 하한 통과 → 알림 발송 + alerted=1
+_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}   # 6.0x, 6억 ≥ 하한 0.5억
+sent_before_vs = len(sent_messages)
+_vs_run({"KRW-VSA": 10000.0})
+_vs_msg = sent_messages[-1]
+check("VS4 밴드 내 + 6.0x 급증 - 알림 발송·발송표식",
+      len(sent_messages) == sent_before_vs + 1 and _vs_row("KRW-VSA")["alerted"] == 1
+      and "거래량 급증" in _vs_msg and "VSA" in _vs_msg)
+check("VS4b 새 지표 렌더 - 최근 1시간/20시간 평균 라벨",
+      "최근 1시간:  6.0억  (6.0x 급증)" in _vs_msg and "20시간 평균:  1.0억" in _vs_msg
+      and "24h" not in _vs_msg and "7일" not in _vs_msg)
+check("VS4c TP 스냅샷 없는 행(NULL) - TP 행 생략", "TP:" not in _vs_msg)
+
+# VS5: ratio < 5 는 미발송 (경계 미만)
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSB", "VSB", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 4.9e8, "avg_20h": 1e8}   # 4.9x < 5.0
+_vs_run({"KRW-VSB": 1000.0})
+check("VS5 ×5 미만(4.9x) - 미발송", len(sent_messages) == sent_before_vs + 1
+      and _vs_row("KRW-VSB")["alerted"] == 0)
+
+# VS5b: 정확히 ×5 는 발송 (이상 경계)
+_vs_vol["val"] = {"last_60m": 5e8, "avg_20h": 1e8}
+_vs_run({"KRW-VSB": 1000.0})
+check("VS5b 정확히 ×5 - 발송(이상 경계)", len(sent_messages) == sent_before_vs + 2
+      and _vs_row("KRW-VSB")["alerted"] == 1)
+
+# VS6: ratio 는 넘어도 최근 1h 절대금액 < volume_spike_min_krw_60m 이면 미발송
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSC", "VSC", _vs_now,
+                        band_low_krw=90.0, band_high_krw=120.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 3e7, "avg_20h": 5e6}    # 6.0x 지만 0.3억 < 0.5억
+_vs_run({"KRW-VSC": 100.0})
+check("VS6 저유동 절대 하한 가드 - 6.0x 여도 미발송",
+      len(sent_messages) == sent_before_vs + 2 and _vs_row("KRW-VSC")["alerted"] == 0)
+with db.connect(_VS_DB) as conn:   # 다음 케이스 오염 방지 - 활성 잔여 행 정리
+    db.remove_volume_watch(conn, "KRW-VSC")
+    conn.commit()
+
+# VS7: TP1 위 이탈(현재가 > band_high) - 행 삭제·무알림·거래량 API 미호출
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSD", "VSD", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 9e8, "avg_20h": 1e8}    # 급증 중이어도
+_vs_calls.clear()
+_vs_run({"KRW-VSD": 1300.0})                          # band_high 1200 위로 이탈
+check("VS7 TP1 위 이탈 - 감시 행 삭제·무알림·API 미호출",
+      _vs_row("KRW-VSD") is None and len(sent_messages) == sent_before_vs + 2
+      and "KRW-VSD" not in _vs_calls)
+
+# VS8: 진입가 -10% 아래 이탈(현재가 < band_low) - 동일하게 즉시 종료
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSE", "VSE", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0)
+    conn.commit()
+_vs_run({"KRW-VSE": 850.0})
+check("VS8 -10% 아래 이탈 - 감시 행 삭제", _vs_row("KRW-VSE") is None)
+
+# VS9: 레거시 행(밴드 NULL)은 밴드 체크 미적용 - 가격이 어디 있든 감시 유지·판정 수행
+with db.connect(_VS_DB) as conn:
+    conn.execute("INSERT INTO volume_watch (ticker, coin_symbol, added_at) "
+                 "VALUES ('KRW-VSL', 'VSL', ?)", (_vs_now,))
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}
+_vs_run({"KRW-VSL": 999999.0})                        # 밴드가 있었다면 명백한 이탈 가격
+check("VS9 레거시 NULL 밴드 - 이탈 판정 없이 감시 지속 + 급증 알림 정상",
+      len(sent_messages) == sent_before_vs + 3 and _vs_row("KRW-VSL")["alerted"] == 1)
+
+# VS9b: 밴드 있는 행이 prices 에 현재가가 없으면 그 회차 판정 전체를 유예한다
+# — 급증 값이어도 발송·API 호출 없이 감시만 유지 (2026-07-31 감사 minor: 밴드가
+# 무력화된 채 셋업 밖 가격대의 급증 알림이 나가는 경로 봉쇄)
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSF", "VSF", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}    # 6.0x 급증 값이어도
+_vs_calls.clear()
+_vs_run({})
+check("VS9b 현재가 미보유+밴드 행 - 판정 유예(무발송·API 미호출·감시 유지)",
+      _vs_row("KRW-VSF") is not None and _vs_row("KRW-VSF")["alerted"] == 0
+      and len(sent_messages) == sent_before_vs + 3 and "KRW-VSF" not in _vs_calls)
+
+# VS10: 시간 만료(72h)는 밴드와 무관하게 그대로 - 레거시 행도 prune 으로 정리
+with db.connect(_VS_DB) as conn:
+    conn.execute("INSERT INTO volume_watch (ticker, coin_symbol, added_at) "
+                 "VALUES ('KRW-VSO', 'VSO', ?)", (_vs_now - 73 * 3600,))
+    conn.commit()
+_vs_vol["val"] = None
+_vs_run({})
+check("VS10 72h 시간 만료 유지(레거시 행 prune)", _vs_row("KRW-VSO") is None)
+
+# avg_20h=0(상장 직후 무거래)·조회 None 도 조용히 skip — 예외 없이 통과하면 성공
+_vs_vol["val"] = {"last_60m": 1e8, "avg_20h": 0.0}
+_vs_run({"KRW-VSF": 1000.0})
+check("VS11 avg=0/조회 None 가드 - 예외 없이 skip", _vs_row("KRW-VSF")["alerted"] == 0)
+
+# VS12: 감사 major 재현 시나리오 — 아래쪽 클러스터 재터치 직후 같은 회차 판정.
+# 첫 터치 밴드 [9000,12000] 활성 감시 중 8,500원에서 새 클러스터 터치(밴드
+# [7650,9350])가 등록되면, 합집합 [7650,12000] 덕에 같은 회차의 밴드 판정에서
+# 삭제되지 않고 급증 판정까지 진행돼야 한다 (수정 전: 옛 밴드 유지 → 8500 <
+# 9000 이탈 판정 → 방금 유효해진 감시가 통째로 삭제, 급증 알림 영구 소실)
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSR", "VSR", _vs_now,
+                        band_low_krw=9000.0, band_high_krw=12000.0,
+                        tp1_krw=11500.0, tp_count=3)
+    db.add_volume_watch(conn, "KRW-VSR", "VSR", _vs_now + 30,
+                        band_low_krw=7650.0, band_high_krw=9350.0)
+    conn.commit()
+_vs_vol["val"] = {"last_60m": 8e8, "avg_20h": 1e8}    # 8.0x 급증
+_vs_calls.clear()
+_vs_run({"KRW-VSR": 8500.0})
+check("VS12 재터치 합집합 밴드 - 같은 회차 삭제 없이 급증 알림 발송(감사 major 재현)",
+      _vs_row("KRW-VSR") is not None and _vs_row("KRW-VSR")["alerted"] == 1
+      and "KRW-VSR" in _vs_calls and "거래량 급증" in sent_messages[-1])
+check("VS12b TP 스냅샷 - 재터치 fill-if-null(첫 터치 값 유지) + TP 행 렌더",
+      "TP:  11,500원 (1/3단계)" in sent_messages[-1])
+
+upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원
+os.remove(_VS_DB)
 
 print()
 print("── 본알림 실제 렌더링 ──")

@@ -626,6 +626,23 @@ def run_once(now: float = None) -> dict:
                     send_ok = False
                     obs["suppressed_dup"] += 1
 
+                # 접근 예고 발송 스위치 (2026-07-31 사용자 결정) — 예고를 보면 조기
+                # 진입 유혹이 생겨 완전 제거. 발송·기록(record_alert/원장)만 끄고
+                # 상태 전이(아래 mark_previewed)와 관찰 집계(previews_total 등)는
+                # 유지한다. 위치가 중요하다: 등급/상한/재발송 필터 **뒤**라야 각
+                # 필터의 obs 카운터 의미가 안 바뀌고(관찰 시계열 연속성), 발송 블록
+                # **앞**이라야 예고용 부가 API 콜(52주·김프·심리·거래순위)까지
+                # 통째로 절약된다. summary["previews"] 는 이제 항상 0 — 대신 아래
+                # preview_disabled 카운터로 로그에서 구분하고, suppressed 에는
+                # 합산하지 않는다(2026-07-31 감사 minor: suppressed 는 '필터 억제
+                # +발송 실패'만 세던 눈검사 지표라 정책적 OFF 가 섞이면 오염된다).
+                preview_off = False
+                if send_ok and kind == "preview" and not cfg_get("preview_alert_enabled"):
+                    logger.info("[체크] %s 예고 발송 꺼짐(preview_alert_enabled=False) - 상태 전이만", coin)
+                    send_ok = False
+                    preview_off = True
+                    summary["preview_disabled"] = summary.get("preview_disabled", 0) + 1
+
                 # 터치 시점 시장 심리 스냅샷 — send_ok 시 포착, mark_touched 에 전달
                 _snap_sentiment = None
                 _snap_kimchi = None
@@ -678,14 +695,50 @@ def run_once(now: float = None) -> dict:
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
                         alert_ledger.append(db_path, coin, kind, ids, now)
                         summary["touches" if touched else "previews"] += 1
-                        # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4)
+                        # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
+                        # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1
+                        # (유효 TP1 없으면 +10%)] 를 터치 시점 환율로 KRW 고정 저장
+                        # — touch_price_krw 관례와 동일. 72h 창의 환율 드리프트
+                        # (<1% 수준)는 밴드 폭(±10%+) 대비 무의미해 보정하지 않는다.
+                        # 밴드 계산 실패가 발송 경로를 죽이면 안 되므로 방어적으로
+                        # 감싸고, 실패 시 밴드 없이(NULL = 시간 만료만) 등록한다.
+                        # 감시 경로는 long 전용(get_active_levels direction="long")
+                        # 이라 숏 밴드 반전은 불필요.
                         if touched and cfg_get("volume_spike_enabled"):
-                            db.add_volume_watch(conn, ticker, coin, now)
+                            band_low_krw = band_high_krw = None
+                            _tp1_krw = _tp_count = None
+                            try:  # noqa: SIM105
+                                _e_usd = rep.get("entry_usd") or 0
+                                if _e_usd > 0:
+                                    # 임시 변수로 계산 완료 후 원자적 대입 — 중간
+                                    # 예외 시 low 만 남는 반쪽 밴드(상방 무경계)
+                                    # 방지 (2026-07-31 감사 minor)
+                                    _lo = _e_usd * 0.90 * usdt_krw
+                                    _tps = _volume_band_tps(rep)
+                                    _tp1 = _tps[0] if _tps else None
+                                    _hi = (_tp1 if _tp1 else _e_usd * 1.10) * usdt_krw
+                                    band_low_krw, band_high_krw = _lo, _hi
+                                    # 급증 알림 "TP: 가격 (1/N단계)" 표시용 스냅샷
+                                    # (2026-07-31 사용자 요청) — 유효 TP 없으면 NULL
+                                    if _tp1:
+                                        _tp1_krw = _tp1 * usdt_krw
+                                        _tp_count = len(_tps)
+                            except Exception as e:  # noqa: BLE001 - 발송 경로 보호
+                                band_low_krw = band_high_krw = None
+                                _tp1_krw = _tp_count = None
+                                logger.warning("[체크] %s 감시 밴드 계산 실패(밴드 없이 등록): %s",
+                                               ticker, e)
+                            db.add_volume_watch(conn, ticker, coin, now,
+                                                band_low_krw=band_low_krw,
+                                                band_high_krw=band_high_krw,
+                                                tp1_krw=_tp1_krw,
+                                                tp_count=_tp_count)
                     else:
                         summary["suppressed"] += 1
                         obs["suppressed_send_fail"] += 1
                 else:
-                    summary["suppressed"] += 1
+                    if not preview_off:
+                        summary["suppressed"] += 1
 
                 if touched:
                     # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기
@@ -752,9 +805,11 @@ def run_once(now: float = None) -> dict:
 
         # 거래량 급증 감시 (Feature 4) — 터치 후 등록된 티커들을 2분마다 확인.
         # 이 기능의 예외가 핫패스를 죽이지 않도록 통째로 격리한다.
+        # prices 전달(2026-07-31): 밴드 이탈 판정에 이 회차 현재가를 재사용해
+        # 추가 API 콜 0 으로 감시 종료를 앞단에서 처리한다.
         if cfg_get("volume_spike_enabled"):
             try:
-                _check_volume_spikes(conn, now, cfg_get)
+                _check_volume_spikes(conn, now, cfg_get, prices)
             except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
                 logger.warning("[체크] 거래량 급증 감시 실패(무시하고 진행): %s", e)
 
@@ -1011,38 +1066,103 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     return resolved
 
 
-def _check_volume_spikes(conn, now: float, cfg_get) -> None:
+def _volume_band_tps(rep: dict) -> list:
+    """감시 밴드·급증 알림 표시용 유효 TP 목록 (USD, 엔트리 가까운 순) — 없으면 [].
+
+    tps_usd JSON 우선(엔트리 가까운 순 정렬 저장, db.py), 구버전 행은 tp_usd 단일값
+    폴백 — 양쪽 다 _judge_outcomes 와 동일한 오염 방어선(entry < tp <= entry*4)을
+    통과해야 한다. 이 sanity 없이는 ALGO tp=1.0 류 서수 오인 값이 band_high 로
+    들어가 등록 즉시 밴드 이탈로 감시가 종료되는 오동작이 난다. TP1 <= entry
+    (이상치)도 같은 필터가 걸러 +10% 폴백으로 떨어진다. 비수치 원소는 조용히
+    스킵(2026-07-31 감사 minor)."""
+    entry = rep.get("entry_usd") or 0
+    if entry <= 0:
+        return []
+    try:
+        raw = json.loads(rep["tps_usd"]) if rep.get("tps_usd") else []
+    except (ValueError, TypeError):
+        raw = []
+    valid = [t for t in raw
+             if isinstance(t, (int, float)) and entry < t <= entry * 4]
+    if valid:
+        return valid
+    tp = rep.get("tp_usd") or 0
+    if isinstance(tp, (int, float)) and entry < tp <= entry * 4:
+        return [tp]
+    return []
+
+
+def _volume_band_tp1(rep: dict) -> Optional[float]:
+    """유효 TP1 (USD) — 없으면 None (호출부가 +10% 폴백). 규칙은 _volume_band_tps."""
+    tps = _volume_band_tps(rep)
+    return tps[0] if tps else None
+
+
+def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
     """감시 목록(volume_watch)에서 거래량 급증 티커 찾아 알림 발송.
 
-    설계 원칙(Feature 4, 2026-07-29):
-    - 조건: 현재 24h 거래대금 > 7일 일평균 × volume_spike_multiplier
+    설계 원칙(Feature 4, 2026-07-29 / 판정 지표 교체 2026-07-31):
+    - 조건: 최근 1시간 거래대금 > 직전 20시간(완결 60분봉) 평균 × volume_spike_multiplier
+      **그리고** 최근 1시간 거래대금 >= volume_spike_min_krw_60m (저유동 새벽 위양성 가드).
+      (구 기준 "24h 누적 > 7일 일평균 × 3" 은 급증을 반나절 늦게 반영해 교체 —
+      근거는 config/settings.py 의 volume_spike_* 주석 참고)
+    - 감시 제외 밴드(2026-07-31): 현재가가 [band_low_krw, band_high_krw] 를 벗어나면
+      감시 즉시 종료(행 삭제) — 셋업을 떠난 가격대의 급증은 소음. 밴드 체크를
+      거래량 API 콜보다 먼저 해 캔들 예산을 절약한다. prices 에 현재가가 없으면
+      (해당 티커 레벨 전부 종결 등) 보수적으로 감시를 유지하고, 구세대 행
+      (밴드 NULL)은 밴드 체크 미적용 — 시간 만료(watch_hours)만 따른다.
     - meta→commit→send 패턴 (price_check 전역 원칙 — 다른 경보와 동일)
     - 발송 실패해도 mark_volume_alerted 는 유지(중복 발송 방지 우선)
     - API 실패(네트워크, 상폐 등)는 조용히 넘김 — 핫패스 생존 최우선"""
     max_age_sec = cfg_get("volume_spike_watch_hours") * 3600
     multiplier = cfg_get("volume_spike_multiplier")
+    min_krw_60m = cfg_get("volume_spike_min_krw_60m")
     timeout = cfg_get("http_timeout_sec")
+    prices = prices or {}
     watched = db.get_volume_watch_active(conn, now, max_age_sec)
     for row in watched:
         ticker = row["ticker"]
         coin = row["coin_symbol"]
+        # ① 밴드 이탈 판정 먼저 (API 콜 절약) — 이탈이면 감시 종료 후 다음 티커
+        cur = prices.get(ticker)
+        band_low = row.get("band_low_krw")
+        band_high = row.get("band_high_krw")
+        if cur is None and (band_low is not None or band_high is not None):
+            # 밴드가 있는데 이번 회차 시세가 없으면 판정 자체를 유예 — 밴드가
+            # 무력화된 채 급증 알림이 나가는 걸 막는다(2026-07-31 감사 minor).
+            # 구세대 NULL 밴드 행은 여기 안 걸리고 종전대로 시간 만료만 따른다.
+            continue
+        if cur and ((band_low is not None and cur < band_low)
+                    or (band_high is not None and cur > band_high)):
+            db.remove_volume_watch(conn, ticker)
+            conn.commit()
+            logger.info("[거래량감시] %s 밴드 이탈(현재 %.0f원, 밴드 %s~%s) - 감시 종료",
+                        ticker, cur,
+                        f"{band_low:.0f}" if band_low is not None else "-",
+                        f"{band_high:.0f}" if band_high is not None else "-")
+            continue
+        # ② RVOL 판정
         try:
-            vol = upbit.fetch_volume_data(ticker, timeout)
+            vol = upbit.fetch_rvol_1h(ticker, timeout)
         except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
             logger.warning("[거래량감시] %s 조회 실패(무시): %s", ticker, e)
             continue
-        if not vol or vol["avg_7d"] <= 0:
+        if not vol or vol["avg_20h"] <= 0:
             continue
-        ratio = vol["current_24h"] / vol["avg_7d"]
+        if vol["last_60m"] < min_krw_60m:
+            continue  # 절대금액 바닥 미달 — "평균이 작아서 난 배수" 위양성 차단
+        ratio = vol["last_60m"] / vol["avg_20h"]
         if ratio < multiplier:
             continue
-        current_bil = vol["current_24h"] / 1e8
-        avg_bil = vol["avg_7d"] / 1e8
+        current_bil = vol["last_60m"] / 1e8
+        avg_bil = vol["avg_20h"] / 1e8
         db.mark_volume_alerted(conn, ticker, now)
         conn.commit()
-        text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil)
+        text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil,
+                                                  tp1_krw=row.get("tp1_krw"),
+                                                  tp_count=row.get("tp_count"))
         if telegram.send(text, urgency="high"):
-            logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (현재 %.1f억, 평균 %.1f억)",
+            logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",
                         ticker, ratio, current_bil, avg_bil)
         else:
             logger.warning("[거래량급증] %s 알림 발송 실패 (DB 기록은 완료)", ticker)

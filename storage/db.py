@@ -73,13 +73,25 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- 거래량 급증 알림 감시 목록 (Feature 4, 2026-07-29).
--- 진입가 터치 알림 발송 후 자동 등록, 7일 평균 대비 급증 시 별도 알림 발송.
+-- 진입가 터치 알림 발송 후 자동 등록, 급증 판정(2026-07-31~: 최근 1h 거래대금 >
+-- 직전 20h 완결 60분봉 평균 × multiplier) 시 별도 알림 발송.
+-- band_*_krw (2026-07-31): 감시 제외 밴드 [진입가 -10%, TP1(없으면 +10%)] — 터치
+-- 시점 환율로 KRW 고정. 현재가가 밴드를 이탈하면 감시를 즉시 종료한다(급증이
+-- 나도 이미 셋업을 떠난 가격대라 무의미). 구세대 행(NULL)은 밴드 체크를 적용하지
+-- 않고 시간 만료(watch_hours)만 따른다.
+-- tp1_krw/tp_count (2026-07-31 사용자 요청): 급증 알림에 "TP: 가격 (1/N단계)" 행을
+-- 넣기 위한 터치 셋업 스냅샷 — TP1 원화가(터치 환율 고정)와 전체 TP 단계 수.
+-- 유효 TP 없는 셋업(+10% 폴백)은 NULL = 알림에서 행 생략.
 CREATE TABLE IF NOT EXISTS volume_watch (
-    ticker      TEXT PRIMARY KEY,
-    coin_symbol TEXT NOT NULL,
-    added_at    REAL NOT NULL,
-    alerted     INTEGER DEFAULT 0,
-    alerted_at  REAL
+    ticker       TEXT PRIMARY KEY,
+    coin_symbol  TEXT NOT NULL,
+    added_at     REAL NOT NULL,
+    alerted      INTEGER DEFAULT 0,
+    alerted_at   REAL,
+    band_low_krw  REAL,
+    band_high_krw REAL,
+    tp1_krw      REAL,
+    tp_count     INTEGER
 );
 
 -- 관찰 집계 (스프린트5 "알림량 관찰기" — 조용히 누적만, 발송 없음).
@@ -268,6 +280,17 @@ def _migrate(conn) -> None:
         # _DAILY_STATS_COLS 에 포함하면 "DEFAULT 0 INTEGER" 이 붙어 타입이 틀린다.
         if "updated_at" not in ds_cols:
             conn.execute("ALTER TABLE daily_stats ADD COLUMN updated_at REAL")
+
+    # volume_watch 감시 제외 밴드 (2026-07-31) — daily_stats 와 같은 이유로 기존
+    # 테이블에는 ALTER 로만 붙는다. NULL 허용·DEFAULT 없음(SQLite ADD COLUMN 제약
+    # + 구세대 행은 NULL = "밴드 없음, 시간 만료만"으로 하위호환).
+    vw_cols = {r["name"] for r in conn.execute("PRAGMA table_info(volume_watch)").fetchall()}
+    if vw_cols:  # 테이블이 아직 없으면 SCHEMA 가 최신 정의로 만들어준다
+        for col in ("band_low_krw", "band_high_krw", "tp1_krw"):
+            if col not in vw_cols:
+                conn.execute(f"ALTER TABLE volume_watch ADD COLUMN {col} REAL")
+        if "tp_count" not in vw_cols:
+            conn.execute("ALTER TABLE volume_watch ADD COLUMN tp_count INTEGER")
 
     # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
@@ -1117,32 +1140,70 @@ def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
     return {r["day_kst"]: r["n"] for r in rows}
 
 
-def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float) -> None:
+def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
+                     band_low_krw: Optional[float] = None,
+                     band_high_krw: Optional[float] = None,
+                     tp1_krw: Optional[float] = None,
+                     tp_count: Optional[int] = None) -> None:
     """터치 알림 발송 후 거래량 급증 감시 목록에 추가.
 
     이미 감시 중(alerted=0)이면 건드리지 않는다 — 기존 감시 타이머를 재설정하지 않아야
     "72h 내 한 번"이라는 창이 유지된다. 이미 발송된(alerted=1) 행이면 리셋한다 —
-    같은 ticker 라도 새 터치는 새 감시 대상이다. 없으면 INSERT."""
-    conn.execute(
-        """INSERT INTO volume_watch (ticker, coin_symbol, added_at)
-           VALUES (?,?,?)
-           ON CONFLICT(ticker) DO UPDATE SET
-             coin_symbol=excluded.coin_symbol,
-             added_at=excluded.added_at,
-             alerted=0,
-             alerted_at=NULL
-           WHERE alerted=1""",
-        (ticker, coin_symbol, now),
-    )
+    같은 ticker 라도 새 터치는 새 감시 대상이다. 없으면 INSERT.
+
+    band_*_krw (2026-07-31): 감시 제외 밴드 [진입가 -10%, TP1(없으면 +10%)],
+    터치 시점 환율 KRW 고정. 활성 감시(alerted=0) 중 재터치는 타이머(added_at)는
+    유지하되 **밴드는 합집합으로 확장**한다(low=min, high=max, NULL=무경계 우선) —
+    2026-07-31 감사 major: 밴드를 첫 터치 것으로 고정하면 아래쪽 클러스터 재터치
+    직후 현재가가 옛 밴드 밖이라 같은 회차의 밴드 이탈 판정이 방금 유효해진 감시를
+    통째로 삭제했다(무성 커버리지 소실). 합집합이면 두 셋업 가격대를 모두 커버한다.
+
+    tp1_krw/tp_count(2026-07-31): 급증 알림 표시용 스냅샷. 활성 재터치는 첫 터치
+    셋업 값을 유지하고 비어 있을 때만 채운다(fill-if-null) — 표시 기준이 감시 중에
+    바뀌면 혼란."""
+    row = conn.execute(
+        "SELECT alerted, band_low_krw, band_high_krw, tp1_krw, tp_count "
+        "FROM volume_watch WHERE ticker=?", (ticker,)).fetchone()
+    if row is None:
+        conn.execute(
+            """INSERT INTO volume_watch (ticker, coin_symbol, added_at,
+                                         band_low_krw, band_high_krw, tp1_krw, tp_count)
+               VALUES (?,?,?,?,?,?,?)""",
+            (ticker, coin_symbol, now, band_low_krw, band_high_krw, tp1_krw, tp_count))
+    elif row["alerted"]:
+        # 발송 완료 후 새 터치 — 새 감시로 전면 리셋 (타이머·밴드·TP 모두)
+        conn.execute(
+            """UPDATE volume_watch SET coin_symbol=?, added_at=?, alerted=0,
+                   alerted_at=NULL, band_low_krw=?, band_high_krw=?,
+                   tp1_krw=?, tp_count=?
+               WHERE ticker=?""",
+            (coin_symbol, now, band_low_krw, band_high_krw, tp1_krw, tp_count, ticker))
+    else:
+        # 활성 감시 중 재터치 — 타이머 유지("72h 내 한 번" 창 보존), 밴드만 합집합
+        lo = (None if row["band_low_krw"] is None or band_low_krw is None
+              else min(row["band_low_krw"], band_low_krw))
+        hi = (None if row["band_high_krw"] is None or band_high_krw is None
+              else max(row["band_high_krw"], band_high_krw))
+        conn.execute(
+            """UPDATE volume_watch SET coin_symbol=?, band_low_krw=?, band_high_krw=?,
+                   tp1_krw=COALESCE(tp1_krw, ?), tp_count=COALESCE(tp_count, ?)
+               WHERE ticker=?""",
+            (coin_symbol, lo, hi, tp1_krw, tp_count, ticker))
 
 
 def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
     """미발송(alerted=0) 항목 중 max_age_sec 이내에 등록된 것만 반환."""
     cutoff = now - max_age_sec
     return [dict(r) for r in conn.execute(
-        "SELECT ticker, coin_symbol, added_at FROM volume_watch "
-        "WHERE alerted=0 AND added_at >= ?", (cutoff,)
+        "SELECT ticker, coin_symbol, added_at, band_low_krw, band_high_krw, "
+        "tp1_krw, tp_count "
+        "FROM volume_watch WHERE alerted=0 AND added_at >= ?", (cutoff,)
     ).fetchall()]
+
+
+def remove_volume_watch(conn, ticker: str) -> None:
+    """감시 즉시 종료 (2026-07-31 — 밴드 이탈 시 호출). 시간 만료(prune)와 별개."""
+    conn.execute("DELETE FROM volume_watch WHERE ticker=?", (ticker,))
 
 
 def mark_volume_alerted(conn, ticker: str, now: float) -> None:
