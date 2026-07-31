@@ -2188,6 +2188,15 @@ check("PV8d tp == entry (미만 경계) - None",
       _bt({"entry_usd": 10.0, "tps_usd": "[10.0]", "tp_usd": 10.0}) is None)
 check("PV8e tps 없음 - tp_usd 단일값 폴백",
       _bt({"entry_usd": 10.0, "tps_usd": None, "tp_usd": 11.0}) == 11.0)
+# PV8f/g: 2인검토 A-1 — tp_usd(대표 TP) 합집합 + 정렬 재보증. 실데이터 ETH
+# (tp=2000/tps=[1975]) 유형에서 터치 알림과 급증 알림의 TP 가 갈리지 않게.
+_bts = price_check._volume_band_tps
+check("PV8f 대표 TP 합집합 - tps 에 없는 tp_usd 흡수 (중복은 미추가)",
+      _bts({"entry_usd": 10.0, "tps_usd": "[11.0]", "tp_usd": 12.0}) == [11.0, 12.0]
+      and _bts({"entry_usd": 10.0, "tps_usd": "[11.0, 12.0]", "tp_usd": 12.0})
+      == [11.0, 12.0])
+check("PV8g 정렬 재보증 - 비정렬 입력도 마지막 원소 = 최고 TP",
+      _bts({"entry_usd": 10.0, "tps_usd": "[12.0, 11.0]"}) == [11.0, 12.0])
 
 # ── RV1~RV5: upbit.fetch_rvol_1h 실물 로직 (가짜 requests.get, HTTP 없음) ──────
 # 2026-07-31 Feature 4 판정 지표 교체(24h/7일평균 → 최근 1h/20h 완결 60분봉 평균).
@@ -2471,6 +2480,33 @@ _vs_run({"KRW-VST": 10500.0})
 check("VS13 다음 TP 동적 선정 - 현재가 위 2단계 TP 표시",
       _vs_row("KRW-VST")["alerted"] == 1
       and "다음 TP:  11,000원 (2/3단계)" in sent_messages[-1])
+
+# VS14: 2인검토 B-1 — 감시창(72h)을 넘겼지만 아직 prune 전인 미발송 행에 재터치
+# 가 오면 활성 분기(타이머 비갱신)가 아니라 전면 리셋이어야 한다. 안 그러면
+# 같은 회차 말미 prune 이 방금 유효해진 감시를 삭제(무성 소실 잔존 변종).
+with db.connect(_VS_DB) as conn:
+    conn.execute("INSERT INTO volume_watch (ticker, coin_symbol, added_at, "
+                 "band_low_krw, band_high_krw) VALUES ('KRW-VSS', 'VSS', ?, 1.0, 2.0)",
+                 (_vs_now - 73 * 3600,))
+    db.add_volume_watch(conn, "KRW-VSS", "VSS", _vs_now,
+                        band_low_krw=900.0, band_high_krw=1200.0,
+                        tp1_krw=1100.0, tp_count=1, tps_krw="[1100.0]",
+                        max_age_sec=72 * 3600)
+    conn.commit()
+_vss = _vs_row("KRW-VSS")
+check("VS14 만료행 재터치 - 전면 리셋(타이머·밴드·TP 교체, prune race 봉쇄)",
+      _vss["added_at"] == _vs_now and _vss["band_low_krw"] == 900.0
+      and _vss["band_high_krw"] == 1200.0 and _vss["tp1_krw"] == 1100.0)
+# 창 안(신선) 활성 행은 max_age_sec 를 줘도 종전 합집합 의미론 유지
+with db.connect(_VS_DB) as conn:
+    db.add_volume_watch(conn, "KRW-VSS", "VSS", _vs_now + 60,
+                        band_low_krw=800.0, band_high_krw=1000.0,
+                        max_age_sec=72 * 3600)
+    conn.commit()
+_vss2 = _vs_row("KRW-VSS")
+check("VS14b 신선 활성 행 - 합집합·타이머 유지 불변",
+      _vss2["added_at"] == _vs_now and _vss2["band_low_krw"] == 800.0
+      and _vss2["band_high_krw"] == 1200.0)
 
 upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원
 os.remove(_VS_DB)

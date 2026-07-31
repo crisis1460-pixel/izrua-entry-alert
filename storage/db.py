@@ -1152,7 +1152,8 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
                      band_high_krw: Optional[float] = None,
                      tp1_krw: Optional[float] = None,
                      tp_count: Optional[int] = None,
-                     tps_krw: Optional[str] = None) -> None:
+                     tps_krw: Optional[str] = None,
+                     max_age_sec: Optional[float] = None) -> None:
     """터치 알림 발송 후 거래량 급증 감시 목록에 추가.
 
     이미 감시 중(alerted=0)이면 건드리지 않는다 — 기존 감시 타이머를 재설정하지 않아야
@@ -1168,10 +1169,17 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
 
     tp1_krw/tp_count/tps_krw(2026-07-31): 급증 알림 표시용 스냅샷. 활성 재터치는
     첫 터치 셋업 값을 유지하고 비어 있을 때만 채운다(fill-if-null) — 표시 기준이
-    감시 중에 바뀌면 혼란."""
+    감시 중에 바뀌면 혼란.
+
+    max_age_sec(2026-07-31 2인검토 B-1): alerted=0 이지만 이미 감시창(72h)을 넘긴
+    (아직 prune 전인) 행이 "활성" 분기로 빠지면 타이머가 안 갱신돼, 같은 회차
+    말미의 prune 이 방금 재터치로 유효해진 감시를 삭제한다(무성 소실 잔존 변종,
+    경합창 ~1회차). 창을 넘긴 행은 alerted=1 과 동일하게 전면 리셋한다."""
     row = conn.execute(
-        "SELECT alerted, band_low_krw, band_high_krw, tp1_krw, tp_count "
+        "SELECT alerted, added_at, band_low_krw, band_high_krw, tp1_krw, tp_count "
         "FROM volume_watch WHERE ticker=?", (ticker,)).fetchone()
+    stale = (row is not None and max_age_sec is not None
+             and now - row["added_at"] > max_age_sec)
     if row is None:
         conn.execute(
             """INSERT INTO volume_watch (ticker, coin_symbol, added_at,
@@ -1180,8 +1188,9 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
                VALUES (?,?,?,?,?,?,?,?)""",
             (ticker, coin_symbol, now, band_low_krw, band_high_krw, tp1_krw,
              tp_count, tps_krw))
-    elif row["alerted"]:
-        # 발송 완료 후 새 터치 — 새 감시로 전면 리셋 (타이머·밴드·TP 모두)
+    elif row["alerted"] or stale:
+        # 발송 완료 후(또는 감시창을 넘긴 행에) 새 터치 — 새 감시로 전면 리셋
+        # (타이머·밴드·TP 모두)
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, added_at=?, alerted=0,
                    alerted_at=NULL, band_low_krw=?, band_high_krw=?,

@@ -422,9 +422,17 @@ def run_once(now: float = None) -> dict:
         # 시세는 활성 + 미종결 + 수익률대기 티커 모두 — 활성 레벨이 사라진 코인의
         # 미종결 건도 판정되고, 조기 종결 건도 24/72h 수익률이 유실되지 않도록
         # (2026-07-24 감사 #1: ret 대기 티커 누락으로 조기종결 건 수익률 영구 NULL)
+        # + 거래량 감시 티커 (2026-07-31 2인검토 B-2): 밴드 있는 감시 행은 시세
+        # 미보유 시 판정을 유예하는데, 시세 공급이 위 세 집합에 암묵 결합돼 있어
+        # 소급 터치 지연 시 감시 말미가 유예로 표류할 수 있었다 — 직접 합집합.
+        vw_tickers = set()
+        if cfg_get("volume_spike_enabled"):
+            vw_tickers = {r["ticker"] for r in db.get_volume_watch_active(
+                conn, now, cfg_get("volume_spike_watch_hours") * 3600)}
         markets = sorted(set(by_ticker.keys())
                          | {lv["ticker"] for lv in unresolved}
-                         | {lv["ticker"] for lv in ret_pending})
+                         | {lv["ticker"] for lv in ret_pending}
+                         | vw_tickers)
         prices = upbit.fetch_prices(markets + ["KRW-USDT"], cfg_get("http_timeout_sec"))
         usdt_krw = prices.get("KRW-USDT")
         if not usdt_krw:
@@ -734,12 +742,15 @@ def run_once(now: float = None) -> dict:
                                 _tp1_krw = _tp_count = _tps_krw = None
                                 logger.warning("[체크] %s 감시 밴드 계산 실패(밴드 없이 등록): %s",
                                                ticker, e)
-                            db.add_volume_watch(conn, ticker, coin, now,
-                                                band_low_krw=band_low_krw,
-                                                band_high_krw=band_high_krw,
-                                                tp1_krw=_tp1_krw,
-                                                tp_count=_tp_count,
-                                                tps_krw=_tps_krw)
+                            db.add_volume_watch(
+                                conn, ticker, coin, now,
+                                band_low_krw=band_low_krw,
+                                band_high_krw=band_high_krw,
+                                tp1_krw=_tp1_krw, tp_count=_tp_count,
+                                tps_krw=_tps_krw,
+                                # B-1: 감시창 넘긴 미발송 행은 전면 리셋 —
+                                # 같은 회차 prune 이 새 감시를 지우는 race 봉쇄
+                                max_age_sec=cfg_get("volume_spike_watch_hours") * 3600)
                     else:
                         summary["suppressed"] += 1
                         obs["suppressed_send_fail"] += 1
@@ -1076,8 +1087,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
 def _volume_band_tps(rep: dict) -> list:
     """감시 밴드·급증 알림 표시용 유효 TP 목록 (USD, 엔트리 가까운 순) — 없으면 [].
 
-    tps_usd JSON 우선(엔트리 가까운 순 정렬 저장, db.py), 구버전 행은 tp_usd 단일값
-    폴백 — 양쪽 다 _judge_outcomes 와 동일한 오염 방어선(entry < tp <= entry*4)을
+    tps_usd JSON 과 tp_usd(대표 TP)의 **합집합**을 오름차순 정렬해 반환(A-1) —
+    양쪽 다 _judge_outcomes 와 동일한 오염 방어선(entry < tp <= entry*4)을
     통과해야 한다. 이 sanity 없이는 ALGO tp=1.0 류 서수 오인 값이 band_high 로
     들어가 등록 즉시 밴드 이탈로 감시가 종료되는 오동작이 난다. TP1 <= entry
     (이상치)도 같은 필터가 걸러 +10% 폴백으로 떨어진다. 비수치 원소는 조용히
@@ -1091,12 +1102,17 @@ def _volume_band_tps(rep: dict) -> list:
         raw = []
     valid = [t for t in raw
              if isinstance(t, (int, float)) and entry < t <= entry * 4]
-    if valid:
-        return valid
+    # tp_usd 합집합 (2026-07-31 2인검토 A-1): extractor 계보상 tp_usd(대표 TP)가
+    # tps_usd 목록에 빠지는 케이스가 실데이터에 존재(ETH tp=2000/tps=[1975]) —
+    # 터치 알림(tp_usd 표시)과 급증 알림(다음 TP)이 서로 다른 값을 보여주는
+    # 갈림을 막기 위해 대표 TP 를 목록에 흡수한다. 정렬 재보증(sort)은 "마지막
+    # 원소 = 최고 TP" 불변식을 생산자 규약에서 독립시킨다.
     tp = rep.get("tp_usd") or 0
-    if isinstance(tp, (int, float)) and entry < tp <= entry * 4:
-        return [tp]
-    return []
+    if (isinstance(tp, (int, float)) and entry < tp <= entry * 4
+            and tp not in valid):
+        valid.append(tp)
+    valid.sort()
+    return valid
 
 
 def _volume_band_tp1(rep: dict) -> Optional[float]:

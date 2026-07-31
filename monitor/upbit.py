@@ -71,8 +71,8 @@ def fetch_rvol_1h(market: str, timeout: float) -> Optional[dict]:
     시간창·완결 판정은 인덱스가 아니라 candle_date_time_utc 기반이다:
     - 업비트는 무거래 분에 캔들을 만들지 않아 "1분봉 60개"가 60분을 보장하지 않는다
       (fetch_range_since 2026-07-26 재감사 #9 와 동일 함정) → now-3600 시간창 필터.
-      무거래 분은 자연히 0 취급(합산에서 빠짐). count=60 은 60분 구간 내 캔들 수의
-      이론적 상한이라 추가 페이징 불필요.
+      무거래 분은 자연히 0 취급(합산에서 빠짐). count=61 = 60분 창 내 캔들 수의
+      상한(분 경계 직후 61개 케이스 포함, B-3) — 추가 페이징 불필요.
     - 60분봉 분모 창은 [now-21h, now-1h] **종료 기준** — 진행 중 캔들은 물론,
       직전 완결봉 1개도 제외한다(start+3600 <= now-3600). 직전 완결봉은 분자
       (최근 60분 롤링)와 최대 59분 겹쳐, 정각 직후 판정 시 급증 거래량이 분모를
@@ -90,7 +90,11 @@ def fetch_rvol_1h(market: str, timeout: float) -> Optional[dict]:
     try:
         resp = requests.get(
             f"{_BASE}/candles/minutes/1",
-            params={"market": market, "count": 60}, timeout=timeout)
+            # count=61 (2026-07-31 2인검토 B-3): now 가 분 경계 직후면 60분 창을
+            # 통과하는 캔들이 61개가 될 수 있어, 60이면 최고령 1분이 절단됐다
+            # (과소집계 = 보수 방향이지만 굳이 잃을 이유 없음). 여분 1개는
+            # 시간창 필터가 걸러낸다.
+            params={"market": market, "count": 61}, timeout=timeout)
         resp.raise_for_status()
         candles = resp.json()
         time.sleep(_CANDLE_PACE_SEC)
