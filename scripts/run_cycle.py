@@ -435,7 +435,16 @@ def _maybe_reverse_check(conn, now: float) -> dict:
 
 
 def _send_reverse_alert(text: str, kind: str, author: str) -> None:
-    """경보 1회 발송 — 실패는 로그만(유실 허용, 상태 기록은 이미 commit 됨)."""
+    """경보 1회 발송 — 실패는 로그만(유실 허용, 상태 기록은 이미 commit 됨).
+
+    2026-08-01 사용자 결정(당일 B안 확정 직후 번복): 역신호는 **향후 분석용
+    저장만** — 텔레그램 발송은 하지 않는다("어차피 보내도 모름"). 주간 리포트
+    (weekly_report_auto_send)와 같은 스위치 패턴 — 판정·meta 기록·표시(show_
+    status)는 전부 그대로 쌓이고, 발송만 끈다. 다시 받고 싶으면 settings 의
+    reverse_alert_send_enabled=True 한 줄이면 즉시 재개된다."""
+    if not settings.get("reverse_alert_send_enabled"):
+        logger.info("[역신호] %s 기록만(@%s) - 발송 스위치 OFF", kind, author)
+        return
     try:
         sent = telegram.send(text)
     except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다

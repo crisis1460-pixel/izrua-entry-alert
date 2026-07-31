@@ -97,10 +97,12 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
   산식 버전 태그: 신규 채점분 `levels.grade_ver='v3'`, 과거 행 NULL 유지 = 소급 재라벨 금지(D4),
   캘리브레이션은 버전 분리 집계(구 산식은 "참고" 병기).
   ※ 추가 필터(2026-07-29 B안): 마지막 TP < 2% 이면 발송 억제 (`suppressed_tp_too_close`) — S9: 5%→2% 조정
-- **역신호 확정**(2026-08-01 S9 구현, Q1=B안·Q2=해제 확정): 주간 스냅샷 2주 연속
-  neff_r≥5 & E_LB<0 → 텔레그램 확정 경보 **1회**(스냅샷 훅 직후, meta `reverse_confirmed_{author}`
-  발송 전 commit), **알림 필터·발송량 무변경**. 2주 연속 회복(E_LB≥0)이면 해제 + 해제 알림 1회.
-  표본 부족·게이트 미달은 판정 불가 = 현 상태 보수적 유지
+- **역신호 확정**(2026-08-01 S9 구현): 주간 스냅샷 2주 연속 neff_r≥5 & E_LB<0
+  → 확정, 2주 연속 회복(E_LB≥0) → 해제 (표본 부족·게이트 미달은 보수적 유지).
+  meta `reverse_confirmed_{author}` 기록, **알림 필터·발송량 무변경**.
+  ⚠️ 당일 사용자 번복: **텔레그램 발송 안 함 — 향후 분석용 저장만**
+  (`reverse_alert_send_enabled=False`, True 로 되돌리면 즉시 재개). 확인은
+  show_status 🔻역신호확정 태그로
 - 표시: 자체 표본 n_eff≥5 부터 `🏹 승률67% (4승2패) 터치율67%` 자동 병기
 - 환산: USD 저장값 × 업비트 KRW-USDT 시세
 
@@ -191,7 +193,8 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
   `db.get_author_last_n_snapshots` + run_cycle `maybe_reverse_check`(스냅샷 훅 직후,
   meta 쓰기→commit→send 순서, try 격리) + 확정/해제 경보 렌더러 2종 +
   show_status 🔻역신호확정 태그·주간 리포트 확정 한 줄(표시 전용).
-  W31 스냅샷(~08-02 저녁 회차)에서 첫 판정 — mastercrypto2020 이 W31 도 음수면 첫 확정 경보.
+  당일 번복: 발송 스위치 OFF(분석용 저장만, `reverse_alert_send_enabled`) — RS9 로 고정.
+  W31 스냅샷(~08-02 저녁 회차)에서 첫 판정 — mastercrypto2020 이 W31 도 음수면 조용히 확정 기록.
   기획: `izrua_company/plan_S9_reverse_signal.md`(구현 완료 갱신)
 - **S10 등급 배점 재조정(안3) 구현 완료**(개발자 A, D1~D5 승인): TP 원거리 보상 축소 +
   작성자 실적 가점(+5/10/15, Wilson 80% 하한 게이트) + grade_ver='v3' 태그 + 롤백 스위치.

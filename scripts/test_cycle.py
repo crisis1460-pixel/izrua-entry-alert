@@ -830,10 +830,13 @@ if os.path.exists(SNAP_DB):
     os.remove(SNAP_DB)
 
 
-# ── RS1~RS8: 역신호 확정/해제 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──
+# ── RS1~RS9: 역신호 확정/해제 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──
 # 확정 상태는 meta(reverse_confirmed_{author})에 저장하고 **발송 전 commit**(M-A2).
 # 검사는 스냅샷을 실제로 찍은 회차에만 돈다. 발송 실패는 로그만(유실 허용,
 # 중복 방지 우선). 알림 필터·본알림 경로는 일절 건드리지 않는다(B안).
+# 2026-08-01 당일 번복: 운영 기본값은 발송 OFF(reverse_alert_send_enabled=False,
+# 분석용 저장만) — RS1~RS8 은 스위치 ON 으로 발송 경로를, RS9 가 기본값(OFF)의
+# "기록만·무발송"을 검증한다.
 RS_DB = "cache/_test_reverse.db"
 if os.path.exists(RS_DB):
     os.remove(RS_DB)
@@ -861,6 +864,7 @@ _orig_send_rv = telegram.send
 telegram.send = lambda text, urgency="high": (_rv_sent["texts"].append(text) or True)
 
 settings.SETTINGS["db_path"] = RS_DB
+settings.SETTINGS["reverse_alert_send_enabled"] = True   # 발송 경로 검증용(기본 False)
 _r_rs = run_cycle.run_cycle(now=NOON_KST, collect_enabled=False, report_enabled=False,
                             price_runner=lambda: {"ok": 1})
 with db.connect(RS_DB) as _c:
@@ -952,6 +956,24 @@ db.get_meta = _get_meta_boom_rv
 check("RS8 역신호 meta 조회 실패도 격리(failed, 예외 전파 없음)",
       run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 420) == "failed")
 db.get_meta = _orig_get_meta_rv
+
+# RS9: 운영 기본값(발송 OFF) — 판정·meta 기록은 그대로, 텔레그램 발송만 0건
+# (2026-08-01 사용자 결정: 역신호는 향후 분석용 저장만)
+settings.SETTINGS["reverse_alert_send_enabled"] = False
+with db.connect(RS_DB) as _c:
+    db.save_author_snapshot(_c, RS_WEEK_PREV, "QuietAuth",
+                            dict(e_lb=-0.6, neff_r=6.0, p_hat=0.2, neff_win=6.0,
+                                 wins=1, losses=5), now=NOON_KST)
+    db.save_author_snapshot(_c, RS_WEEK, "QuietAuth",
+                            dict(e_lb=-0.7, neff_r=7.0, p_hat=0.2, neff_win=7.0,
+                                 wins=1, losses=6), now=NOON_KST)
+_rs9_before = len(_rv_sent["texts"])
+_rs9 = run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 480)
+with db.connect(RS_DB) as _c:
+    _rs9_meta = db.get_meta(_c, db.reverse_confirm_key("QuietAuth"))
+check("RS9 발송 스위치 OFF(기본값) - 확정 기록은 남고 텔레그램 발송은 0건",
+      _rs9 == "ok" and _rs9_meta == RS_WEEK
+      and len(_rv_sent["texts"]) == _rs9_before)
 
 telegram.send = _orig_send_rv
 settings.SETTINGS["db_path"] = TEST_DB

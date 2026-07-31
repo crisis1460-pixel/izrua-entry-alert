@@ -107,6 +107,11 @@ SETTINGS = {
     # `python scripts/run_weekly_report.py` 로 즉시 볼 수 있다. 나중에 다시 받고 싶으면
     # 이 값만 True 로 되돌리면 된다(주기 판정 meta 는 그대로라 바로 재개됨).
     "weekly_report_auto_send": False,
+    # 역신호 확정/해제 경보 발송 스위치 (2026-08-01 사용자 결정 — 향후 분석용
+    # 저장만, 텔레그램 발송 안 함. 판정·meta 기록·show_status 표시는 계속 쌓이며
+    # True 로 되돌리면 다음 스냅샷 회차부터 즉시 재개 — weekly_report_auto_send
+    # 와 같은 패턴).
+    "reverse_alert_send_enabled": False,
     # 작성자 주간 스냅샷(역신호 '2주 연속' 판정용 원천 데이터) — 리포트 발송과 무관하게
     # 계속 쌓인다. 저장 전용이라 알림·필터에 영향 없음(2026-07-26 사용자 결정).
     "author_snapshot_interval_hours": 168,
