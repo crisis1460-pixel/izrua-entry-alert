@@ -464,6 +464,10 @@ def run_once(now: float = None) -> dict:
                "ambiguous_skipped": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
+        # 작성자 종결 실적 캐시 (2026-08-01 S10 v3) — author → (n, hits). 한 회차 안에서
+        # 같은 작성자를 두 번 조회하지 않는다. 판정(_judge_outcomes)은 이 루프 '뒤'라
+        # 회차 내 실적이 변하지 않아 캐시가 안전하다.
+        author_stats_cache: dict = {}
 
         # 순환 import 방지 지연 로드. grade_from_score 는 grading.py 를 고치지 않고
         # 이미 있는 순수 함수를 읽기 전용으로 재사용하는 용도(TP 감점 되돌림 판정).
@@ -537,6 +541,23 @@ def run_once(now: float = None) -> dict:
                     continue
 
                 current_usd = current / usdt_krw
+
+                # 작성자 실적 가점 주입 (2026-08-01 S10 v3 안2) — 반드시 아래
+                # _rep(대표 선정)과 전 멤버 재채점 루프(M-1)보다 **앞**이어야 한다:
+                # 둘 다 regrade_current 를 타므로, 키를 먼저 심어야 실적 가점이
+                # 반영된 점수로 대표 선정·필터 판정이 이뤄진다. 조회 실패는 발송
+                # 경로를 죽이지 않게 격리 — 미주입 레벨은 가점 0(구 산식과 동일).
+                try:
+                    for _lv in cluster:
+                        _a = _lv.get("author")
+                        if _a not in author_stats_cache:
+                            author_stats_cache[_a] = db.author_closed_stats(conn, _a)
+                        (_lv["author_closed_n"],
+                         _lv["author_closed_hits"]) = author_stats_cache[_a]
+                except Exception as e:  # noqa: BLE001 - 발송 경로 생존 최우선
+                    logger.warning("[체크] %s 작성자 실적 조회 실패(가점 없이 진행): %s",
+                                   coin, e)
+
                 rep = _rep(cluster, current_usd)  # 재채점 기준 대표 선정
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"

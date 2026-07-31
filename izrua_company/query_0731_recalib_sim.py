@@ -30,7 +30,12 @@ COLS = """id, coin_symbol, direction, entry_usd, sl_usd, tp_usd, rr, grade, scor
 author, author_followers, mcap_rank, status, outcome, ambiguous, judgment_mode,
 tp_ladder_count, tps_usd"""
 
-con = sqlite3.connect(DB)
+# 프로덕션 DB 는 읽기 전용 원칙(HANDOFF §6-6) — mode=ro 로 열고 sqlite3.backup 으로
+# 인메모리 사본을 떠서 사본만 조회한다(단순 파일복사는 WAL 미반영이라 backup 사용).
+_src = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+con = sqlite3.connect(":memory:")
+_src.backup(con)
+_src.close()
 con.row_factory = sqlite3.Row
 closed = [dict(r) for r in con.execute(f"SELECT {COLS} FROM levels WHERE outcome IS NOT NULL")]
 watching = [dict(r) for r in con.execute(

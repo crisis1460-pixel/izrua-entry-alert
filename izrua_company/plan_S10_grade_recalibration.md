@@ -3,7 +3,8 @@
 > 작성일: 2026-07-31
 > 작성자: 🧭 기획자
 > 대상 레포: `C:\Users\User\Desktop\izrua_entry_alert`
-> 상태: **사용자 결정 대기 (5장 D1~D5)**
+> 상태: **구현 완료 (2026-08-01)** — D1~D5 전부 승인(추천안), 안3 채택.
+> 소급 시뮬 §1-1·§4-3·§4-4 구현 대조 정확 일치. 롤백: `grade_author_points_enabled=False`
 > 근거 데이터: `data/levels.db` 종결 74건 (2026-07-31 기준), 시뮬레이션 전수 재현 스크립트 `izrua_company/query_0731_recalib_sim.py`
 
 ---

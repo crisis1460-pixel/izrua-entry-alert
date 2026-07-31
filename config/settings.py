@@ -83,6 +83,16 @@ SETTINGS = {
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
     "alert_max_per_coin_per_day": 3,     # 코인당 하루 알림 상한
 
+    # 등급 산식 버전 (2026-08-01 S10 안3 — plan_S10_grade_recalibration.md)
+    # grade_formula_ver: 신규 채점분에 levels.grade_ver 로 기록되는 태그. 과거 행은
+    # NULL 유지(구 산식) — 소급 재라벨 금지(사용자 결정 D4). 캘리브레이션은 버전
+    # 분리 집계(v3 기본, 구버전은 "구 산식(참고)" 병기).
+    "grade_formula_ver": "v3",
+    # 작성자 실적 가점(안2) 롤백 스위치 — False 면 calculate_grade/regrade_current
+    # 양쪽에서 실적 가점 0 고정(배점표 축소분(안1)은 유지 — 위험 없는 부분).
+    # 배포 후 1주 알림량 ±10% 이탈 시 이 값만 False 로 되돌린다(§6-4).
+    "grade_author_points_enabled": True,
+
     # 작성자 랭킹 (ACCURACY_DB_PLAN 2단계, 2026-07-26 카드 확정 — 표시·리포트용, 필터 미사용)
     "rank_half_life_days": 90,           # 최신성 가중 반감기 (w=0.5^(경과일/90))
     "rank_z": 1.28,                      # E_LB 80% 단측 신뢰하한 계수

@@ -182,34 +182,47 @@ def _grade_distribution(conn) -> dict:
 # 여기서 conn.execute 로 직접 한다(같은 파일의 _grade_distribution 과 동일 패턴).
 # scripts/run_weekly_report.py 도 이 함수를 import 해 쓴다: SQL 정의는 한 곳만 둔다.
 
-def fetch_calibration_rows(conn) -> list:
+def fetch_calibration_rows(conn, ver: str = None) -> list:
     """등급 캘리브레이션용 종결 표본 원시 행 [(grade, outcome, ambiguous), ...].
 
     제외 기준은 기존 통계(db.get_author_outcome_rows)와 동일하게 맞춘다 —
     미종결(outcome NULL)과 섀도 터치(touched_at NULL)는 표본이 아니다.
     grade 는 **수집 시점에 기록된 DB 원본값**을 그대로 읽는다(재채점하지 않는다).
     ambiguous 컬럼이 없는 구세대 DB 는 OperationalError → 호출부가 빈 목록 처리.
+
+    ver (2026-08-01 S10 D4 — 산식 버전 분리 집계):
+      None     = 전체 (기존 호출부 호환)
+      'legacy' = grade_ver 미기록(NULL)·현행과 다른 버전 = 구 산식 표본
+      그 외     = 해당 grade_ver 표본만 (예: 'v3')
+    신·구 산식의 등급은 의미가 달라 한 표에 섞으면 캘리브레이션이 오염된다.
     """
-    return [tuple(r) for r in conn.execute(
-        "SELECT grade, outcome, ambiguous FROM levels "
-        "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL"
-    ).fetchall()]
+    q = ("SELECT grade, outcome, ambiguous FROM levels "
+         "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL")
+    cur_ver = settings.get("grade_formula_ver")
+    if ver == "legacy":
+        return [tuple(r) for r in conn.execute(
+            q + " AND (grade_ver IS NULL OR grade_ver <> ?)", (cur_ver,)).fetchall()]
+    if ver is not None:
+        return [tuple(r) for r in conn.execute(
+            q + " AND grade_ver = ?", (ver,)).fetchall()]
+    return [tuple(r) for r in conn.execute(q).fetchall()]
 
 
-def _calibration(conn):
-    """캘리브레이션 결과 dict. 조회 실패(구세대 스키마)면 None."""
+def _calibration_pair(conn):
+    """(현행 산식 표본 결과, 구 산식 표본 결과) — 조회 실패(구세대 스키마)면 (None, None).
+
+    2026-08-01 S10 D4: v3 표본 집계가 기본, 구버전 표는 "구 산식(참고)" 병기.
+    """
     try:
-        rows = fetch_calibration_rows(conn)
+        cur = fetch_calibration_rows(conn, ver=settings.get("grade_formula_ver"))
+        legacy = fetch_calibration_rows(conn, ver="legacy")
     except sqlite3.OperationalError:
-        return None
-    return calibration.calibrate_grades(rows)
+        return None, None
+    return calibration.calibrate_grades(cur), calibration.calibrate_grades(legacy)
 
 
-def _print_calibration_summary(conn) -> None:
-    """현황 화면용 요약 — 등급별 도달률 한 줄 + 위반 신호 한 줄(표기 전용)."""
-    cal = _calibration(conn)
-    if not cal or not cal["pooled"]["n"]:
-        return
+def _cal_one_liner(cal) -> str:
+    """등급별 도달률 한 줄 요약 (표본 있는 등급만)."""
     parts = []
     for g in cal["order"]:
         b = cal["buckets"][g]
@@ -217,13 +230,28 @@ def _print_calibration_summary(conn) -> None:
             continue
         low = "" if b["enough"] else "?"  # 표본 부족 표식
         parts.append(f"{g} {b['rate'] * 100:.0f}%({b['hits']}/{b['n']}){low}")
-    print(f"  등급 캘리브레이션(TP1 도달률, 종결 {cal['pooled']['n']}건): {' · '.join(parts)}"
-          f"   ?=표본 n<{cal['min_n']:g}")
-    if cal["violations"]:
-        v = cal["violations"][0]
-        sig = "CI 비겹침" if v["significant"] else "CI 겹침"
-        print(f"  ⚠️ 단조성 위반 {len(cal['violations'])}건 (예: {v['lower']} > {v['higher']}, "
-              f"{sig}) — 배점 재검토 '신호'일 뿐, 산식은 그대로입니다")
+    return " · ".join(parts)
+
+
+def _print_calibration_summary(conn) -> None:
+    """현황 화면용 요약 — v3 표본 기본 + 구 산식(참고) 병기, 표기 전용."""
+    cal, legacy = _calibration_pair(conn)
+    if cal is None:
+        return
+    ver = settings.get("grade_formula_ver")
+    if cal["pooled"]["n"]:
+        print(f"  등급 캘리브레이션({ver}, TP1 도달률, 종결 {cal['pooled']['n']}건): "
+              f"{_cal_one_liner(cal)}   ?=표본 n<{cal['min_n']:g}")
+        if cal["violations"]:
+            v = cal["violations"][0]
+            sig = "CI 비겹침" if v["significant"] else "CI 겹침"
+            print(f"  ⚠️ 단조성 위반 {len(cal['violations'])}건 (예: {v['lower']} > "
+                  f"{v['higher']}, {sig}) — 배점 재검토 '신호'일 뿐, 산식은 그대로입니다")
+    elif legacy and legacy["pooled"]["n"]:
+        print(f"  등급 캘리브레이션({ver}): 신 산식 종결 표본 아직 0건 (누적 대기)")
+    if legacy and legacy["pooled"]["n"]:
+        print(f"  구 산식(참고, 종결 {legacy['pooled']['n']}건): {_cal_one_liner(legacy)}"
+              f"   — grade_ver 이전 표본, 신 산식과 등급 의미가 다름")
 
 
 def print_pipeline_status(conn, now: float) -> None:
@@ -496,10 +524,11 @@ def print_weekly_report_text(conn, now: float) -> None:
         baseline, raw_records, confluence = None, None, None
 
     from notify import telegram
+    _cal_cur, _cal_legacy = _calibration_pair(conn)
     text = telegram.render_weekly_report(
         rows_by_author, now=now, baseline=baseline,
         raw_records=raw_records, confluence=confluence,
-        calibration_result=_calibration(conn))
+        calibration_result=_cal_cur, calibration_legacy=_cal_legacy)
     print(_strip_html(text))
 
 

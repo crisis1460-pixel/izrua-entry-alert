@@ -262,6 +262,11 @@ _EXTRA_COLUMNS = {
     "touch_kimchi_pct": "REAL",       # 김치프리미엄 (%)
     "touch_btc_dominance": "REAL",    # BTC 시총 점유율 (%)
     "touch_volume_rank": "INTEGER",   # 업비트 KRW 거래대금 순위
+    # 등급 산식 버전 태그 (2026-08-01 S10 v3 — 사용자 결정 D4). 신규 채점 저장분만
+    # settings.grade_formula_ver('v3')가 찍히고 **기존 행은 NULL 유지 = 구 산식**.
+    # 소급 UPDATE 금지 — 과거 알림이 왜 나갔는지(당시 등급)의 원본 보존 원칙.
+    # 캘리브레이션(show_status/run_weekly_report)이 이 값으로 신·구 표본을 분리 집계.
+    "grade_ver": "TEXT",
 }
 
 
@@ -305,6 +310,13 @@ def _migrate(conn) -> None:
     # 이미 체인이 있는 행은 WHERE 절이 걸러내 매 init_db 호출마다 사실상 공짜(no-op).
     _backfill_outcome_chain(conn)
 
+    # grade_v3_since (2026-08-01 S10 §6-3 감사 추적): v3 산식 배포 이후 첫 회차가
+    # 여기(모든 엔트리포인트가 지나는 init_db 마이그레이션)서 1회 기록한다 —
+    # run_cycle 배선 추가 없이 '이 DB 에 v3 채점이 언제부터 섞였나'를 남기는 목적.
+    # 이미 있으면 no-op (meta 조회 1건).
+    if get_meta(conn, "grade_v3_since") is None:
+        set_meta(conn, "grade_v3_since", str(time.time()))
+
 
 def _maybe_audit_dump(conn, db_path: str) -> None:
     """주간 감사 덤프 훅 (2026-07-27 기획 카드 #4 — storage/audit_dump.py 참고).
@@ -346,8 +358,8 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source, tp_ladder_count, tps_usd)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source, tp_ladder_count, tps_usd, grade_ver)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -363,6 +375,8 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("source") or "tradingview",
                 level.get("tp_ladder_count") or 0,   # 표시 전용(알림 "1/N단계")
                 level.get("tps_usd") or "[]",         # 전체 TP 목표가 목록 JSON
+                # 산식 버전 태그 (2026-08-01 v3). 미지정(None)=구 호출부/테스트 호환
+                level.get("grade_ver"),
             ),
         )
         return True
@@ -376,7 +390,8 @@ def upsert_level(conn, level: dict) -> bool:
     # 으로 사후 변경되면 '판정 기준 골대 이동'이라 안티게이밍 원칙 위반.
     conn.execute(
         """UPDATE levels SET
-             grade=?, score=?, rr=?, sl_usd=?, tp_usd=?,
+             grade=?, score=?, rr=?, grade_ver=COALESCE(?, grade_ver),
+             sl_usd=?, tp_usd=?,
              tp_ladder_count=?,
              tps_usd=COALESCE(?, tps_usd),
              author_followers=?, author_hit_rate=?, author_hit_count=?,
@@ -385,6 +400,9 @@ def upsert_level(conn, level: dict) -> bool:
            WHERE signal_key=? AND status IN ('watching','previewed')""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
+            # 재수집 재채점은 현재 산식으로 이뤄지므로 버전도 함께 갱신.
+            # None(구 호출부)은 COALESCE 로 기존 값 보존 — 소급 재라벨 아님.
+            level.get("grade_ver"),
             level.get("sl_usd"), level.get("tp_usd"),
             level.get("tp_ladder_count") or 0,
             # None → COALESCE 가 기존 값을 보존 (backfill 값 보호).
@@ -550,6 +568,25 @@ def get_author_outcome_rows(conn, author: Optional[str]) -> list:
         "SELECT outcome, r_multiple, touched_at, author_hit_rate, author_hit_count "
         "FROM levels WHERE author=? AND outcome IS NOT NULL AND touched_at IS NOT NULL",
         (author,)).fetchall()]
+
+
+def author_closed_stats(conn, author: Optional[str]) -> tuple:
+    """작성자의 (종결 표본 수 n, TP1 도달 hit 수) — 등급 v3 실적 가점의 원천
+    (2026-08-01 S10 안2, collector.grading.author_track_points 입력).
+
+    표본 정의는 캘리브레이션(analytics/calibration.py)과 같은 축 —
+    분모 = outcome 확정 전체(타임박스 포함), 분자 = outcome='hit' 만
+    (timeboxed_win 은 목표가를 실제로 찍은 게 아니라 분자에서 제외).
+    작성자 없음/미상은 (0, 0) = 가점 0(중립). E_LB(ranking, R 트랙·최신성 가중)와는
+    다른 축이다 — 등급 가점은 게이트 있는 고정 배점표라 단순 원시 비율을 쓴다."""
+    if not author:
+        return 0, 0
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, "
+        "SUM(CASE WHEN outcome='hit' THEN 1 ELSE 0 END) AS h "
+        "FROM levels WHERE author=? AND outcome IS NOT NULL",
+        (author,)).fetchone()
+    return row["n"] or 0, row["h"] or 0
 
 
 def list_authors_with_outcomes(conn) -> list:

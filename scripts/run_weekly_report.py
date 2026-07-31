@@ -25,10 +25,10 @@ try:
 except Exception:
     pass
 
-from analytics import calibration, clustering
+from analytics import clustering
 from config import settings
 from notify import telegram
-from scripts.show_status import fetch_calibration_rows
+from scripts.show_status import _calibration_pair
 from storage import audit_dump, db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -60,14 +60,16 @@ def send_report(db_path: str = None, now: float = None) -> bool:
             window_sec=settings.get("confluence_window_hours") * 3600,
         )
         # 등급 캘리브레이션(기획 카드 #26): 등급별 실측 TP1 도달률 + Wilson CI.
-        # 순수 로컬 연산(외부 API 0). SQL 은 show_status 에 한 벌만 둔다 —
-        # storage/db.py 는 동시 작업 중이라 손대지 않는다.
-        calibration_result = calibration.calibrate_grades(fetch_calibration_rows(conn))
+        # 순수 로컬 연산(외부 API 0). SQL 은 show_status 에 한 벌만 둔다.
+        # 2026-08-01 S10 D4: 산식 버전 분리 집계 — v3 표본이 기본 표,
+        # 구버전(grade_ver NULL) 표본은 "구 산식(참고)" 로 병기만 한다.
+        calibration_result, calibration_legacy = _calibration_pair(conn)
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
                                          raw_records=raw_records, confluence=confluence,
-                                         calibration_result=calibration_result)
+                                         calibration_result=calibration_result,
+                                         calibration_legacy=calibration_legacy)
     ok = telegram.send(text)
 
     logger.info(

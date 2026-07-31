@@ -243,9 +243,13 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         followers = stats_row.get("followers") or idea.get("author_followers")
         if followers is None and lookup_followers and idea.get("author"):
             followers = tradingview.fetch_author_followers(idea["author"], timeout)
+        # 작성자 실적 가점 (2026-08-01 S10 v3 안2) — 자기 DB 종결 실적을 채점 직전
+        # 조회해 전달. 콜드스타트(n<5)는 grading 쪽 게이트가 0점(중립) 처리.
+        closed_n, closed_hits = db.author_closed_stats(conn, idea.get("author"))
         grade, score, rr = calculate_grade(
             followers, setup["direction"], setup["entry"],
             setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
+            author_closed_n=closed_n, author_closed_hits=closed_hits,
         )
         tf_hours = parse_timeframe_hours(text)
         level = {
@@ -266,6 +270,8 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "rr": round(rr, 2) if rr is not None else None,
             "grade": grade,
             "score": score,
+            # 산식 버전 태그 (D4) — 이 행이 어느 산식으로 채점됐는지. 과거 행 소급 없음.
+            "grade_ver": settings.get("grade_formula_ver"),
             "author": idea.get("author"),
             "author_followers": followers,
             "author_hit_rate": stats_row.get("hit_rate"),

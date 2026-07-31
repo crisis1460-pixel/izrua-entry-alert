@@ -510,14 +510,35 @@ def _pct(v) -> str:
     return f"{v * 100:.0f}%" if v is not None else "-"
 
 
-def _calibration_section(cal: dict) -> list:
+def _calibration_section(cal: dict, legacy: dict = None) -> list:
     """🎚️ 등급 캘리브레이션 섹션 (기획 카드 #26). 미주입/표본 0 이면 빈 목록.
 
     수학은 analytics.calibration 이 전부 담당하고 여기선 문구만 만든다.
     **표기 전용** — 이 섹션은 배점(collector/grading.py)·알림 필터·엔트리 알림
     양식 어디에도 되먹임되지 않는다. 문구에서도 그 점을 매번 명시한다(읽는 사람이
     '봇이 알아서 등급을 고쳤겠거니' 오해하면 안 된다).
+
+    legacy (2026-08-01 S10 D4): 구 산식(grade_ver 이전) 표본 결과 — 참고용 한 줄로만
+    병기한다. 신·구 등급은 의미가 달라 본표에 섞지 않는다. 미주입이면 종전과 동일.
     """
+    lines = _calibration_main_lines(cal)
+    if legacy and (legacy.get("pooled") or {}).get("n"):
+        if not lines:
+            lines = [_SEP,
+                     "🎚️ 등급 캘리브레이션 — 신 산식(v3) 종결 표본 아직 0건 (누적 대기)"]
+        parts = []
+        for g in legacy.get("order") or []:
+            b = (legacy.get("buckets") or {}).get(g) or {}
+            if b.get("n"):
+                parts.append(f"{g} {_pct(b['rate'])} ({b['hits']}/{b['n']})")
+        lines.append(f"  구 산식(참고, 종결 {legacy['pooled']['n']}건): "
+                     f"{' · '.join(parts)}")
+        lines.append("  (grade_ver 이전 표본 — 신 산식과 등급 의미가 달라 별도 집계)")
+    return lines
+
+
+def _calibration_main_lines(cal: dict) -> list:
+    """캘리브레이션 본표 라인들 — _calibration_section 의 본체 (분리: legacy 병기 때문)."""
     if not cal or not cal.get("buckets"):
         return []
     pooled = cal.get("pooled") or {}
@@ -571,7 +592,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          confluence: dict = None, baseline: dict = None,
                          raw_records: dict = None, baseline_min_n: int = None,
                          confluence_min_clusters: int = None,
-                         calibration_result: dict = None) -> str:
+                         calibration_result: dict = None,
+                         calibration_legacy: dict = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -612,7 +634,7 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                       "순위가 표시됩니다.")
         # 등급 캘리브레이션은 작성자 축과 독립이다 — 작성자 미상(author NULL) 종결
         # 표본만 있는 경우에도 등급 축은 볼 수 있으므로 이 경로에서도 붙인다.
-        lines.extend(_calibration_section(calibration_result))
+        lines.extend(_calibration_section(calibration_result, calibration_legacy))
         lines.append(_SEP)
         return "\n".join(lines)
 
@@ -667,7 +689,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                                    raw_records, baseline_min_n))
 
     # ④ 등급 캘리브레이션 (기획 카드 #26) — 작성자 축과 무관한 별도 축, 표시 전용
-    lines.extend(_calibration_section(calibration_result))
+    # (2026-08-01 S10 D4: 본표=현행 산식(v3) 표본, 구 산식은 참고 한 줄 병기)
+    lines.extend(_calibration_section(calibration_result, calibration_legacy))
 
     # ⑤ 안내: 표본부족 + 역신호 후보
     if under_sample or n_anti:
