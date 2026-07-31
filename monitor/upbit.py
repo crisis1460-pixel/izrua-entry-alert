@@ -25,7 +25,8 @@ _CANDLE_PACE_SEC = 0.12  # 초당 ~8콜 (한도 10의 80%)
 
 
 def fetch_prices(markets: list, timeout: float) -> dict:
-    """여러 마켓 현재가를 1콜로. 반환 {market: price}. 실패 시 {}."""
+    """여러 마켓 현재가를 1콜로. 반환 {market: price}.
+    배치 400/404(상폐 종목 포함 시) 시 개별 재시도로 유효 마켓 구제."""
     if not markets:
         return {}
     try:
@@ -34,6 +35,27 @@ def fetch_prices(markets: list, timeout: float) -> dict:
         )
         resp.raise_for_status()
         return {t["market"]: float(t["trade_price"]) for t in resp.json()}
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code in (400, 404):
+            logger.warning(
+                "[upbit] 현재가 배치 HTTP %s - 상폐 종목 의심, 개별 재시도(%d마켓)",
+                e.response.status_code, len(markets))
+            result = {}
+            for mkt in markets:
+                try:
+                    r = requests.get(
+                        f"{_BASE}/ticker", params={"markets": mkt}, timeout=timeout)
+                    if r.status_code == 200:
+                        data = r.json()
+                        if data:
+                            result[mkt] = float(data[0]["trade_price"])
+                    elif r.status_code in (400, 404):
+                        logger.info("[upbit] %s 상폐/미지원 마켓 제외", mkt)
+                except Exception:  # noqa: BLE001
+                    pass
+            return result
+        logger.warning("[upbit] 현재가 조회 실패: %s", e)
+        return {}
     except Exception as e:  # noqa: BLE001
         logger.warning("[upbit] 현재가 조회 실패: %s", e)
         return {}

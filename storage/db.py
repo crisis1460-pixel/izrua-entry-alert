@@ -160,6 +160,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     ambiguous_magnified   INTEGER NOT NULL DEFAULT 0,
     ambiguous_unresolved  INTEGER NOT NULL DEFAULT 0,
     ambiguous_skipped     INTEGER NOT NULL DEFAULT 0,
+    -- TP 단계 알림이 본알림 무발송 게이트(M-2, 2026-08-01)로 차단된 건수.
+    -- suppressed_* 와 달리 _judge_outcomes 에서 누적 (가격체크 루프 외부).
+    suppressed_tp_gate   INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 """
@@ -1152,7 +1155,9 @@ _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      # 아니라 운영 신호다(예산·스위치를 손보면 줄어든다) — 그래서
                      # 분리한다(2026-07-26 감사 minor, Bar Magnifier 후속).
                      "ambiguous_magnified", "ambiguous_unresolved",
-                     "ambiguous_skipped")
+                     "ambiguous_skipped",
+                     # TP 단계 알림이 본알림 무발송 게이트(M-2, 2026-08-01)로 차단된 건수.
+                     "suppressed_tp_gate")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:

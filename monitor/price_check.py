@@ -289,13 +289,17 @@ def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
     e = lv.get("entry_usd") or 0
     if not e:
         return False
-    lo, hi = e * (1 - band_pct / 100), e * (1 + band_pct / 100)
     coin = lv["coin_symbol"]
     lid = lv["id"]
     for other in all_touched:
+        o_e = other.get("entry_usd") or 0
+        if not o_e:
+            continue
+        # 그리디 클러스터링과 동일 기준: 상단(높은) 엔트리 기준 band_pct 이내
+        top_e = max(e, o_e)
         if (other["coin_symbol"] == coin
                 and other["id"] != lid
-                and lo <= (other.get("entry_usd") or 0) <= hi
+                and abs(e - o_e) / top_e * 100 <= band_pct
                 and alert_ledger.recent_exists(
                     db_path, coin, kind, [other["id"]], since)):
             return True
@@ -793,6 +797,25 @@ def run_once(now: float = None) -> dict:
                     if not preview_off:
                         summary["suppressed"] += 1
 
+                # m-8 (2026-08-01): 억제된 터치에도 시장심리 스냅샷 기록.
+                # send_ok=False 로 알림이 나가지 않은 터치도 터치 시점 심리를
+                # DB 에 남긴다 — "억제된 신호의 시장환경"을 사후 분석하기 위한 데이터.
+                # _sentiment()/_volume_ranks() 는 이번 회차 캐시라 추가 API 0콜.
+                # 김프(binance)는 억제 터치당 최대 1콜 — 분석 가치가 비용보다 크다.
+                if touched:
+                    if _snap_sentiment is None:
+                        _snap_sentiment = _sentiment()
+                    if _snap_volume_rank is None:
+                        _snap_volume_rank = _volume_ranks().get(ticker)
+                    if _snap_kimchi is None:
+                        try:
+                            from monitor import binance as _binance_m8
+                            _usd_g = _binance_m8.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
+                            if _usd_g and _usd_g > 0 and usdt_krw:
+                                _snap_kimchi = (current / _usd_g - usdt_krw) / usdt_krw * 100
+                        except Exception:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
+                            pass
+
                 if touched:
                     # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기
                     # 엔트리, 지정가 체결 모델). 미도달 하단 레벨은 섀도 터치(재알림
@@ -894,6 +917,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     obs.setdefault("ambiguous_magnified", 0)
     obs.setdefault("ambiguous_unresolved", 0)
     obs.setdefault("ambiguous_skipped", 0)
+    obs.setdefault("suppressed_tp_gate", 0)
     resolved = 0
     db_path = cfg_get("db_path")  # 다단계 TP 알림 로깅용 (alert_ledger)
     default_window_sec = cfg_get("outcome_window_hours") * 3600
@@ -1079,6 +1103,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                                 "클러스터 중복 차단" if _sib_dup
                                 else "게이트 차단(본알림 무발송·초단타) - TP 알림 생략",
                                 lv["id"])
+                    if not _touch_sent:
+                        obs["suppressed_tp_gate"] += 1
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
                     _tp_day = _day_kst(now)
@@ -1119,6 +1145,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         alert_ledger.append(db_path, lv["coin_symbol"],
                                             _kind, [lv["id"]], now)
                         conn.commit()  # 발송 기록 확정 후 resolve (중간 TP 패턴과 동일)
+                    if not _touch_sent:
+                        obs["suppressed_tp_gate"] += 1
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
                 resolved += 1
