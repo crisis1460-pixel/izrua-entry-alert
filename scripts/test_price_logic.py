@@ -2769,6 +2769,66 @@ os.remove(_SB_DB)
 if os.path.exists(_sb_ledger):
     os.remove(_sb_ledger)
 
+# ── BN1~BN3: binance 김프 시세 451 폴백 (2026-08-01 m-7 수리 — Actions 미국
+# 러너에서 api.binance.com 이 451 지역차단, 종전 코드는 로그 없이 None) ────────
+# 하네스가 파일 초입(라인 111)에서 fetch_usdt_price 를 가짜로 바꿔두므로,
+# 실물 로직 검증을 위해 reload 로 원본을 복원한다(이후 run_once 호출 없음).
+import importlib  # noqa: E402
+
+from monitor import binance as _binance  # noqa: E402
+
+importlib.reload(_binance)
+
+
+class _BnResp:
+    def __init__(self, status, payload=None):
+        self.status_code = status
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def _bn_get_factory(by_host):
+    calls = []
+
+    def _get(url, params=None, timeout=None):
+        calls.append(url)
+        for host, resp in by_host.items():
+            if host in url:
+                return resp
+        raise AssertionError(f"예상 밖 URL: {url}")
+    _get.calls = calls
+    return _get
+
+
+# BN1: 주 경로 451(미국 차단) → data-api.binance.vision 폴백으로 가격 획득
+_requests_mod.get = _bn_get_factory({
+    "api.binance.com": _BnResp(451),
+    "data-api.binance.vision": _BnResp(200, {"price": "63000.5"}),
+})
+check("BN1 451 지역차단 - vision 미러 폴백으로 가격 획득",
+      _binance.fetch_usdt_price("BTC", 5.0) == 63000.5)
+
+# BN2: 400(Invalid symbol = 미상장)은 폴백 무의미 — 즉시 None, 2차 호출 없음
+_bn2 = _bn_get_factory({"api.binance.com": _BnResp(400),
+                        "data-api.binance.vision": _BnResp(200, {"price": "1"})})
+_requests_mod.get = _bn2
+check("BN2 미상장(400) - 즉시 None·미러 미호출",
+      _binance.fetch_usdt_price("NOPE", 5.0) is None and len(_bn2.calls) == 1)
+
+
+# BN3: 전 경로 실패(451+예외)도 예외 없이 None (김프 줄만 생략, 발송은 계속)
+def _bn3_get(url, params=None, timeout=None):
+    if "api.binance.com" in url:
+        return _BnResp(451)
+    raise RuntimeError("network down")
+
+
+_requests_mod.get = _bn3_get
+check("BN3 전 경로 실패 - 예외 없이 None", _binance.fetch_usdt_price("BTC", 5.0) is None)
+_requests_mod.get = _orig_requests_get
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
