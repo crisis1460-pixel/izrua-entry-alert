@@ -318,7 +318,46 @@ check("G13 조회 SQL — 미채점/섀도터치 제외",
       and calibration.calibrate_grades(fetched)["pooled"]["n"] == 2)
 os.remove(TEST_DB3)
 
+# ── RV: 역신호 확정/해제 판정 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──
+# 순수 함수 — 스냅샷 dict(최신순) 만 받는다. 확정은 e_lb<0 엄격, 해제는 e_lb>=0.
+# 표본 부족/게이트 미달/결측은 둘 다 False = 현 상태 보수적 유지.
+
+
+def _snap(e_lb, neff_r, week="2026-W31"):
+    return dict(week_kst=week, e_lb=e_lb, neff_r=neff_r)
+
+
+_neg2 = [_snap(-0.9, 8.0), _snap(-0.5, 6.0, "2026-W30")]
+_pos2 = [_snap(0.3, 8.0), _snap(0.1, 6.0, "2026-W30")]
+
+check("RV1 스냅샷 0개 → 확정/해제 모두 False(증거 부족)",
+      not ranking.is_confirmed_reverse([]) and not ranking.is_recovered_reverse([]))
+check("RV2 스냅샷 1개뿐 → 조건 충족해도 False(2주 연속 아님)",
+      not ranking.is_confirmed_reverse([_snap(-0.9, 8.0)])
+      and not ranking.is_recovered_reverse([_snap(0.3, 8.0)]))
+check("RV3 2주 모두 neff≥5 & e_lb<0 → 확정 True / 해제 False",
+      ranking.is_confirmed_reverse(_neg2) and not ranking.is_recovered_reverse(_neg2))
+check("RV4 한 주만 음수(직전 주 양수) → 확정 False",
+      not ranking.is_confirmed_reverse([_snap(-0.9, 8.0), _snap(0.2, 6.0, "2026-W30")]))
+check("RV5 neff 게이트 미달(4.9)·결측(None) → 확정 False",
+      not ranking.is_confirmed_reverse([_snap(-0.9, 4.9), _snap(-0.5, 6.0, "2026-W30")])
+      and not ranking.is_confirmed_reverse([_snap(-0.9, None), _snap(-0.5, 6.0, "2026-W30")]))
+check("RV6 e_lb=0 경계 — 확정은 엄격히 <0 이라 False, 해제는 ≥0 이라 True",
+      not ranking.is_confirmed_reverse([_snap(0.0, 8.0), _snap(-0.5, 6.0, "2026-W30")])
+      and ranking.is_recovered_reverse([_snap(0.0, 8.0), _snap(0.0, 6.0, "2026-W30")]))
+check("RV7 2주 모두 neff≥5 & e_lb≥0 → 해제 True", ranking.is_recovered_reverse(_pos2))
+check("RV8 해제도 neff 게이트 필요 — 미달이면 False(확정 보수적 유지, Q2)",
+      not ranking.is_recovered_reverse([_snap(0.3, 4.9), _snap(0.1, 6.0, "2026-W30")]))
+check("RV9 한 주라도 음수면 해제 False",
+      not ranking.is_recovered_reverse([_snap(0.3, 8.0), _snap(-0.1, 6.0, "2026-W30")]))
+check("RV10 e_lb 결측(None)은 판정 불가 — 확정/해제 모두 False",
+      not ranking.is_confirmed_reverse([_snap(None, 8.0), _snap(-0.5, 6.0, "2026-W30")])
+      and not ranking.is_recovered_reverse([_snap(None, 8.0), _snap(0.5, 6.0, "2026-W30")]))
+check("RV11 min_neff 파라미터 — 4.9 도 min_neff=3 이면 확정",
+      ranking.is_confirmed_reverse([_snap(-0.9, 4.9), _snap(-0.5, 4.9, "2026-W30")],
+                                   min_neff=3.0))
+
 print()
-n_checks = 41
+n_checks = 52
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

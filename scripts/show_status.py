@@ -313,6 +313,15 @@ def _rows_by_author(conn) -> dict:
     return {a: db.get_author_outcome_rows(conn, a) for a in authors}
 
 
+def _reverse_confirmed(conn) -> set:
+    """역신호 '확정' 작성자 집합 (S9 — run_cycle 스냅샷 훅이 meta 에 기록).
+    읽기 전용 조회 — 구세대 DB(meta 없음)는 조용히 빈 집합."""
+    try:
+        return db.get_reverse_confirmed_authors(conn)
+    except sqlite3.OperationalError:
+        return set()
+
+
 def print_author_performance(conn, now: float) -> None:
     print()
     print(_SEP)
@@ -333,15 +342,27 @@ def print_author_performance(conn, now: float) -> None:
     print(f"  작성자 {len(rows_by_author)}명 · 종결 표본 {total_rows}건 "
           f"· E_LB 게이트 n_eff≥{min_neff:g}")
     print()
+    confirmed = _reverse_confirmed(conn)
     if ranked:
         print(f"  {'순위':<4}{'작성자':<20}{'E_LB':>8}{'n_eff':>8}{'승률':>8}")
         for i, (author, met) in enumerate(ranked, 1):
-            anti = " 🔻역신호후보" if met["e_lb"] is not None and met["e_lb"] <= 0 else ""
+            # 확정(2주 연속, 경보 발송됨)은 후보 태그를 대체한다 — 상위 상태이므로
+            # 병기하면 같은 사실을 두 번 말하는 소음이 된다(S9, 표시 전용).
+            if author in confirmed:
+                anti = " 🔻역신호확정"
+            elif met["e_lb"] is not None and met["e_lb"] <= 0:
+                anti = " 🔻역신호후보"
+            else:
+                anti = ""
             pct = f"{met['p_hat'] * 100:.0f}%" if met.get("p_hat") is not None else "-"
             print(f"  {i:<4}{author:<20}{met['e_lb_display']:>+8.2f}"
                   f"{met['neff_r']:>8.1f}{pct:>8}{anti}")
     else:
         print("  게이트 통과 작성자 없음 (계속 관찰 중)")
+    # 게이트 미달로 랭킹에서 빠져도 확정 상태는 보수적으로 유지되므로 따로 알린다
+    hidden_confirmed = confirmed - {a for a, _ in ranked}
+    if hidden_confirmed:
+        print(f"  🔻역신호확정(랭킹 미등재): {' · '.join(sorted(hidden_confirmed))}")
 
     ranked_authors = {a for a, _ in ranked}
     under_sample = sorted(
@@ -528,7 +549,8 @@ def print_weekly_report_text(conn, now: float) -> None:
     text = telegram.render_weekly_report(
         rows_by_author, now=now, baseline=baseline,
         raw_records=raw_records, confluence=confluence,
-        calibration_result=_cal_cur, calibration_legacy=_cal_legacy)
+        calibration_result=_cal_cur, calibration_legacy=_cal_legacy,
+        reverse_confirmed=_reverse_confirmed(conn))
     print(_strip_html(text))
 
 

@@ -593,7 +593,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          raw_records: dict = None, baseline_min_n: int = None,
                          confluence_min_clusters: int = None,
                          calibration_result: dict = None,
-                         calibration_legacy: dict = None) -> str:
+                         calibration_legacy: dict = None,
+                         reverse_confirmed: set = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -613,7 +614,12 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     - calibration_result: analytics.calibration.calibrate_grades(...) 결과
       → '🎚️ 등급 캘리브레이션' 섹션(등급별 TP1 도달률·Wilson CI·단조성 신호).
       미주입이면 섹션만 빠지고 나머지 출력은 완전히 동일하다. 표시 전용이라
-      랭킹 수식·정렬 키·알림 필터·등급 산식 어디에도 영향이 없다."""
+      랭킹 수식·정렬 키·알림 필터·등급 산식 어디에도 영향이 없다.
+
+    2026-08-01 신규(S9 역신호 확정, 표시 전용):
+    - reverse_confirmed: 역신호 '확정' 작성자 집합(db.get_reverse_confirmed_authors)
+      → 안내 섹션에 확정 구분 한 줄. 미주입이면 종전 출력과 완전히 동일.
+      후보(🔻, E_LB≤0 현 시점)와 확정(2주 연속, 경보 발송됨)은 다른 상태다."""
     now = time.time() if now is None else now
     half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
     z = settings.get("rank_z") if z is None else z
@@ -692,8 +698,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     # (2026-08-01 S10 D4: 본표=현행 산식(v3) 표본, 구 산식은 참고 한 줄 병기)
     lines.extend(_calibration_section(calibration_result, calibration_legacy))
 
-    # ⑤ 안내: 표본부족 + 역신호 후보
-    if under_sample or n_anti:
+    # ⑤ 안내: 표본부족 + 역신호 후보/확정
+    if under_sample or n_anti or reverse_confirmed:
         lines.append(_SEP)
     if under_sample:
         under_sample.sort(key=lambda x: x[1], reverse=True)
@@ -705,6 +711,10 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     if n_anti:
         lines.append(f"⚠️ 역신호 후보 {n_anti}명 — 게이트는 통과했지만 E_LB≤0 (🔻 표시, "
                      f"자동 필터·태깅 아님, 관찰 참고용)")
+    if reverse_confirmed:
+        names = " · ".join(f"@{html.escape(a)}" for a in sorted(reverse_confirmed))
+        lines.append(f"🔻 역신호 확정 {len(reverse_confirmed)}명: {names} — "
+                     f"2주 연속 E_LB&lt;0 (확정 경보 발송됨, 알림 필터 무변경)")
 
     lines.append(_SEP)
     return "\n".join(lines)
@@ -782,6 +792,55 @@ def render_volume_spike_alert(coin: str, multiplier: float,
         _n = f" ({tp_idx}/{tp_count}단계)" if tp_idx and tp_count else ""
         lines.append(f"    다음 TP:  {_p}원{_n}")
     lines.append(_SEP)
+    return "\n".join(lines)
+
+
+# ── 역신호 확정/해제 경보 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──────
+# 기존 렌더러와 무관한 별도 함수 — 본알림(render_alert) 양식은 §4 불변. 중복 방지는
+# 호출부(scripts/run_cycle.py 스냅샷 훅)의 meta 확정 기록이 담당하고, 여긴 순수
+# 렌더링만 한다. 알림 필터·발송량에는 영향 없음(확정돼도 그 작성자의 본알림은
+# 계속 나간다 — B안 원칙).
+
+
+def _reverse_snap_lines(snaps: list) -> list:
+    """주차별 'W31: E_LB -0.78 (n_eff 7.4)' 행 — 오래된 주 → 최신 주 순.
+    snaps 는 db.get_author_last_n_snapshots() 반환(최신순)을 그대로 받는다."""
+    lines = []
+    for s in reversed(snaps[:2]):
+        wk = (s.get("week_kst") or "?").split("-")[-1]  # "2026-W31" → "W31"
+        e = s.get("e_lb")
+        n = s.get("neff_r") or 0.0
+        e_txt = f"{e:+.2f}" if e is not None else "-"
+        lines.append(f"  {wk}: E_LB {e_txt} (n_eff {n:.1f})")
+    return lines
+
+
+def render_reverse_confirm_alert(author: str, snaps: list) -> str:
+    """역신호 확정 경보 (확정 시점 1회 발송). snaps: 최근 2주 스냅샷(최신순).
+    '<' 는 반드시 &lt; (parse_mode=HTML — 날 '<' 는 400 Can't parse entities)."""
+    lines = [
+        _SEP,
+        f"🔻 <b>[역신호 확정]</b> @{html.escape(author)}",
+        _SEP,
+        "2주 연속 E_LB &lt; 0 확인",
+    ]
+    lines.extend(_reverse_snap_lines(snaps))
+    lines.append("이 작성자의 신호는 계속 알림드리지만")
+    lines.append("참고용으로 활용하세요.")
+    return "\n".join(lines)
+
+
+def render_reverse_release_alert(author: str, snaps: list) -> str:
+    """역신호 해제 알림 (2주 연속 회복 시 1회 발송) — 확정 경보의 대칭."""
+    lines = [
+        _SEP,
+        f"✅ <b>[역신호 해제]</b> @{html.escape(author)}",
+        _SEP,
+        "2주 연속 E_LB ≥ 0 회복 확인",
+    ]
+    lines.extend(_reverse_snap_lines(snaps))
+    lines.append("역신호 확정 표시를 해제합니다.")
+    lines.append("(알림 발송은 확정 중에도 그대로였습니다)")
     return "\n".join(lines)
 
 

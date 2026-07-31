@@ -392,6 +392,85 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
     return "ok"
 
 
+# ── 역신호 최종 판정 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──────
+#
+# 판정 규칙: 최근 2주 스냅샷이 모두 neff_r>=rank_min_neff 이고 E_LB<0 → 역신호 확정.
+# 확정 시 텔레그램 경보 **1회**만 발송하고 알림 필터·발송량은 건드리지 않는다(B안).
+# 2주 연속 회복(neff_r 게이트 통과 + E_LB>=0)이면 해제 + 해제 알림 1회(Q2).
+# 표본 부족·게이트 미달이면 판정 불가 = 확정 상태 보수적 유지.
+#
+# 왜 스냅샷 훅 직후인가: 판정 원천이 주간 스냅샷이라, 스냅샷을 실제로 찍은 회차에만
+# 돌면 부하가 없고(주 1회) 핫패스(2분 가격체크)와 완전히 분리된다(§7-2 예외 격리).
+# 별도 잡·별도 라이터를 만들지 않는다 — 라이터는 여전히 run_cycle 단일 진입점(W1).
+#
+# 중복 방지(§7-2 M-A2): 확정 기록(meta reverse_confirmed_{author}=확정 주차)을
+# **발송 전에 commit** 한다. 발송 실패는 로그만 남기고 유실 허용 — 역순이면 발송 후
+# 크래시 시 다음 회차가 같은 경보를 중복 발송한다(중복 방지 > 유실 방지).
+
+
+def _maybe_reverse_check(conn, now: float) -> dict:
+    """스냅샷 보유 작성자 전체를 순회해 확정/해제를 판정·기록·발송.
+    반환 {"confirmed": [...], "released": [...]} (로그·테스트용)."""
+    from analytics import ranking
+
+    min_neff = float(settings.get("rank_min_neff"))
+    confirmed, released = [], []
+    for author in db.list_snapshot_authors(conn):
+        snaps = db.get_author_last_n_snapshots(conn, author, 2)
+        key = db.reverse_confirm_key(author)
+        already = db.get_meta(conn, key)  # 확정 주차 문자열, ""/None = 미확정
+        if not already and ranking.is_confirmed_reverse(snaps, min_neff=min_neff):
+            db.set_meta(conn, key, snaps[0]["week_kst"])
+            conn.commit()  # 발송 전 확정 — 크래시해도 재발송 없음 (M-A2)
+            _send_reverse_alert(telegram.render_reverse_confirm_alert(author, snaps),
+                                "확정", author)
+            confirmed.append(author)
+        elif already and ranking.is_recovered_reverse(snaps, min_neff=min_neff):
+            db.set_meta(conn, key, "")  # 빈 값 = 해제 (키 잔존은 이력 흔적)
+            conn.commit()
+            _send_reverse_alert(telegram.render_reverse_release_alert(author, snaps),
+                                "해제", author)
+            released.append(author)
+    return {"confirmed": confirmed, "released": released}
+
+
+def _send_reverse_alert(text: str, kind: str, author: str) -> None:
+    """경보 1회 발송 — 실패는 로그만(유실 허용, 상태 기록은 이미 commit 됨)."""
+    try:
+        sent = telegram.send(text)
+    except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("역신호 %s 경보 발송 예외(@%s, 기록은 유지): %s: %s",
+                     kind, author, type(e).__name__, e)
+        return
+    if sent:
+        logger.warning("[역신호] %s 경보 발송: @%s", kind, author)
+    else:
+        logger.error("역신호 %s 경보 발송 실패(@%s, 기록은 유지 — 유실 허용)",
+                     kind, author)
+
+
+def maybe_reverse_check(db_path: str, now: float = None, enabled: bool = True) -> str:
+    """스냅샷을 실제로 찍은 회차에만(enabled=True) 역신호 확정/해제 검사.
+    반환 "skipped" | "ok" | "failed". 어떤 실패도 회차를 죽이지 않는다."""
+    now = time.time() if now is None else now
+    if not enabled:
+        return "skipped"
+    try:
+        with db.connect(db_path) as conn:
+            res = _maybe_reverse_check(conn, now)
+    except BaseException as e:  # noqa: BLE001 - 역신호 검사 실패가 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("역신호 판정 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::역신호 판정 실패 - {type(e).__name__}")
+        return "failed"
+    if res["confirmed"] or res["released"]:
+        logger.info("역신호 판정: 확정 %s / 해제 %s", res["confirmed"], res["released"])
+    return "ok"
+
+
 # ── 주간 리포트 ──────────────────────────────────────────────────────
 
 def _default_report_runner():
@@ -490,6 +569,10 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
     collect_stale_status = maybe_alert_collect_stale(db_path, now=now)
     # 작성자 주간 스냅샷 — 발송이 없어 조용하고, 리포트 ON/OFF 와 무관하게 계속 쌓인다
     snapshot_status = maybe_author_snapshot(db_path, now=now)
+    # 역신호 확정/해제 판정(S9) — 스냅샷을 실제로 찍은 회차에만(주 1회) 돈다.
+    # 평회차·스냅샷 실패 회차에는 검사 자체를 하지 않는다(원천이 안 갱신됐으므로).
+    reverse_status = maybe_reverse_check(db_path, now=now,
+                                         enabled=(snapshot_status == "ok"))
 
     # 자동 발송 스위치(settings.weekly_report_auto_send)가 꺼져 있으면 정기 발송을
     # 하지 않는다 — 2026-07-26 사용자 결정. --force-report 는 여전히 동작한다
@@ -499,11 +582,13 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
         enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
         report_runner=report_runner)
 
-    logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 주간리포트=%s",
-                price_status, collect_status, collect_stale_status, snapshot_status, report_status)
+    logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 역신호=%s 주간리포트=%s",
+                price_status, collect_status, collect_stale_status, snapshot_status,
+                reverse_status, report_status)
     return {"price_check": price_status, "collect": collect_status,
             "collect_stale_alert": collect_stale_status,
             "author_snapshot": snapshot_status,
+            "reverse_check": reverse_status,
             "weekly_report": report_status, "summary": price_summary}
 
 

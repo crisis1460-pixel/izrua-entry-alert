@@ -639,6 +639,47 @@ def get_author_snapshots(conn, author: Optional[str] = None, limit_weeks: int = 
     return [dict(r) for r in rows]
 
 
+def get_author_last_n_snapshots(conn, author: str, n: int = 2) -> list:
+    """최근 N 주차 스냅샷을 최신순으로 반환. 역신호 연속 판정용.
+
+    기존 get_author_snapshots()(전체/다수 주차 조회용)와 구분되는 전용 함수 —
+    "최근 2주만 빠르게"가 목적이다 (S9 기획 §4-1 A)."""
+    rows = conn.execute(
+        "SELECT * FROM author_snapshots WHERE author=? "
+        "ORDER BY week_kst DESC LIMIT ?",
+        (author, n)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── 역신호 확정 상태 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──────
+# 확정 상태는 meta 에 저장한다: key = reverse_confirmed_{author}, value = 확정 주차
+# (예: "2026-W31"). 해제 시 value 를 "" 로 비운다(빈 값 = 미확정) — meta 에 삭제
+# API 가 없고, 키 잔존 자체가 "한 번 확정됐던 이력"의 흔적이라 감사에도 낫다.
+# 판정·경보는 scripts/run_cycle.py 의 스냅샷 훅이 담당하고, 여기는 키 규약과
+# 조회만 둔다(show_status 읽기 전용 표시와 라이터가 같은 규약을 쓰도록 단일 출처).
+
+REVERSE_CONFIRM_META_PREFIX = "reverse_confirmed_"
+
+
+def reverse_confirm_key(author: str) -> str:
+    return f"{REVERSE_CONFIRM_META_PREFIX}{author}"
+
+
+def get_reverse_confirmed_authors(conn) -> set:
+    """현재 역신호 '확정' 상태인 작성자 집합 (해제된 빈 값은 제외)."""
+    rows = conn.execute(
+        "SELECT key, value FROM meta WHERE key LIKE ?",
+        (REVERSE_CONFIRM_META_PREFIX + "%",)).fetchall()
+    return {r["key"][len(REVERSE_CONFIRM_META_PREFIX):] for r in rows if r["value"]}
+
+
+def list_snapshot_authors(conn) -> list:
+    """스냅샷이 1주라도 있는 작성자 목록 — 역신호 판정 순회 대상."""
+    return [r["author"] for r in conn.execute(
+        "SELECT DISTINCT author FROM author_snapshots").fetchall()]
+
+
 def get_ret24_values(conn) -> list:
     """터치 후 24h 수익률(%) 실측값 목록 — 주간 리포트의 초과 적중률 베이스라인용
     (analytics.clustering.baseline_positive_rate 가 양수 비율로 환산).

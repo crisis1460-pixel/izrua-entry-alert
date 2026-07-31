@@ -103,6 +103,35 @@ def author_metrics(rows: list, now: float, half_life_days: float = 90.0,
     }
 
 
+def is_confirmed_reverse(snapshots: list, min_neff: float = 5.0) -> bool:
+    """최근 N개 스냅샷(최신순)이 모두 neff_r>=min_neff 이고 e_lb<0 이면 True.
+
+    순수 함수 — DB 접근 없음. 스냅샷이 2개 미만이면 False(증거 부족).
+    n 주 연속 판정으로 확장하려면 snapshots 길이만 늘리면 된다."""
+    if len(snapshots) < 2:
+        return False
+    return all(
+        (s.get("neff_r") or 0) >= min_neff and (s.get("e_lb") is not None) and s["e_lb"] < 0
+        for s in snapshots
+    )
+
+
+def is_recovered_reverse(snapshots: list, min_neff: float = 5.0) -> bool:
+    """역신호 해제 판정 — 최근 N개 스냅샷이 모두 neff_r>=min_neff 이고 e_lb>=0 이면
+    True (2026-08-01 사용자 결정 Q2: 2주 연속 회복 시 해제).
+
+    is_confirmed_reverse 의 대칭이되 경계는 비대칭이다: 확정은 e_lb<0, 해제는 e_lb>=0
+    (0 은 '음수 기대'가 아니므로 회복 쪽). 표본 부족(2개 미만)·neff 게이트 미달·
+    e_lb 결측이면 False = **확정 상태를 보수적으로 유지**한다 — 해제는 확정만큼
+    강한 증거(2주 연속 게이트 통과 + 비음수)를 요구한다."""
+    if len(snapshots) < 2:
+        return False
+    return all(
+        (s.get("neff_r") or 0) >= min_neff and (s.get("e_lb") is not None) and s["e_lb"] >= 0
+        for s in snapshots
+    )
+
+
 def rank_authors(rows_by_author: dict, now: float, min_neff: float = 5.0, **kw) -> list:
     """주간 리포트용 랭킹: {author: rows} → R트랙 게이트(n_eff≥min) 통과 작성자를
     E_LB 내림차순 [(author, metrics)] 로. 미달 작성자는 리포트에서 '표본 부족' 그룹."""

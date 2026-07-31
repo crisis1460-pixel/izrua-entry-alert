@@ -257,6 +257,36 @@ finally:
 import argparse
 check("S10 main 함수 존재", callable(show_status.main))
 
+# ── S14: 역신호 확정 태그 (S9, 2026-08-01 — meta 기반, 읽기 전용 표시) ─────
+# run_cycle 스냅샷 훅이 meta(reverse_confirmed_{author})에 기록한 확정 상태를
+# 작성자 성적 섹션에서 🔻역신호확정으로 구분 표시한다(후보 태그 대체).
+fresh_db()
+with db.connect(TEST_DB) as conn:
+    for i in range(6):
+        key = f"neg{i}"
+        db.upsert_level(conn, dict(
+            signal_key=key, coin_symbol="SOL", ticker="KRW-SOL", direction="long",
+            entry_usd=100, sl_usd=90, tp_usd=120, rr=2.0, grade="A", score=80,
+            author="carol", collected_at=NOW - 200000))
+        lid = conn.execute("SELECT id FROM levels WHERE signal_key=?", (key,)).fetchone()["id"]
+        db.mark_touched(conn, [(lid, 100.0, NOW - 190000)], NOW - 190000, usdt_krw=1300)
+        db.resolve_outcome(conn, lid, "miss", 90.0, "tp_sl", r_multiple=-1.0, now=NOW - 180000)
+    db.set_meta(conn, "last_check_at", str(NOW - 60))
+    db.set_meta(conn, "last_collect_at", str(NOW - 3600))
+    db.set_meta(conn, db.reverse_confirm_key("carol"), "2026-W30")
+code, out = capture(days=7, report=True)
+check("S14 확정 작성자는 🔻역신호확정 표시(후보 태그 대체)",
+      "🔻역신호확정" in out and "carol" in out and "역신호후보" not in out)
+check("S14b 주간 리포트 미리보기에도 확정 구분 한 줄",
+      "역신호 확정 1명" in out and "@carol" in out)
+
+# S14c: 해제(빈 값)면 확정 태그가 사라지고 후보 태그로 복귀한다
+with db.connect(TEST_DB) as conn:
+    db.set_meta(conn, db.reverse_confirm_key("carol"), "")
+code, out = capture(days=7, report=True)
+check("S14c 해제(빈 meta)면 확정 태그 제거 — 후보 태그로 복귀",
+      "역신호확정" not in out and "🔻역신호후보" in out and "역신호 확정 1명" not in out)
+
 
 print()
 print("PASS" if ok else "FAIL")

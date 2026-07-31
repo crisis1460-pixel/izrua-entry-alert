@@ -64,12 +64,16 @@ def send_report(db_path: str = None, now: float = None) -> bool:
         # 2026-08-01 S10 D4: 산식 버전 분리 집계 — v3 표본이 기본 표,
         # 구버전(grade_ver NULL) 표본은 "구 산식(참고)" 로 병기만 한다.
         calibration_result, calibration_legacy = _calibration_pair(conn)
+        # 역신호 확정 구분(S9, 표시 전용) — run_cycle 스냅샷 훅이 meta 에 기록한
+        # 확정 상태를 안내 한 줄로만 병기한다(정렬·수식·필터 불변).
+        reverse_confirmed = db.get_reverse_confirmed_authors(conn)
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
                                          raw_records=raw_records, confluence=confluence,
                                          calibration_result=calibration_result,
-                                         calibration_legacy=calibration_legacy)
+                                         calibration_legacy=calibration_legacy,
+                                         reverse_confirmed=reverse_confirmed)
     ok = telegram.send(text)
 
     logger.info(

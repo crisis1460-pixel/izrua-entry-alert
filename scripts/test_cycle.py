@@ -830,4 +830,132 @@ if os.path.exists(SNAP_DB):
     os.remove(SNAP_DB)
 
 
+# ── RS1~RS8: 역신호 확정/해제 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──
+# 확정 상태는 meta(reverse_confirmed_{author})에 저장하고 **발송 전 commit**(M-A2).
+# 검사는 스냅샷을 실제로 찍은 회차에만 돈다. 발송 실패는 로그만(유실 허용,
+# 중복 방지 우선). 알림 필터·본알림 경로는 일절 건드리지 않는다(B안).
+RS_DB = "cache/_test_reverse.db"
+if os.path.exists(RS_DB):
+    os.remove(RS_DB)
+db.init_db(RS_DB)
+
+RS_WEEK = db.week_kst(NOON_KST)
+RS_WEEK_PREV = db.week_kst(NOON_KST - 7 * 86400)
+
+with db.connect(RS_DB) as _c:
+    # 종결 표본 6건 전패(r=-1) → 이번 회차 스냅샷 훅이 e_lb=-1, neff_r≈6 을 계산
+    for _i in range(6):
+        _c.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+            "collected_at, author, outcome, r_multiple, touched_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (f"rv{_i}", "SOL", "KRW-SOL", "long", "touched", NOON_KST - 86400,
+             "BadAuth", "miss", -1.0, NOON_KST - 3600))
+    # 직전 주 스냅샷(음수·게이트 통과) — '2주 연속'의 앞 주
+    db.save_author_snapshot(_c, RS_WEEK_PREV, "BadAuth",
+                            dict(e_lb=-0.5, neff_r=6.0, p_hat=0.2, neff_win=6.0,
+                                 wins=0, losses=6), now=NOON_KST - 7 * 86400)
+
+_rv_sent = {"texts": []}
+_orig_send_rv = telegram.send
+telegram.send = lambda text, urgency="high": (_rv_sent["texts"].append(text) or True)
+
+settings.SETTINGS["db_path"] = RS_DB
+_r_rs = run_cycle.run_cycle(now=NOON_KST, collect_enabled=False, report_enabled=False,
+                            price_runner=lambda: {"ok": 1})
+with db.connect(RS_DB) as _c:
+    _rv_meta = db.get_meta(_c, db.reverse_confirm_key("BadAuth"))
+check("RS1 스냅샷 훅 회차에서 역신호 확정 경보 1회 발송",
+      _r_rs["author_snapshot"] == "ok" and _r_rs["reverse_check"] == "ok"
+      and len(_rv_sent["texts"]) == 1 and "역신호 확정" in _rv_sent["texts"][0]
+      and "@BadAuth" in _rv_sent["texts"][0])
+check("RS1b 확정 주차가 meta 에 기록(발송 전 commit 대상)", _rv_meta == RS_WEEK)
+
+# 평회차(스냅샷 주기 미도래) — 검사 자체가 실행되지 않는다
+_r_rs2 = run_cycle.run_cycle(now=NOON_KST + 3600, collect_enabled=False,
+                             report_enabled=False, price_runner=lambda: {"ok": 1})
+check("RS2 스냅샷 안 찍는 평회차엔 역신호 검사 미실행(skipped, 발송 없음)",
+      _r_rs2["author_snapshot"] == "skipped" and _r_rs2["reverse_check"] == "skipped"
+      and len(_rv_sent["texts"]) == 1)
+
+# 같은 주차에 검사만 다시 돌아도(수동 강제 등) 확정 기록이 중복 발송을 막는다
+check("RS3 같은 주차 재실행 시 중복 발송 없음",
+      run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 60) == "ok"
+      and len(_rv_sent["texts"]) == 1)
+
+# 해제 시나리오(Q2): 2주 연속 회복(neff 게이트 통과 + e_lb>=0) → 해제 알림 1회
+with db.connect(RS_DB) as _c:
+    db.save_author_snapshot(_c, RS_WEEK_PREV, "BadAuth",
+                            dict(e_lb=0.2, neff_r=6.0, p_hat=0.6, neff_win=6.0,
+                                 wins=4, losses=2), now=NOON_KST)
+    db.save_author_snapshot(_c, RS_WEEK, "BadAuth",
+                            dict(e_lb=0.4, neff_r=7.0, p_hat=0.7, neff_win=7.0,
+                                 wins=5, losses=2), now=NOON_KST)
+check("RS4 2주 연속 회복 → 해제 알림 1회 발송",
+      run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 120) == "ok"
+      and len(_rv_sent["texts"]) == 2 and "역신호 해제" in _rv_sent["texts"][1]
+      and "@BadAuth" in _rv_sent["texts"][1])
+with db.connect(RS_DB) as _c:
+    check("RS4b meta 는 빈 값으로 해제(확정 목록에서 제외)",
+          db.get_meta(_c, db.reverse_confirm_key("BadAuth")) == ""
+          and db.get_reverse_confirmed_authors(_c) == set())
+check("RS5 해제 후 재실행은 무동작(중복 해제·재확정 없음)",
+      run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 180) == "ok"
+      and len(_rv_sent["texts"]) == 2)
+
+# 회복이 한 주뿐이면(직전 주 음수) 확정을 보수적으로 유지한다 — 해제 안 함
+with db.connect(RS_DB) as _c:
+    db.set_meta(_c, db.reverse_confirm_key("BadAuth"), RS_WEEK_PREV)  # 다시 확정 상태
+    db.save_author_snapshot(_c, RS_WEEK_PREV, "BadAuth",
+                            dict(e_lb=-0.5, neff_r=6.0, p_hat=0.2, neff_win=6.0,
+                                 wins=0, losses=6), now=NOON_KST)
+_rs6 = run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 240)
+with db.connect(RS_DB) as _c:
+    _rs6_meta = db.get_meta(_c, db.reverse_confirm_key("BadAuth"))
+check("RS6 한 주만 회복이면 해제하지 않음(확정 보수적 유지)",
+      _rs6 == "ok" and len(_rv_sent["texts"]) == 2 and _rs6_meta == RS_WEEK_PREV)
+
+# 발송 실패 격리: 기록(meta commit)은 발송 전에 끝났으므로 유실은 허용, 중복은 없다
+with db.connect(RS_DB) as _c:
+    db.set_meta(_c, db.reverse_confirm_key("BadAuth"), "")  # 미확정으로 되돌림
+    db.save_author_snapshot(_c, RS_WEEK, "BadAuth",
+                            dict(e_lb=-0.4, neff_r=7.0, p_hat=0.2, neff_win=7.0,
+                                 wins=1, losses=6), now=NOON_KST)
+
+
+def _send_boom_rv(text, urgency="high"):
+    raise ConnectionError("telegram down")
+
+
+telegram.send = _send_boom_rv
+_rs7 = run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 300)
+with db.connect(RS_DB) as _c:
+    _rs7_meta = db.get_meta(_c, db.reverse_confirm_key("BadAuth"))
+check("RS7 발송 예외에도 회차 생존(ok) + 확정 기록은 발송 전 commit 으로 보존",
+      _rs7 == "ok" and _rs7_meta == RS_WEEK)
+telegram.send = lambda text, urgency="high": (_rv_sent["texts"].append(text) or True)
+check("RS7b 다음 검사에서 재발송 없음(중복 방지 우선 — 유실 허용 원칙, M-A2)",
+      run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 360) == "ok"
+      and len(_rv_sent["texts"]) == 2)
+
+# DB 접근 실패 격리 (다른 단계와 동일 원칙 — 모듈 속성 교체 기법)
+_orig_get_meta_rv = db.get_meta
+
+
+def _get_meta_boom_rv(conn, key, default=None):
+    if key.startswith(db.REVERSE_CONFIRM_META_PREFIX):
+        raise RuntimeError("meta read boom")
+    return _orig_get_meta_rv(conn, key, default)
+
+
+db.get_meta = _get_meta_boom_rv
+check("RS8 역신호 meta 조회 실패도 격리(failed, 예외 전파 없음)",
+      run_cycle.maybe_reverse_check(RS_DB, now=NOON_KST + 420) == "failed")
+db.get_meta = _orig_get_meta_rv
+
+telegram.send = _orig_send_rv
+settings.SETTINGS["db_path"] = TEST_DB
+os.remove(RS_DB)
+
+
 sys.exit(0 if ok else 1)

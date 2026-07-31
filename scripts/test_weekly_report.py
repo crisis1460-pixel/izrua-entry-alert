@@ -220,6 +220,15 @@ msg11 = telegram.render_weekly_report({}, now=now, calibration_result=CAL, **RK)
 check("C14 빈 작성자 표본에서도 등급 축 표시",
       "아직 표본 부족" in msg11 and "🎚️ 등급 캘리브레이션" in msg11)
 
+# ── RC: 역신호 확정 구분 한 줄 (S9, 2026-08-01 — 표시 전용, 정렬·수식 불변) ──
+msg_rc = telegram.render_weekly_report(rows_by_author, now=now,
+                                       reverse_confirmed={"BadAuthor"}, **RK)
+check("RC1 역신호 확정 한 줄 표기(필터 무변경 명시 + HTML 안전 &lt;)",
+      "🔻 역신호 확정 1명" in msg_rc and "@BadAuthor" in msg_rc
+      and "알림 필터 무변경" in msg_rc and "E_LB&lt;0" in msg_rc)
+check("RC2 미주입 시 확정 줄 없음(기존 렌더 완전 불변)",
+      "역신호 확정" not in msg and msg6 == msg)
+
 # ── A: 주간 감사 덤프 + raw_text 보존정책 (2026-07-27 기획 카드 #4) ──────────
 # storage/audit_dump.py + db.prune_raw_text. 알림·필터·등급과 무관한 기록 전용 기능이라
 # 여기서 검증하는 건 "파일이 정확히 나오는가 / 원문이 아카이브된 뒤에만 지워지는가 /
@@ -443,6 +452,6 @@ for _d in (A_DIR, G_DIR, N_DIR):
     shutil.rmtree(_d, ignore_errors=True)
 
 print()
-n_checks = 64
+n_checks = 66
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)
