@@ -563,9 +563,13 @@ def run_once(now: float = None) -> dict:
                 # DB 원본 grade/score 는 보존한다 — 판정(hit/miss/r_multiple)은 entry/sl/tp
                 # 만으로 결정돼 등급과 무관하고, 수집 시점 등급은 그 자체로 사후분석
                 # 가치(등급-실제성과 상관관계 검증)가 있어 덮어쓰지 않는 편이 낫다.
-                # _rep 에서 이미 재채점해 선택했으므로, 여기선 rep 의 grade/score 를 update
-                cur_grade, cur_score, _cur_rr = regrade_current(rep, current_usd)
-                rep["grade"], rep["score"] = cur_grade, cur_score
+                # 클러스터 **전 멤버**를 재채점해 in-place 갱신 (S9 통합감사 M-1,
+                # 2026-07-31): 예전엔 rep 하나만 갱신해서, 렌더러가 수집 score 로
+                # 자체 재선정한 표시 대표가 필터·밴드 대표와 갈릴 수 있었다(표시
+                # 등급도 stale). 전 멤버 갱신 + render_alert(rep=) 명시 전달로 봉쇄.
+                for _lv in cluster:
+                    _g, _s, _ = regrade_current(_lv, current_usd)
+                    _lv["grade"], _lv["score"] = _g, _s
 
                 # 알림 필터 (상태 전이는 필터와 무관하게 수행 — 재알림 방지)
                 # 일일 상한은 터치(본알림)에만 적용 (2026-07-24 감사: 예고가 상한을
@@ -587,23 +591,32 @@ def run_once(now: float = None) -> dict:
                 # 단일 TP < 2% → 초단타성 신호, 스윙 알림 불필요.
                 # 다중 TP → 가장 먼 마지막 TP 기준으로 판단:
                 #   TP1 이 가까워도 TP_last 가 2%+ 이면 스윙 사다리 셋업으로 허용.
-                # tps_usd 미기록(NULL) 구버전 행은 tp_usd 단일 값으로 폴백.
+                # TP 목록은 _volume_band_tps 재사용 (S9 통합감사 m-3, 2026-07-31):
+                # 예전엔 raw tps_usd[-1] 을 직접 읽어 감시 밴드·다음 TP 표시와
+                # 계보가 갈렸다(ETH 169 tp=2000/tps=[1975] 실사례). union+오염
+                # 방어선+정렬 재보증을 한 출처로 통일. 유효 TP 없으면 종전대로 통과.
                 if send_ok and (rep.get("entry_usd") or 0) > 0:
-                    _e = rep["entry_usd"]
-                    try:
-                        _raw = json.loads(rep["tps_usd"]) if rep.get("tps_usd") else []
-                    except (ValueError, TypeError):
-                        _raw = []
-                    # "[]" (빈 JSON) 는 truthy 이지만 유효 TP 없음 → tp_usd 단일값 폴백
-                    _tps = _raw if _raw else ([rep["tp_usd"]] if rep.get("tp_usd") else [])
-                    if _tps:
-                        _last = _tps[-1]
-                        _last_pct = ((_last - _e) / _e * 100
-                                     if rep.get("direction") == "long"
-                                     else (_e - _last) / _e * 100)
-                        if 0 < _last_pct < 2.0:
-                            logger.info("[체크] %s TP 스윙 미달(last %.2f%%) 알림 억제",
-                                        coin, _last_pct)
+                    if not _b_swing_pass(rep):
+                        # 형제 승계 (S9 통합감사 m-4, 2026-07-31 카드 확정): rep 가
+                        # 초단타 필터에 걸려도 클러스터 안에 등급·스윙 필터를 모두
+                        # 통과하는 형제(스윙감 목표 보유)가 있으면 대표를 승계해
+                        # 발송한다 — 안 그러면 상태 전이(재알림 방지) 때문에
+                        # 클러스터 전체가 영구 무알림. 승계 대표는 재채점 점수순.
+                        heir = next(
+                            (l for l in sorted(
+                                (l for l in cluster if l is not rep),
+                                key=lambda l: -(l.get("score") or 0))
+                             if meets_min_grade(l.get("grade") or "D", min_grade)
+                             and _b_swing_pass(l)),
+                            None)
+                        if heir is not None:
+                            logger.info("[체크] %s 대표 TP 스윙 미달 - 형제 승계 "
+                                        "(%s -> %s)", coin,
+                                        rep.get("author"), heir.get("author"))
+                            rep = heir
+                        else:
+                            logger.info("[체크] %s TP 스윙 미달(클러스터 전체) 알림 억제",
+                                        coin)
                             send_ok = False
                             obs["suppressed_tp_too_close"] += 1
 
@@ -691,7 +704,8 @@ def run_once(now: float = None) -> dict:
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
-                                                 volume_rank=_snap_volume_rank)
+                                                 volume_rank=_snap_volume_rank,
+                                                 rep=rep)  # M-1: 표시 대표 = 필터 대표
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
@@ -1013,6 +1027,12 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 else "tp_only" if tp_krw > 0 else "timeboxed")
 
         if outcome == "hit":
+            # TP 단계 알림 게이트 (S9 통합감사 M-2, 2026-07-31 카드 확정):
+            # 터치 본알림이 실제 발송된 신호만 TP 알림을 받는다. 예전엔 등급·B안
+            # 필터로 본알림을 억제한 신호가 TP1~TP5 고음량 알림을 그대로 발송했다
+            # (실측: S9 후 TP 알림 14건 중 10건이 본알림 무발송 신호 — BTC 157 등).
+            # 적중 판정·상태 전진·종결은 게이트와 무관하게 전부 수행(통계 무손상).
+            _touch_sent = db.touch_alert_sent(conn, lv["id"])
             if _is_multi_tp and _tp_alert_idx < len(_tps_valid) - 1:
                 # 중간 TP 적중 — 다음 TP 로 진행, 아직 종결하지 않는다.
                 _next_idx = _tp_alert_idx + 1
@@ -1020,12 +1040,14 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 _sib_dup = _tp_cluster_dup(
                     lv, _tp_loop_levels, _kind_inter, db_path,
                     _cluster_band_pct, now - _RESEND_BLOCK_SEC)
-                if _sib_dup:
-                    # 클러스터 내 중복: 인덱스만 전진, 알림 생략
+                if _sib_dup or not _touch_sent:
+                    # 클러스터 내 중복 또는 본알림 무발송 신호: 인덱스만 전진, 알림 생략
                     if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                         conn.commit()
-                    logger.info("[적중판정] %s %s 클러스터 중복 차단 (level_id=%d)",
-                                lv["coin_symbol"], _kind_inter, lv["id"])
+                    logger.info("[적중판정] %s %s %s (level_id=%d)",
+                                lv["coin_symbol"], _kind_inter,
+                                "클러스터 중복 차단" if _sib_dup else "본알림 무발송 신호 - TP 알림 생략",
+                                lv["id"])
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
                     _tp_day = _day_kst(now)
@@ -1053,7 +1075,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     _sib_dup = _tp_cluster_dup(
                         lv, _tp_loop_levels, _kind, db_path,
                         _cluster_band_pct, now - _RESEND_BLOCK_SEC)
-                    if not _sib_dup and not alert_ledger.recent_exists(
+                    if _touch_sent and not _sib_dup and not alert_ledger.recent_exists(
                             db_path, lv["coin_symbol"], _kind, [lv["id"]],
                             now - _RESEND_BLOCK_SEC):
                         _tp_day = _day_kst(now)
@@ -1119,6 +1141,22 @@ def _volume_band_tp1(rep: dict) -> Optional[float]:
     """유효 TP1 (USD) — 없으면 None (호출부가 +10% 폴백). 규칙은 _volume_band_tps."""
     tps = _volume_band_tps(rep)
     return tps[0] if tps else None
+
+
+def _b_swing_pass(lv: dict) -> bool:
+    """판정 B안 스윙 필터 (2026-07-29 신설, 07-30 5%→2%) — 마지막 유효 TP 가
+    진입가 대비 2% 미만이면 False(초단타성 신호, 스윙 알림 불필요). 유효 TP 가
+    없으면 통과. 임계 2.0 은 grading.TP_DISTANCE_BANDS 첫 감점 경계(2%)와 짝 —
+    조정 시 두 곳 함께 볼 것(i-10). TP 목록은 _volume_band_tps 단일 출처(m-3) —
+    감시 밴드·다음 TP 표시와 같은 union+오염 방어선+정렬을 공유한다."""
+    entry = lv.get("entry_usd") or 0
+    if entry <= 0:
+        return True
+    tps = _volume_band_tps(lv)
+    if not tps:
+        return True
+    last_pct = (tps[-1] - entry) / entry * 100
+    return not (0 < last_pct < 2.0)
 
 
 def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:

@@ -378,6 +378,10 @@ def check_announcements(conn, now: float, cfg_get) -> dict:
         for symbol in fresh:
             expired += db.expire_levels_for_coin(
                 conn, symbol, reason=f"upbit_notice:{nid}", now=now)
+            # 거래량 급증 감시도 즉시 종료 (S9 통합감사 m-6, 2026-07-31):
+            # 레벨만 만료하면 volume_watch 가 최대 72h 살아남아 상폐성 펌핑에
+            # 🔥 고음량 급증 알림이 나갈 수 있다 — 공지 경보와 정반대 신호.
+            db.remove_volume_watch(conn, f"KRW-{symbol}")
         result["expired"] += expired
 
         if _dispatch(title, fresh, expired, nid, sent_keys, sent_set):

@@ -245,11 +245,17 @@ def _author_block(rep: dict) -> list:
 
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
-                 kimchi_pct: float = None, volume_rank: int = None) -> str:
+                 kimchi_pct: float = None, volume_rank: int = None,
+                 rep: dict = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
-    kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None."""
-    rep = max(cluster, key=lambda l: l.get("score") or 0)
+    kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
+    rep: 호출부가 확정한 대표 레벨 (S9 통합감사 M-1, 2026-07-31) — run_once 는
+    재채점·B안 승계까지 반영해 대표를 고르는데, 여기서 수집 score 로 재선정하면
+    표시 대표(작성자·등급)와 필터·밴드 대표가 갈릴 수 있다. 미전달 시(직접 호출·
+    구버전 경로) 종전대로 score 최대 멤버 폴백."""
+    if rep is None:
+        rep = max(cluster, key=lambda l: l.get("score") or 0)
     current_usd = (current_krw / usdt_krw) if (current_krw and usdt_krw) else None
 
     entries = [lv["entry_usd"] for lv in cluster if lv.get("entry_usd")]

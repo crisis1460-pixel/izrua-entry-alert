@@ -2008,6 +2008,11 @@ with db.connect(_T35_DB) as conn:
     conn.execute(
         "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=? WHERE id=?",
         (_t35_now - 1800, 100.3 * USDT_KRW, _id35b))
+    # M-2 게이트(본알림 발송된 신호만 TP 알림) 이후에도 T35 의 원래 목적(클러스터
+    # 중복 차단)을 검증하려면 터치 본알림 발송 이력이 있어야 한다 — 클러스터 터치
+    # 1건으로 기록(실운영과 동일한 형태: 병합 발송 시 ids 에 두 레벨 모두 포함)
+    db.record_alert(conn, "ZDUPX", "touch", [_id35a, _id35b],
+                    "2026-07-30", _t35_now - 1800)
 
 # 현재가 = TP1 초과(104.0), TP2 미달(108.0): 양쪽 TP1 모두 도달
 _t35_price_saved = fake["price"]
@@ -2510,6 +2515,107 @@ check("VS14b 신선 활성 행 - 합집합·타이머 유지 불변",
 
 upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원
 os.remove(_VS_DB)
+
+# ── SA1~SA4: S9 통합감사 수정분 (2026-07-31 카드 확정 — M-2 게이트 / m-4 승계 /
+# M-1 표시 대표 일치) — run_once 실물 경로 검증 ──────────────────────────────
+_SA_DB = "cache/_test_s9audit.db"
+if os.path.exists(_SA_DB):
+    os.remove(_SA_DB)
+_sa_ledger = _alert_ledger.ledger_path(_SA_DB)
+if os.path.exists(_sa_ledger):
+    os.remove(_sa_ledger)
+db.init_db(_SA_DB)
+_sa_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _SA_DB
+_sa_now = time.time()
+
+
+def _sa_level(coin, entry, key, tps, tp, followers=5000, touched=False):
+    with db.connect(_SA_DB) as conn:
+        lv = dict(coin_symbol=coin, ticker=f"KRW-{coin}", direction="long",
+                  entry_usd=entry, sl_usd=entry * 0.94, tp_usd=tp, rr=1.5,
+                  grade="B", score=60, author=f"SA_{key}",
+                  author_followers=followers, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇",
+                  post_url=f"https://tv.com/{key}", post_age_minutes=10,
+                  collected_at=_sa_now - 3600,
+                  tps_usd=_json.dumps(tps) if tps is not None else None)
+        lv["signal_key"] = db.make_signal_key(coin, entry, lv["author"], key)
+        db.upsert_level(conn, lv)
+        _id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (lv["signal_key"],)).fetchone()["id"]
+        if touched:  # 본알림 없이 터치 상태만 (억제됐던 신호 재현)
+            conn.execute("UPDATE levels SET status='touched', touched_at=?, "
+                         "touch_price_krw=? WHERE id=?",
+                         (_sa_now - 1800, entry * USDT_KRW, _id))
+        return _id
+
+
+# SA1 (M-2): 본알림이 발송된 적 없는 터치 신호의 TP 적중 — 알림 0건, 인덱스는 전진
+_sa1 = _sa_level("SAG", 100.0, "sa_gate", [103.0, 108.0], 103.0, touched=True)
+fake["price"] = 104.0 * USDT_KRW
+fake["candles"] = [(_sa_now - 1801, _sa_now - 10, 104.0 * USDT_KRW, 98.0 * USDT_KRW)]
+fake["high"] = fake["low"] = None
+_sa_before = len(sent_messages)
+price_check.run_once(_sa_now)
+with db.connect(_SA_DB) as conn:
+    _sa1_idx = conn.execute("SELECT tp_alert_idx FROM levels WHERE id=?",
+                            (_sa1,)).fetchone()["tp_alert_idx"]
+check("SA1 M-2 게이트 - 본알림 무발송 신호의 TP 적중은 무알림·인덱스만 전진",
+      len(sent_messages) == _sa_before and _sa1_idx == 1)
+
+# SA2 (m-4 승계 + M-1 표시 일치): 대표(고팔로워, last TP 1.5% 미달)가 B안에 걸리고
+# 형제(저팔로워, last TP 3.2%)가 통과 → 형제 승계 발송 + 알림 작성자 = 형제.
+# 팔로워 배점 차(10 vs 1)가 목표거리 차(-6 vs -1)를 눌러 대표 선정이 결정적.
+_sa2a = _sa_level("SAH", 200.0, "sa_short", [203.0], 203.0, followers=100000)
+_sa2b = _sa_level("SAH", 200.6, "sa_swing", [207.0, 216.0], 207.0, followers=100)
+fake["price"] = 200.0 * USDT_KRW * 1.001
+fake["low"] = 199.0 * USDT_KRW
+fake["candles"] = None
+_sa_before = len(sent_messages)
+s_sa2 = price_check.run_once(_sa_now + 120)
+check("SA2 m-4 형제 승계 - 대표 스윙 미달이어도 통과 형제로 발송",
+      s_sa2["touches"] == 1 and len(sent_messages) == _sa_before + 1
+      and "진입가 터치" in sent_messages[-1])
+check("SA2b M-1 표시 대표 = 승계 대표 (작성자·수집점수 역전에도 일치)",
+      "SA_sa_swing" in sent_messages[-1] and "SA_sa_short" not in sent_messages[-1])
+with db.connect(_SA_DB) as conn:
+    _sa2_vw = conn.execute("SELECT band_high_krw FROM volume_watch "
+                           "WHERE ticker='KRW-SAH'").fetchone()
+check("SA2c 감시 밴드도 승계 대표 기준 (마지막 TP 216)",
+      _sa2_vw is not None and abs(_sa2_vw["band_high_krw"] - 216.0 * USDT_KRW) < 1e-6)
+
+# SA4 (M-2 양성 경로): SA2 에서 본알림 나간 SAH 의 TP1(207) 적중 → TP 알림 정상
+# 발송. (SA3 보다 먼저 — 픽스처 가격이 전 마켓 공유라 순서를 바꾸면 SAH TP 가
+# 다른 케이스 회차에 섞여 터진다)
+fake["price"] = 208.0 * USDT_KRW
+fake["candles"] = [(_sa_now + 121, _sa_now + 250, 208.0 * USDT_KRW, 200.0 * USDT_KRW)]
+fake["low"] = None
+_sa_before = len(sent_messages)
+price_check.run_once(_sa_now + 240)
+check("SA4 M-2 양성 - 본알림 나간 신호의 TP 알림은 정상 발송",
+      len(sent_messages) > _sa_before
+      and any("TP" in m for m in sent_messages[_sa_before:]))
+
+# SA3 (m-4): 클러스터 전원이 스윙 미달이면 종전대로 억제 + 카운터.
+# 엔트리를 저가대(50)로 잡아 위 SAH 잔여 레벨(TP2 216)이 이 회차 가격에서
+# 조용히 miss 종결만 되고 알림이 섞이지 않게 한다.
+_sa3a = _sa_level("SAI", 50.0, "sa_all1", [50.7], 50.7)
+_sa3b = _sa_level("SAI", 50.15, "sa_all2", [50.9], 50.9)
+fake["price"] = 50.0 * USDT_KRW * 1.001
+fake["low"] = 49.7 * USDT_KRW
+fake["candles"] = None
+_sa_before = len(sent_messages)
+s_sa3 = price_check.run_once(_sa_now + 360)
+check("SA3 클러스터 전원 미달 - 억제 유지", len(sent_messages) == _sa_before
+      and s_sa3["suppressed"] >= 1)
+
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+settings.SETTINGS["db_path"] = _sa_prev_db
+os.remove(_SA_DB)
+if os.path.exists(_sa_ledger):
+    os.remove(_sa_ledger)
 
 print()
 print("── 본알림 실제 렌더링 ──")

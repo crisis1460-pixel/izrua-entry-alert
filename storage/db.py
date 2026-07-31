@@ -144,8 +144,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- 이 값을 포함한 채로 그대로 유지(둘 다 봐야 "감점 때문에 억제 vs 원래도 미달"이
     -- 갈린다).
     suppressed_grade_tp_penalty_only INTEGER NOT NULL DEFAULT 0,
-    -- 스윙 미달 TP 억제 (2026-07-29 B안) — last TP 기준 5% 미만 신호.
-    -- tps_usd 사용 가능 시 전체 목록 중 마지막(가장 먼) TP 기준, 없으면 tp_usd 폴백.
+    -- 스윙 미달 TP 억제 (2026-07-29 B안) — last TP 기준 2% 미만 신호
+    -- (07-30 5%→2% 조정, i-9 주석 정정). 목록은 _volume_band_tps 단일 출처(m-3),
+    -- 형제 승계로 클러스터 전체가 미달일 때만 집계(m-4).
     suppressed_tp_too_close  INTEGER NOT NULL DEFAULT 0,
     -- 동시터치(같은 1분봉 TP·SL 동시 도달) 재검사 결과 — 판정 신뢰도 지표.
     -- magnified   : 체결내역으로 실제 순서를 복원해 hit/miss 확정
@@ -1010,6 +1011,19 @@ def recent_alert_exists(conn, coin_symbol: str, kind: str, level_ids: list,
     return row is not None
 
 
+def touch_alert_sent(conn, level_id: int) -> bool:
+    """이 레벨이 포함된 터치 본알림이 실제 발송된 적 있는지 (S9 통합감사 M-2,
+    2026-07-31 카드 확정). TP 단계 알림 게이트 전용 — 본알림이 억제(등급·B안)된
+    신호는 목표 달성 알림도 내지 않는다. level_ids 가 콤마 CSV 라 경계를 포함해
+    검색한다. 커밋백 실패로 alerts_log 가 유실된 회차는 이론상 위음성(알림 생략)
+    가능 — 게이트 방향의 보수적 실패라 허용."""
+    row = conn.execute(
+        "SELECT 1 FROM alerts_log WHERE kind='touch' AND "
+        "(','||level_ids||',') LIKE ? LIMIT 1",
+        (f"%,{level_id},%",)).fetchone()
+    return row is not None
+
+
 def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: str,
                  now: Optional[float] = None) -> None:
     conn.execute(
@@ -1263,7 +1277,7 @@ def get_observation_report(conn, days: int = 30) -> list:
             "suppressed_send_fail": s.get("suppressed_send_fail", 0),
             # suppressed_grade 의 부분집합(합산 대상 아님) - TP 거리 감점 효과 분리용
             "suppressed_grade_tp_penalty_only": s.get("suppressed_grade_tp_penalty_only", 0),
-            # B안(2026-07-29) 마지막 TP 5% 미달 억제 카운터
+            # B안(2026-07-29) 마지막 TP 2% 미달 억제 카운터 (07-30 5%→2%)
             "suppressed_tp_too_close":          s.get("suppressed_tp_too_close", 0),
             # MAJOR-1(2026-07-26): 예고 체류 회차·Bar Magnifier 집계
             "preview_dwell":                    s.get("preview_dwell", 0),
