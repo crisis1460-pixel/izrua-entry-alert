@@ -1276,6 +1276,16 @@ def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
     return {r["day_kst"]: r["n"] for r in rows}
 
 
+def _json_list(raw) -> list:
+    """JSON 문자열 → 숫자 리스트. 파싱 실패·None → 빈 리스트."""
+    if not raw:
+        return []
+    try:
+        return [x for x in json.loads(raw) if isinstance(x, (int, float))]
+    except (ValueError, TypeError):
+        return []
+
+
 def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
                      band_low_krw: Optional[float] = None,
                      band_high_krw: Optional[float] = None,
@@ -1296,16 +1306,16 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
     직후 현재가가 옛 밴드 밖이라 같은 회차의 밴드 이탈 판정이 방금 유효해진 감시를
     통째로 삭제했다(무성 커버리지 소실). 합집합이면 두 셋업 가격대를 모두 커버한다.
 
-    tp1_krw/tp_count/tps_krw(2026-07-31): 급증 알림 표시용 스냅샷. 활성 재터치는
-    첫 터치 셋업 값을 유지하고 비어 있을 때만 채운다(fill-if-null) — 표시 기준이
-    감시 중에 바뀌면 혼란.
+    tp1_krw/tp_count/tps_krw(2026-07-31→08-01 i-12): 급증 알림 표시용 스냅샷.
+    활성 재터치는 밴드 합집합과 일관되게 TP 목록도 합집합 병합한다 — 확장된
+    밴드에서 "다음 TP" 표시가 옛 셋업만 참조하는 불일치를 제거.
 
     max_age_sec(2026-07-31 2인검토 B-1): alerted=0 이지만 이미 감시창(72h)을 넘긴
     (아직 prune 전인) 행이 "활성" 분기로 빠지면 타이머가 안 갱신돼, 같은 회차
     말미의 prune 이 방금 재터치로 유효해진 감시를 삭제한다(무성 소실 잔존 변종,
     경합창 ~1회차). 창을 넘긴 행은 alerted=1 과 동일하게 전면 리셋한다."""
     row = conn.execute(
-        "SELECT alerted, added_at, band_low_krw, band_high_krw, tp1_krw, tp_count "
+        "SELECT alerted, added_at, band_low_krw, band_high_krw, tp1_krw, tp_count, tps_krw "
         "FROM volume_watch WHERE ticker=?", (ticker,)).fetchone()
     stale = (row is not None and max_age_sec is not None
              and now - row["added_at"] > max_age_sec)
@@ -1328,17 +1338,22 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
             (coin_symbol, now, band_low_krw, band_high_krw, tp1_krw, tp_count,
              tps_krw, ticker))
     else:
-        # 활성 감시 중 재터치 — 타이머 유지("72h 내 한 번" 창 보존), 밴드만 합집합
+        # 활성 감시 중 재터치 — 타이머 유지("72h 내 한 번" 창 보존), 밴드+TP 합집합
         lo = (None if row["band_low_krw"] is None or band_low_krw is None
               else min(row["band_low_krw"], band_low_krw))
         hi = (None if row["band_high_krw"] is None or band_high_krw is None
               else max(row["band_high_krw"], band_high_krw))
+        old_tps = _json_list(row["tps_krw"])
+        new_tps = _json_list(tps_krw)
+        merged = sorted(set(old_tps + new_tps)) if (old_tps or new_tps) else []
+        m_tps_krw = json.dumps(merged) if merged else tps_krw
+        m_tp1 = merged[0] if merged else tp1_krw
+        m_count = len(merged) if merged else tp_count
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, band_low_krw=?, band_high_krw=?,
-                   tp1_krw=COALESCE(tp1_krw, ?), tp_count=COALESCE(tp_count, ?),
-                   tps_krw=COALESCE(tps_krw, ?)
+                   tp1_krw=?, tp_count=?, tps_krw=?
                WHERE ticker=?""",
-            (coin_symbol, lo, hi, tp1_krw, tp_count, tps_krw, ticker))
+            (coin_symbol, lo, hi, m_tp1, m_count, m_tps_krw, ticker))
 
 
 def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
