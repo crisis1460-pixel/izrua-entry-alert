@@ -283,22 +283,26 @@ def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
                     band_pct: float, since: float) -> bool:
     """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
 
-    정본 클러스터링(clustering.build_clusters)으로 형제 판정 — pairwise 비교가
-    greedy 병합과 동작이 갈리는 구조적 불일치를 제거한다."""
-    if not (lv.get("entry_usd") or 0):
+    pairwise 거리 비교 — greedy top-down build_clusters 의 밴드 비대칭(m-5)으로
+    경계 형제가 다른 클러스터에 배치되는 문제를 방지한다. 중복 차단 용도이므로
+    pairwise 가 greedy 보다 보수적(=더 넓게 차단)인 것이 올바른 방향이다."""
+    entry = lv.get("entry_usd") or 0
+    if entry <= 0:
         return False
     coin = lv["coin_symbol"]
     lid = lv["id"]
-    same_coin = [l for l in all_touched if l["coin_symbol"] == coin]
-    for cluster in clustering.build_clusters(same_coin, band_pct):
-        member_ids = {m["id"] for m in cluster}
-        if lid not in member_ids:
+    for sibling in all_touched:
+        if sibling["id"] == lid or sibling["coin_symbol"] != coin:
             continue
-        for member in cluster:
-            if member["id"] != lid and alert_ledger.recent_exists(
-                    db_path, coin, kind, [member["id"]], since):
-                return True
-        break
+        sib_entry = sibling.get("entry_usd") or 0
+        if sib_entry <= 0:
+            continue
+        hi, lo = max(entry, sib_entry), min(entry, sib_entry)
+        if (hi - lo) / hi * 100 > band_pct:
+            continue
+        if alert_ledger.recent_exists(
+                db_path, coin, kind, [sibling["id"]], since):
+            return True
     return False
 
 
@@ -1236,18 +1240,18 @@ def _volume_band_tp1(rep: dict) -> Optional[float]:
 
 def _b_swing_pass(lv: dict) -> bool:
     """판정 B안 스윙 필터 (2026-07-29 신설, 07-30 5%→2%) — 마지막 유효 TP 가
-    진입가 대비 2% 미만이면 False(초단타성 신호, 스윙 알림 불필요). 유효 TP 가
-    없으면 통과. 임계 2.0 은 grading.TP_DISTANCE_BANDS 첫 감점 경계(2%)와 짝 —
-    조정 시 두 곳 함께 볼 것(i-10). TP 목록은 _volume_band_tps 단일 출처(m-3) —
-    감시 밴드·다음 TP 표시와 같은 union+오염 방어선+정렬을 공유한다."""
-    entry = lv.get("entry_usd") or 0
-    if entry <= 0:
+    진입가 대비 SWING_MIN_TP_PCT% 미만이면 False(초단타성 신호, 스윙 알림 불필요).
+    유효 TP 가 없으면 통과. 임계는 grading.SWING_MIN_TP_PCT 상수 하나로 관리(i-10).
+    TP 목록은 _volume_band_tps 단일 출처(m-3)."""
+    from collector.grading import SWING_MIN_TP_PCT
+    entry = lv.get("entry_usd")
+    if not isinstance(entry, (int, float)) or entry <= 0:
         return True
     tps = _volume_band_tps(lv)
     if not tps:
         return True
     last_pct = (tps[-1] - entry) / entry * 100
-    return not (0 < last_pct < 2.0)
+    return not (0 < last_pct < SWING_MIN_TP_PCT)
 
 
 def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
