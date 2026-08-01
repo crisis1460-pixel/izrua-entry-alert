@@ -534,7 +534,8 @@ def _fetch_live_prices(conn) -> dict:
     """업비트 실시간 시세 + USDT-KRW. 실패 시 빈 dict (에러 무음)."""
     try:
         from monitor import upbit
-        usdt = upbit.fetch_prices(["KRW-USDT"], 5)
+        timeout = settings.get("http_timeout_sec")
+        usdt = upbit.fetch_prices(["KRW-USDT"], timeout)
         usdt_krw = usdt.get("KRW-USDT")
         if not usdt_krw:
             return {}
@@ -549,7 +550,7 @@ def _fetch_live_prices(conn) -> dict:
             pass
         coins = {lv["coin_symbol"] for lv in active + unresolved if lv.get("coin_symbol")}
         tickers = [f"KRW-{c}" for c in coins]
-        prices = upbit.fetch_prices(tickers, 5) if tickers else {}
+        prices = upbit.fetch_prices(tickers, timeout) if tickers else {}
         return {"usdt_krw": usdt_krw, "prices": prices}
     except Exception:
         return {}
