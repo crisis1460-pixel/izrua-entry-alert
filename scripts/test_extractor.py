@@ -92,6 +92,27 @@ REAL_BUG_CASES = [
         0.32,
         {"entry": 0.3099, "sl": 0.3046, "tp": 0.3981, "direction": "long"},
     ),
+    # 2026-08-01 전체코드 검토 발견 - direction 오분류: ICT/SMC 용어 "sell-side
+    # liquidity"(매도측 유동성 — 방향과 무관한 시장구조 서술어) 내부의 "sell" 이
+    # \bsell\b 에 걸려 "short"로 오분류되고, 이 봇은 long 전용이라 조용히 감시
+    # 대상에서 빠졌었다. "long"/"buy" 등 실제 방향 단어를 안 쓴 글이 회귀 대상.
+    (
+        "검토버그 재현 - sell-side liquidity 오분류(방향 단어 없이도 long 유지)",
+        "Sweeping sell-side liquidity near 61200 before the bounce into premium.\n"
+        "Entry: 61500\nStop Loss: 60800\nTarget: 63000",
+        61600,
+        {"entry": 61500.0, "sl": 60800.0, "tp": 63000.0, "direction": "long"},
+    ),
+    # 2026-08-01 전체코드 검토 발견 - 같은 줄 서수 마커: "TARGETS: 1) a - 2) b"
+    # 형태는 _LIST_MARKER 가 줄 시작(^)에만 적용돼 못 지웠다. _LADDER 가 ")"에
+    # 막혀 매칭 실패 → _RANGE/_SINGLE 로 떨어지며 마커 숫자 "1"이 tp 로 오인됐다
+    # (과거 "Target 1:" 서수오인과 같은 계열의 재발 형태).
+    (
+        "검토버그 재현 - 같은줄 서수마커 TARGETS: 1) a - 2) b (TP=1.0 오인 방지)",
+        "Long setup\nEntry: 0.30\nTARGETS: 1) 0.35 - 2) 0.38 - 3) 0.42\nSL: 0.28",
+        0.30,
+        {"entry": 0.30, "sl": 0.28, "tp": 0.35, "direction": "long"},
+    ),
 ]
 
 def _close(a, b):

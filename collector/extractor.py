@@ -15,8 +15,17 @@ import re
 from typing import Optional
 
 # 방향 키워드
-_LONG_HINTS = re.compile(r"\b(long|buy|롱|매수|매집)\b|롱\s*포지션|buy\s*zone|long\s*setup", re.I)
-_SHORT_HINTS = re.compile(r"\b(short|sell|숏|매도)\b|숏\s*포지션|short\s*setup", re.I)
+# 2026-08-01 검토 수정: \bbuy\b/\bsell\b 가 ICT/SMC 계열 트레이딩 용어 "buy-side
+# liquidity"/"sell-side liquidity"(매수측/매도측 유동성 — 방향과 무관한 시장구조
+# 서술어) 내부의 buy/sell 까지 잡아 방향을 반대로 오분류했다. "buy-side liquidity"
+# 만 언급하고 "long"/"buy zone" 등 실제 방향 단어를 안 쓴 글이 direction="short"
+# 로 저장되면, 이 봇은 long 전용(get_active_levels)이라 그 신호가 조용히
+# 감시 대상에서 빠진다. buy/sell 뒤에 "(-)side" 가 바로 붙는 경우만 제외 —
+# "buy at 61500"/"buyers" 등 정상 용법은 그대로 매칭(단어경계는 기존 수리 유지).
+_LONG_HINTS = re.compile(
+    r"\b(long|롱|매수|매집)\b|\bbuy\b(?!-?\s*side)|롱\s*포지션|buy\s*zone|long\s*setup", re.I)
+_SHORT_HINTS = re.compile(
+    r"\b(short|숏|매도)\b|\bsell\b(?!-?\s*side)|숏\s*포지션|short\s*setup", re.I)
 
 # 라벨 (그룹1 = 라벨종류). 라벨 뒤에 오는 숫자를 그 항목으로 본다.
 _ENTRY_LABEL = re.compile(
@@ -151,8 +160,14 @@ _R_MULTIPLE = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*R\b", re.I)
 # _ORDINAL_LABEL 계열은 라벨에 붙은 서수만 처리해 독립 마커는 못 잡았다.
 # 결정적 구분자는 **구두점 뒤 공백**이다: 목록 마커는 "1) " / "1. " 처럼 반드시
 # 공백이 따르지만, 소수 가격 "5.298" 은 점 뒤가 곧바로 숫자다. 이 조건 덕에
-# 진짜 가격을 지울 위험이 없다. 줄 시작에 한정해 문장 중간의 "(1) 참고" 류도 회피.
-_LIST_MARKER = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]+(?=[$\d])")
+# 진짜 가격을 지울 위험이 없다.
+# 2026-08-01 검토 수정: 예전엔 진짜 줄 시작(^)에만 적용해 "TARGETS: 1) 0.05 -
+# 2) 0.06 - 3) 0.07" 처럼 라벨과 같은 줄에 붙은 마커를 못 지웠다 — _LADDER 가
+# ")"에 막혀 매칭 실패하고 _RANGE/_SINGLE 로 떨어지면서 마커 숫자 "1"이 그대로
+# TP 로 잡혔다(과거 "Target 1:" 서수오인과 같은 계열, ALGO/ARB 실사고 재발 형태).
+# 줄 시작 외에 "라벨 뒤 공백/콜론/등호 직후"도 마커로 인정한다 — 문장 중간의
+# "(1) 참고" 류는 앞 문자가 저 셋에 없어(보통 알파벳·괄호) 여전히 회피된다.
+_LIST_MARKER = re.compile(r"(?:^|(?<=[\s:=]))[ \t]*\d{1,2}[).][ \t]+(?=[$\d])", re.M)
 
 # 타임프레임 파싱 (2026-07-23 적중창 결정 B: 작성자가 밝힌 지평으로 판정 창 결정)
 _TIMEFRAME = re.compile(
