@@ -416,12 +416,22 @@ _CHART_URL_RE = re.compile(
 _AUTHOR_IN_SECTION_RE = re.compile(r"/u/([a-zA-Z0-9_.\-]{2,50})/")
 
 
+_MULTIPLIER_PREFIXES = ("10000", "1000")
+
+
 def _base_of(ticker: str) -> str:
-    """'BTCUSDT' → 'BTC'. 호가 접미사 제거."""
+    """'BTCUSDT' → 'BTC'. 호가 접미사·.P·배수 접두사 제거."""
     t = ticker.upper()
+    if t.endswith(".P"):
+        t = t[:-2]
     for q in _QUOTE_SUFFIXES:
         if t.endswith(q) and len(t) > len(q):
-            return t[:-len(q)]
+            t = t[:-len(q)]
+            break
+    for p in _MULTIPLIER_PREFIXES:
+        if t.startswith(p) and len(t) > len(p):
+            t = t[len(p):]
+            break
     return t
 
 

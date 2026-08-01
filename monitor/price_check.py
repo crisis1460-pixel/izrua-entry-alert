@@ -1118,8 +1118,11 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     else:
                         if db.advance_tp_alert_idx(conn, lv["id"], _next_idx, _tp_alert_idx):
                             conn.commit()
-                        logger.warning("[적중판정] %s TP%d 발송 실패 → 인덱스 롤백",
-                                       ticker, _tp_alert_idx + 1)
+                            logger.warning("[적중판정] %s TP%d 발송 실패 → 인덱스 롤백",
+                                           ticker, _tp_alert_idx + 1)
+                        else:
+                            logger.warning("[적중판정] %s TP%d 발송 실패, 롤백 CAS 실패(경합)",
+                                           ticker, _tp_alert_idx + 1)
             else:
                 # 최종 TP 또는 단일 TP 적중 — 종결
                 _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
