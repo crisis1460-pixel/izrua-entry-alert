@@ -260,11 +260,11 @@ def _rep(cluster: list, current_usd: float = 0.0) -> dict:
     current_usd 가 주어지면 모든 멤버를 재채점해 비교 — 수집 시점 score 를 그대로
     쓰면 수집 후 가격 변동으로 근접도 점수가 달라진 멤버를 잘못 선택할 수 있다.
     단일 멤버 클러스터 또는 current_usd=0 이면 수집 시점 score 로 폴백(경량 경로).
-    동점 시 최신 레벨(id 최대) 우선 — 최근 분석이 현 시장 상황 반영도가 높다(i-13)."""
+    동점 시 진입가 최고 우선(i-13) — build_clusters 내림차순과 일치하면서 명시적."""
     if not current_usd or len(cluster) == 1:
-        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("id") or 0))
+        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("entry_usd") or 0))
     from collector.grading import regrade_current  # 순환 import 방지 지연 로드
-    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("id") or 0))
+    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("entry_usd") or 0))
 
 
 def _tp_distance_penalty(direction: str, entry, target) -> float:

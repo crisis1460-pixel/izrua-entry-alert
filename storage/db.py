@@ -1346,9 +1346,14 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
         old_tps = _json_list(row["tps_krw"])
         new_tps = _json_list(tps_krw)
         merged = sorted(set(old_tps + new_tps)) if (old_tps or new_tps) else []
-        m_tps_krw = json.dumps(merged) if merged else tps_krw
-        m_tp1 = merged[0] if merged else tp1_krw
-        m_count = len(merged) if merged else tp_count
+        if merged:
+            m_tps_krw = json.dumps(merged)
+            m_tp1 = merged[0]
+            m_count = len(merged)
+        else:
+            m_tps_krw = tps_krw if row["tps_krw"] is None else row["tps_krw"]
+            m_tp1 = tp1_krw if row["tp1_krw"] is None else row["tp1_krw"]
+            m_count = tp_count if row["tp_count"] is None else row["tp_count"]
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, band_low_krw=?, band_high_krw=?,
                    tp1_krw=?, tp_count=?, tps_krw=?

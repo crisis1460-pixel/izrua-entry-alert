@@ -2492,7 +2492,7 @@ _vs_run({"KRW-VSR": 8500.0})
 check("VS12 재터치 합집합 밴드 - 같은 회차 삭제 없이 급증 알림 발송(감사 major 재현)",
       _vs_row("KRW-VSR") is not None and _vs_row("KRW-VSR")["alerted"] == 1
       and "KRW-VSR" in _vs_calls and "거래량 급증" in sent_messages[-1])
-check("VS12b TP 스냅샷 - 재터치 fill-if-null + 과도기 행(tps_krw 없음) TP1 폴백 렌더",
+check("VS12b TP 스냅샷 - 재터치 합집합(과도기: tps_krw 없음→scalar 보존) TP1 폴백 렌더",
       "다음 TP:  11,500원 (1/3단계)" in sent_messages[-1])
 
 # VS13: 다음 TP 동적 선정 (2026-07-31 2차) — tps_krw 스냅샷이 있으면 알림 시점
@@ -2714,8 +2714,11 @@ with db.connect(_SB_DB) as conn:   # 잔여 TP2 가 이후 케이스에 섞이�
 _sb2a = _sb_level("SBH", 400.0, "sb_scalp", [402.0, 404.0], 402.0, followers=100000)
 _sb2b = _sb_level("SBH", 401.5, "sb_swing", [414.0], 414.0, followers=100)
 fake["price"] = 400.2 * USDT_KRW
-fake["low"] = 399.0 * USDT_KRW
-fake["candles"] = None
+fake["low"] = None
+# _fake_range 기본 캔들은 모듈 now 기반 타임스탬프라 _sb_now 기반 collected_at 보다
+# 이전 → _eff_low 가 필터링해 low 무시. 명시적 캔들로 양 레벨 실도달 보장.
+fake["candles"] = [(_sb_now - 300, _sb_now + 60,
+                    400.5 * USDT_KRW, 399.0 * USDT_KRW)]
 _sb_before = len(sent_messages)
 s_sb2 = price_check.run_once(_sb_now + 120)
 check("SB2 사전조건 - 초단타 대표는 승계, 스윙 형제 명의로 본알림 1건",
@@ -2814,12 +2817,16 @@ _requests_mod.get = _bn_get_factory({
 check("BN1 451 지역차단 - vision 미러 폴백으로 가격 획득",
       _binance.fetch_usdt_price("BTC", 5.0) == 63000.5)
 
-# BN2: 400(Invalid symbol = 미상장)은 폴백 무의미 — 즉시 None, 2차 호출 없음
-_bn2 = _bn_get_factory({"api.binance.com": _BnResp(400),
-                        "data-api.binance.vision": _BnResp(200, {"price": "1"})})
+# BN2: 400(Invalid symbol = Binance 미상장) → Binance 미러 생략, Bybit 시도도 미상장 → None
+_bn2 = _bn_get_factory({
+    "api.binance.com": _BnResp(400),
+    "data-api.binance.vision": _BnResp(200, {"price": "1"}),
+    "api.bybit.com": _BnResp(200, {"result": {"list": []}}),
+})
 _requests_mod.get = _bn2
-check("BN2 미상장(400) - 즉시 None·미러 미호출",
-      _binance.fetch_usdt_price("NOPE", 5.0) is None and len(_bn2.calls) == 1)
+check("BN2 미상장(400) - Binance 미러 생략·Bybit도 미상장 → None",
+      _binance.fetch_usdt_price("NOPE", 5.0) is None
+      and not any("binance.vision" in c for c in _bn2.calls))
 
 
 # BN3: 전 경로 실패(451+예외)도 예외 없이 None (김프 줄만 생략, 발송은 계속)
@@ -2831,6 +2838,15 @@ def _bn3_get(url, params=None, timeout=None):
 
 _requests_mod.get = _bn3_get
 check("BN3 전 경로 실패 - 예외 없이 None", _binance.fetch_usdt_price("BTC", 5.0) is None)
+
+# BN4: Binance 전면 차단(451) + Bybit 폴백 성공 → 가격 획득
+_requests_mod.get = _bn_get_factory({
+    "api.binance.com": _BnResp(451),
+    "data-api.binance.vision": _BnResp(451),
+    "api.bybit.com": _BnResp(200, {"result": {"list": [{"lastPrice": "62500.0"}]}}),
+})
+check("BN4 Binance 전면 차단 - Bybit 폴백 성공",
+      _binance.fetch_usdt_price("BTC", 5.0) == 62500.0)
 _requests_mod.get = _orig_requests_get
 
 print()
