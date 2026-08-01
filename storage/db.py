@@ -1388,5 +1388,8 @@ def get_observation_report(conn, days: int = 30) -> list:
             "ambiguous_magnified":              s.get("ambiguous_magnified", 0),
             "ambiguous_unresolved":             s.get("ambiguous_unresolved", 0),
             "ambiguous_skipped":                s.get("ambiguous_skipped", 0),
+            # M-2(2026-08-01): TP 단계 알림이 본알림 게이트로 차단된 건수 — 리뷰 발견
+            # (2026-08-01): 컬럼은 저장되는데 이 리포트에 빠져 있어 관찰 불가였다.
+            "suppressed_tp_gate":                s.get("suppressed_tp_gate", 0),
         })
     return out

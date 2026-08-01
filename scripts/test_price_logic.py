@@ -800,7 +800,8 @@ def _kst_ts(y, m, d, hh=12):
 
 
 with db.connect(TEST_DB29) as conn:
-    db.bump_daily_stats(conn, "2026-07-20", touches_total=3, suppressed_grade=1)
+    db.bump_daily_stats(conn, "2026-07-20", touches_total=3, suppressed_grade=1,
+                        suppressed_tp_gate=4)
     db.bump_daily_stats(conn, "2026-07-20", previews_total=2, suppressed_grade=1)  # 누적 확인
     db.bump_daily_stats(conn, "2026-07-19", touches_total=1)
     rows29 = db.get_daily_stats(conn, days=60)
@@ -840,6 +841,9 @@ rep20 = next(r for r in report29 if r["day_kst"] == "2026-07-20")
 check("T29e 통합 조회함수 - 수집/발송/집계 필드 결합 정합",
       rep20["collected"] == 2 and rep20["alerts_sent"] == 2
       and rep20["touches_total"] == 3 and rep20["suppressed_grade"] == 2)
+# T29e2 (2026-08-01 검토 발견): suppressed_tp_gate 는 컬럼·bump 는 있었지만 이
+# 조회함수 딕셔너리에 빠져 있어 show_status/리포트 어디서도 볼 수 없었다 — 수정 고정.
+check("T29e2 suppressed_tp_gate 조회함수 노출", rep20["suppressed_tp_gate"] == 4)
 
 with db.connect(TEST_DB29) as conn:
     db.bump_daily_stats(conn, "2020-01-01", touches_total=9)

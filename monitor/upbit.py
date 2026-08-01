@@ -42,6 +42,11 @@ def fetch_prices(markets: list, timeout: float) -> dict:
                 e.response.status_code, len(markets))
             result = {}
             for mkt in markets:
+                # 2026-08-01 검토 수정: 개별 재시도도 배치와 같은 ticker 레이트리밋
+                # 그룹을 쓴다(모듈 docstring 참고) — 페이싱 없이 마켓 수만큼 연속
+                # 호출하면(활성+미종결 수십 개) 10회/초 한도를 넘겨 429 를 유발할 수
+                # 있었다. 다른 함수들과 동일하게 매 콜마다 페이싱한다.
+                time.sleep(_CANDLE_PACE_SEC)
                 try:
                     r = requests.get(
                         f"{_BASE}/ticker", params={"markets": mkt}, timeout=timeout)
@@ -51,8 +56,10 @@ def fetch_prices(markets: list, timeout: float) -> dict:
                             result[mkt] = float(data[0]["trade_price"])
                     elif r.status_code in (400, 404):
                         logger.info("[upbit] %s 상폐/미지원 마켓 제외", mkt)
-                except Exception:  # noqa: BLE001
-                    pass
+                    else:
+                        logger.warning("[upbit] %s 개별 재조회 HTTP %s", mkt, r.status_code)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[upbit] %s 개별 재조회 실패: %s", mkt, e)
             return result
         logger.warning("[upbit] 현재가 조회 실패: %s", e)
         return {}

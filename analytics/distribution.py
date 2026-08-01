@@ -37,11 +37,18 @@ def _field(row, key: str, idx: int, default=None):
         return default
 
 
-def _bucket_of(value: float, buckets) -> str:
+def _bucket_of(value: float, buckets):
+    """구간 라벨 매칭. 정의된 구간 밖(하한 미만)이면 None — 호출부가 건너뛴다.
+
+    2026-08-01 검토 수정: 이전엔 매칭 실패 시 buckets[-1](최상단, "3+")로 폴백했다.
+    상한 초과는 마지막 구간이 +inf라 실제로 도달 불가능하지만, 하한(-1.0) 미만
+    값(부동소수 오차 없이 진짜로 벗어난 값 — 예: DB 변조·소급수정 등 이상치)은
+    조용히 최상단(최고 성과 구간)으로 둔갑했다. R분포처럼 방향성이 있는 지표에서
+    이는 최악 쪽 값을 최선 쪽으로 뒤집는 결과라 폴백이 아니라 제외가 맞다."""
     for lo, hi, label in buckets:
         if lo <= value < hi:
             return label
-    return buckets[-1][2]  # 상한 초과(이론상 미발생 — 마지막 구간이 +inf) 방어적 폴백
+    return None
 
 
 def r_multiple_distribution(rows, buckets=R_BUCKETS) -> dict:
@@ -50,6 +57,8 @@ def r_multiple_distribution(rows, buckets=R_BUCKETS) -> dict:
     rows: [(r_multiple, grade), ...] 또는 같은 키를 가진 dict/sqlite3.Row 목록.
     r_multiple 이 None(SL 미기재 tp_only 표본)인 행은 조용히 제외한다 — 이 지표는
     R 트랙 표본만 다룬다(analytics.ranking 의 E_LB 와 동일 축, 2트랙 원칙 일치).
+    정의된 구간(기본 -1.0~+inf) 밖의 이상치(DB 변조·소급수정 등)도 동일하게
+    제외한다 — n/mean/버킷 합이 항상 서로 일치하도록(2026-08-01 검토 수정).
 
     반환: {"n", "mean", "buckets": [{"label","n"}, ...]}  (buckets 는 구간 정의 순서 그대로)
     n=0 이면 mean=None, 모든 버킷 n=0.
@@ -61,7 +70,10 @@ def r_multiple_distribution(rows, buckets=R_BUCKETS) -> dict:
         r = _field(row, "r_multiple", 0)
         if r is None:
             continue
-        counts[_bucket_of(r, buckets)] += 1
+        label = _bucket_of(r, buckets)
+        if label is None:
+            continue  # 정의 구간 밖 이상치 — 방향성 지표를 뒤집으니 폴백 대신 제외
+        counts[label] += 1
         total += 1
         s += r
     return {
@@ -108,6 +120,8 @@ def holding_period_distribution(rows, buckets=HOLD_BUCKETS) -> dict:
         if elapsed_h < 0:
             continue
         label = _bucket_of(elapsed_h, buckets)
+        if label is None:
+            continue  # elapsed_h<0 가드로 이론상 도달 불가 — 방어적 일관성만
         counts[label][0] += 1
         counts[label][1] += 1 if outcome in HIT_OUTCOMES else 0
         total += 1

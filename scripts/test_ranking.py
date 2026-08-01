@@ -337,6 +337,12 @@ check("DI3 빈 입력 — n=0/mean=None/전 버킷 0",
       and all(b["n"] == 0 for b in empty_dist["buckets"]))
 check("DI4 None(SL 미기재 tp_only) 제외",
       distribution.r_multiple_distribution([(-0.5, "C"), (None, "C")])["n"] == 1)
+# DI4b (2026-08-01 검토 수정): 정의 구간(-1.0) 미만 이상치는 최상단으로 폴백하지
+# 않고 제외한다 — n/버킷 합 항상 일치, 방향성 지표가 뒤집히지 않음을 고정한다.
+dist_oob = distribution.r_multiple_distribution([(-9.0, "C"), (0.5, "C")])
+check("DI4b 구간 밖 이상치(-9.0) 최상단 폴백 아님 — 제외",
+      dist_oob["n"] == 1 and dist_oob["buckets"][-1]["n"] == 0
+      and sum(b["n"] for b in dist_oob["buckets"]) == dist_oob["n"])
 
 by_g = distribution.r_distribution_by_grade(R_ROWS + [(1.0, "X")])  # X=미정의 등급
 check("DI5 등급별 분해 + 미정의 등급 제외", by_g["C"]["n"] == 2 and close(by_g["C"]["mean"], -0.1)
@@ -432,6 +438,6 @@ check("RV11 min_neff 파라미터 — 4.9 도 min_neff=3 이면 확정",
                                    min_neff=3.0))
 
 print()
-n_checks = 62
+n_checks = 63
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

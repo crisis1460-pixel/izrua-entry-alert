@@ -115,7 +115,8 @@ def print_observation(conn, days: int) -> None:
 
     tot = {"collected": 0, "touches_total": 0, "previews_total": 0, "alerts_sent": 0,
            "suppressed_grade": 0, "suppressed_cap": 0, "preview_dwell": 0,
-           "suppressed_send_fail": 0, "suppressed_tp_too_close": 0}
+           "suppressed_send_fail": 0, "suppressed_tp_too_close": 0,
+           "suppressed_tp_gate": 0}
     for r in rows:
         for k in tot:
             tot[k] += r.get(k, 0) or 0
@@ -140,6 +141,8 @@ def print_observation(conn, days: int) -> None:
           f"{conv_total:>8}  {supp_total:<26}")
     print("  (전환율 = 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패/근접TP(B안))")
     print("   체류 = 예고 밴드에 머문 회차 — 억제가 아니라 관측 지표")
+    if tot["suppressed_tp_gate"]:
+        print(f"  TP단계알림 게이트 차단(M-2, 본알림 무발송 신호): {tot['suppressed_tp_gate']}건")
     _print_bid_ask_pressure(conn)
 
 
