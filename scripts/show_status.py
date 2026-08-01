@@ -528,6 +528,142 @@ def _has_table(conn, name: str) -> bool:
         return False
 
 
+# ── D-1/D-2 실시간 시세 헬퍼 ────────────────────────────────────────
+
+def _fetch_live_prices(conn) -> dict:
+    """업비트 실시간 시세 + USDT-KRW. 실패 시 빈 dict (에러 무음)."""
+    try:
+        from monitor import upbit
+        usdt = upbit.fetch_prices(["KRW-USDT"], 5)
+        usdt_krw = usdt.get("KRW-USDT")
+        if not usdt_krw:
+            return {}
+        active, unresolved = [], []
+        try:
+            active = db.get_active_levels(conn)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            unresolved = db.get_unresolved_touched(conn)
+        except sqlite3.OperationalError:
+            pass
+        coins = {lv["coin_symbol"] for lv in active + unresolved if lv.get("coin_symbol")}
+        tickers = [f"KRW-{c}" for c in coins]
+        prices = upbit.fetch_prices(tickers, 5) if tickers else {}
+        return {"usdt_krw": usdt_krw, "prices": prices}
+    except Exception:
+        return {}
+
+
+def print_approaching_levels(conn, live: dict) -> None:
+    """D-1: 곧 터치될 후보 — 현재가→진입가 거리순 Top 10."""
+    usdt_krw = live["usdt_krw"]
+    prices = live["prices"]
+    try:
+        active = db.get_active_levels(conn)
+    except sqlite3.OperationalError:
+        return
+    if not active:
+        return
+    ranked = []
+    for lv in active:
+        entry_usd = lv.get("entry_usd") or 0
+        if not entry_usd:
+            continue
+        coin = lv["coin_symbol"]
+        current = prices.get(f"KRW-{coin}")
+        if not current:
+            continue
+        entry_krw = entry_usd * usdt_krw
+        if entry_krw <= 0:
+            continue
+        dist_pct = (current - entry_krw) / entry_krw * 100
+        if dist_pct < 0:
+            continue
+        ranked.append((lv, current, entry_krw, dist_pct))
+    if not ranked:
+        return
+    ranked.sort(key=lambda x: x[3])
+    print()
+    print(_SEP)
+    print(f"🎯 임박 진입 후보 (거리 가까운 순, {len(ranked)}건 중 상위 10)")
+    print(_SEP)
+    for lv, current, entry_krw, dist_pct in ranked[:10]:
+        coin = lv["coin_symbol"]
+        grade = lv.get("grade") or "?"
+        status_tag = " [예고중]" if lv.get("status") == "previewed" else ""
+        print(f"  {coin:>8s} {grade}  현재 {current:>12,.0f} → 진입 {entry_krw:>12,.0f}"
+              f"  거리 {dist_pct:5.1f}%{status_tag}")
+
+
+def print_active_positions(conn, live: dict, now: float) -> None:
+    """D-2: 미종결 터치 레벨 현재 수익률 + unrealized R."""
+    usdt_krw = live["usdt_krw"]
+    prices = live["prices"]
+    try:
+        unresolved = db.get_unresolved_touched(conn)
+    except sqlite3.OperationalError:
+        return
+    if not unresolved:
+        return
+    rows = []
+    for lv in unresolved:
+        entry_usd = lv.get("entry_usd") or 0
+        if not entry_usd:
+            continue
+        coin = lv["coin_symbol"]
+        current = prices.get(f"KRW-{coin}")
+        if not current:
+            continue
+        entry_krw = entry_usd * usdt_krw
+        if entry_krw <= 0:
+            continue
+        pnl_pct = (current - entry_krw) / entry_krw * 100
+        sl_usd = lv.get("sl_usd")
+        r_val = None
+        if sl_usd and sl_usd > 0:
+            risk = abs(entry_usd - sl_usd)
+            if risk > 0:
+                r_val = (current / usdt_krw - entry_usd) / risk
+        elapsed_h = (now - lv["touched_at"]) / 3600 if lv.get("touched_at") else 0
+        rows.append((lv, current, pnl_pct, r_val, elapsed_h))
+    if not rows:
+        return
+    print()
+    print(_SEP)
+    print(f"📊 보유중 신호 진행 현황 ({len(rows)}건 미종결)")
+    print(_SEP)
+    for lv, current, pnl_pct, r_val, elapsed_h in rows:
+        coin = lv["coin_symbol"]
+        pnl_str = f"{pnl_pct:+.1f}%"
+        r_str = f"  R={r_val:+.2f}" if r_val is not None else ""
+        time_str = f"{elapsed_h:.0f}h" if elapsed_h < 72 else f"{elapsed_h / 24:.0f}d"
+        print(f"  {coin:>8s}  {pnl_str:>7s}{r_str}  ({time_str} 경과)")
+
+
+def print_trending_coins(conn, days: int) -> None:
+    """D-3: 최근 N일간 복수 작성자가 반복 언급한 코인."""
+    cutoff = time.time() - days * 86400
+    try:
+        rows = conn.execute(
+            "SELECT coin_symbol, COUNT(*) as cnt, COUNT(DISTINCT author) as authors "
+            "FROM levels WHERE collected_at >= ? "
+            "GROUP BY coin_symbol HAVING authors >= 2 "
+            "ORDER BY authors DESC, cnt DESC LIMIT 10",
+            (cutoff,)
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not rows:
+        return
+    print()
+    print(_SEP)
+    print(f"🔥 최근 {days}일 관심 집중 코인 (복수 작성자)")
+    print(_SEP)
+    for r in rows:
+        print(f"  {r['coin_symbol']:>8s}  작성자 {r['authors']}명 · 레벨 {r['cnt']}건")
+
+
 # ── ⑤ (옵션) 기존 주간 리포트 텍스트 ────────────────────────────────
 
 def print_weekly_report_text(conn, now: float) -> None:
@@ -587,6 +723,11 @@ def run(db_path: str, days: int, show_report: bool, now: float = None) -> int:
         print(f"izrua-entry-alert 관찰 현황 — {datetime.fromtimestamp(now, tz=KST).strftime('%Y-%m-%d %H:%M KST')}")
         print(f"DB: {db_path} (읽기 전용)")
         print_observation(conn, days)
+        print_trending_coins(conn, days)
+        live = _fetch_live_prices(conn)
+        if live:
+            print_approaching_levels(conn, live)
+            print_active_positions(conn, live, now)
         print_pipeline_status(conn, now)
         print_author_performance(conn, now)
         print_health(conn, now)

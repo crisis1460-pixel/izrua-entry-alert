@@ -283,26 +283,22 @@ def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
                     band_pct: float, since: float) -> bool:
     """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
 
-    같은 코인·±band_pct% 엔트리 내 다른 레벨이 해당 author 가 동일 신호를 URL만
-    달리해 두 번 게시한 경우(AERO 2026-07-30 사례) TP 알림이 2건 나가는 것을
-    막는다. 형제 ID 각각에 대해 alert_ledger 를 확인한다."""
-    e = lv.get("entry_usd") or 0
-    if not e:
+    정본 클러스터링(clustering.build_clusters)으로 형제 판정 — pairwise 비교가
+    greedy 병합과 동작이 갈리는 구조적 불일치를 제거한다."""
+    if not (lv.get("entry_usd") or 0):
         return False
     coin = lv["coin_symbol"]
     lid = lv["id"]
-    for other in all_touched:
-        o_e = other.get("entry_usd") or 0
-        if not o_e:
+    same_coin = [l for l in all_touched if l["coin_symbol"] == coin]
+    for cluster in clustering.build_clusters(same_coin, band_pct):
+        member_ids = {m["id"] for m in cluster}
+        if lid not in member_ids:
             continue
-        # 그리디 클러스터링과 동일 기준: 상단(높은) 엔트리 기준 band_pct 이내
-        top_e = max(e, o_e)
-        if (other["coin_symbol"] == coin
-                and other["id"] != lid
-                and abs(e - o_e) / top_e * 100 <= band_pct
-                and alert_ledger.recent_exists(
-                    db_path, coin, kind, [other["id"]], since)):
-            return True
+        for member in cluster:
+            if member["id"] != lid and alert_ledger.recent_exists(
+                    db_path, coin, kind, [member["id"]], since):
+                return True
+        break
     return False
 
 
@@ -1111,14 +1107,19 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                         resolve_price, entry_krw)
-                    telegram.send(text, urgency="high")
-                    db.record_alert(conn, lv["coin_symbol"],
-                                    _kind_inter, [lv["id"]], _tp_day, now)
-                    alert_ledger.append(db_path, lv["coin_symbol"],
-                                        _kind_inter, [lv["id"]], now)
-                    conn.commit()
-                    logger.info("[적중판정] %s TP%d 적중 → TP%d 감시 계속",
-                                ticker, _tp_alert_idx + 1, _next_idx + 1)
+                    if telegram.send(text, urgency="high"):
+                        db.record_alert(conn, lv["coin_symbol"],
+                                        _kind_inter, [lv["id"]], _tp_day, now)
+                        alert_ledger.append(db_path, lv["coin_symbol"],
+                                            _kind_inter, [lv["id"]], now)
+                        conn.commit()
+                        logger.info("[적중판정] %s TP%d 적중 → TP%d 감시 계속",
+                                    ticker, _tp_alert_idx + 1, _next_idx + 1)
+                    else:
+                        if db.advance_tp_alert_idx(conn, lv["id"], _next_idx, _tp_alert_idx):
+                            conn.commit()
+                        logger.warning("[적중판정] %s TP%d 발송 실패 → 인덱스 롤백",
+                                       ticker, _tp_alert_idx + 1)
             else:
                 # 최종 TP 또는 단일 TP 적중 — 종결
                 _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
@@ -1139,12 +1140,16 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         text = telegram.render_tp_partial_alert(
                             lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                             resolve_price, entry_krw)
-                        telegram.send(text, urgency="high")
-                        db.record_alert(conn, lv["coin_symbol"],
-                                        _kind, [lv["id"]], _tp_day, now)
-                        alert_ledger.append(db_path, lv["coin_symbol"],
-                                            _kind, [lv["id"]], now)
-                        conn.commit()  # 발송 기록 확정 후 resolve (중간 TP 패턴과 동일)
+                        if telegram.send(text, urgency="high"):
+                            db.record_alert(conn, lv["coin_symbol"],
+                                            _kind, [lv["id"]], _tp_day, now)
+                            alert_ledger.append(db_path, lv["coin_symbol"],
+                                                _kind, [lv["id"]], now)
+                            conn.commit()
+                        else:
+                            logger.warning("[적중판정] %s %s 발송 실패 → 종결 보류",
+                                           ticker, _kind)
+                            continue
                     if not _touch_sent:
                         obs["suppressed_tp_gate"] += 1
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,

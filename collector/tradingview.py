@@ -416,6 +416,15 @@ _CHART_URL_RE = re.compile(
 _AUTHOR_IN_SECTION_RE = re.compile(r"/u/([a-zA-Z0-9_.\-]{2,50})/")
 
 
+def _base_of(ticker: str) -> str:
+    """'BTCUSDT' → 'BTC'. 호가 접미사 제거."""
+    t = ticker.upper()
+    for q in _QUOTE_SUFFIXES:
+        if t.endswith(q) and len(t) > len(q):
+            return t[:-len(q)]
+    return t
+
+
 def _parse_chart_boundary(html_text: str, symbol: str, now: float) -> List[dict]:
     """각 unique chart URL = 게시물 시작점, 다음 unique chart URL 전까지 = 그 게시물 영역.
     DOM 클래스명 변경에 면역. 시간 정보가 없으므로 published_at=None + _partial 마킹
@@ -425,9 +434,12 @@ def _parse_chart_boundary(html_text: str, symbol: str, now: float) -> List[dict]
         url = m.group(0)
         if url not in seen:
             seen.add(url)
-            positions.append((url, m.start()))
+            positions.append((url, m.start(), m.group(1)))
     ideas = []
-    for i, (url, start) in enumerate(positions):
+    req_base = _base_of(symbol)
+    for i, (url, start, url_ticker) in enumerate(positions):
+        if _base_of(url_ticker) != req_base:
+            continue
         end = positions[i + 1][1] if i + 1 < len(positions) else min(start + 10000, len(html_text))
         section = html_text[start:end]
         first_close = section.find(">")  # <a href="URL" ...> 속성 영역 스킵
@@ -461,7 +473,7 @@ def _parse_chart_boundary(html_text: str, symbol: str, now: float) -> List[dict]
             "direction": direction,
             "likes_count": None,
             "comments_count": None,
-            "ticker": None,
+            "ticker": url_ticker,
             "_partial": True,  # 시간/본문 신뢰도 낮음 → 상세 보강 대상
         })
     return ideas
