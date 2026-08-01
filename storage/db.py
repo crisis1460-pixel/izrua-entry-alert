@@ -1345,6 +1345,8 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
               else max(row["band_high_krw"], band_high_krw))
         old_tps = _json_list(row["tps_krw"])
         new_tps = _json_list(tps_krw)
+        if not old_tps and new_tps and row["tp1_krw"] is not None:
+            old_tps = [row["tp1_krw"]]
         merged = sorted(set(old_tps + new_tps)) if (old_tps or new_tps) else []
         if merged:
             m_tps_krw = json.dumps(merged)

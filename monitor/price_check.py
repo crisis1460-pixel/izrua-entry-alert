@@ -260,11 +260,12 @@ def _rep(cluster: list, current_usd: float = 0.0) -> dict:
     current_usd 가 주어지면 모든 멤버를 재채점해 비교 — 수집 시점 score 를 그대로
     쓰면 수집 후 가격 변동으로 근접도 점수가 달라진 멤버를 잘못 선택할 수 있다.
     단일 멤버 클러스터 또는 current_usd=0 이면 수집 시점 score 로 폴백(경량 경로).
-    동점 시 진입가 최고 우선(i-13) — build_clusters 내림차순과 일치하면서 명시적."""
+    동점 시 진입가 최고 우선(i-13) — build_clusters 내림차순과 일치하면서 명시적.
+    진입가도 동일하면 id 로 완전 결정(list 순서 의존 제거)."""
     if not current_usd or len(cluster) == 1:
-        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("entry_usd") or 0))
+        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("entry_usd") or 0, l.get("id") or 0))
     from collector.grading import regrade_current  # 순환 import 방지 지연 로드
-    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("entry_usd") or 0))
+    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("entry_usd") or 0, l.get("id") or 0))
 
 
 def _tp_distance_penalty(direction: str, entry, target) -> float:
@@ -1182,6 +1183,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                             db.set_pending_tp(conn, lv["id"], _kind)
                             conn.commit()
                             continue
+                    if _sib_dup:
+                        logger.info("[적중판정] %s %s 클러스터 중복 차단(최종 TP)",
+                                    lv["coin_symbol"], _kind)
                     if not _touch_sent:
                         obs["suppressed_tp_gate"] += 1
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
