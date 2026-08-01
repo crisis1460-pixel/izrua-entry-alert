@@ -695,6 +695,27 @@ def get_ret24_values(conn) -> list:
     ).fetchall()]
 
 
+def get_closed_r_rows(conn) -> list:
+    """R-멀티플 분포 분석용 원천 행 (2026-08-01 내부기능강화 리서치, analytics.distribution
+    이 소비). r_multiple 이 NULL(SL 미기재 tp_only 표본)인 행은 그 지표 자체가 R 트랙
+    표본만 다루므로 여기서부터 제외 — E_LB(ranking.py)와 동일한 축 원칙."""
+    return [dict(r) for r in conn.execute(
+        "SELECT r_multiple, grade FROM levels WHERE r_multiple IS NOT NULL "
+        "AND outcome IS NOT NULL"
+    ).fetchall()]
+
+
+def get_closed_holding_rows(conn) -> list:
+    """보유기간(터치~종결 경과시간) 분석용 원천 행 (2026-08-01 내부기능강화 리서치,
+    analytics.distribution 이 소비). 섀도 터치(touched_at NULL)는 애초에 종결
+    판정 대상이 아니라 자동 제외된다(get_unresolved_touched 와 동일 표본 기준)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT touched_at, resolved_at, outcome FROM levels "
+        "WHERE touched_at IS NOT NULL AND resolved_at IS NOT NULL "
+        "AND outcome IS NOT NULL"
+    ).fetchall()]
+
+
 def get_touched_levels_for_clusters(conn) -> list:
     """터치 이력 전체(실제 도달분) — 주간 리포트가 합의(confluence) 클러스터를
     재구성할 때 쓰는 원천 행. 섀도 터치(touched_at NULL)는 제외한다: 만료되면

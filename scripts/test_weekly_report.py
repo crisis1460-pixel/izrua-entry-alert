@@ -229,6 +229,57 @@ check("RC1 역신호 확정 한 줄 표기(필터 무변경 명시 + HTML 안전
 check("RC2 미주입 시 확정 줄 없음(기존 렌더 완전 불변)",
       "역신호 확정" not in msg and msg6 == msg)
 
+# ── WD: R-멀티플 분포 + 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4) ──
+# 수학 검증은 scripts/test_ranking.py(DI 섹션) 담당 — 여기선 렌더 통합만 본다.
+from analytics import distribution  # noqa: E402
+
+R_ROWS = [(-0.5, "C"), (0.3, "C"), (1.5, "B"), (2.7, "A"), (4.0, "S")]
+DIST = distribution.r_multiple_distribution(R_ROWS)
+DIST_BY_G = distribution.r_distribution_by_grade(R_ROWS)
+msg_d1 = telegram.render_weekly_report(rows_by_author, now=now,
+                                       r_distribution=DIST,
+                                       r_distribution_by_grade=DIST_BY_G, **RK)
+check("WD1 헤더 + 평균R", "📊 R-멀티플 분포 (종결 5건, R 트랙만 — SL 미기재 표본 제외)" in msg_d1
+      and "평균 R = +1.60" in msg_d1)
+check("WD2 구간별 바+건수", "-1~0 █ 1건" in msg_d1 and "0~1 █ 1건" in msg_d1
+      and "1~2 █ 1건" in msg_d1 and "2~3 █ 1건" in msg_d1 and "3+ █ 1건" in msg_d1)
+check("WD3 등급별 평균 병기 + 표본0 등급 생략",
+      "S 평균+4.00(n=1)" in msg_d1 and "C 평균-0.10(n=2)" in msg_d1 and "D 평균" not in msg_d1)
+
+HOLD_ROWS = [dict(touched_at=0, resolved_at=10 * 3600, outcome="hit"),
+            dict(touched_at=0, resolved_at=20 * 3600, outcome="miss"),
+            dict(touched_at=0, resolved_at=50 * 3600, outcome="miss"),
+            dict(touched_at=0, resolved_at=100 * 3600, outcome="hit")]
+HOLD = distribution.holding_period_distribution(HOLD_ROWS)
+msg_d2 = telegram.render_weekly_report(rows_by_author, now=now, holding_period=HOLD, **RK)
+check("WD4 보유기간 헤더+구간별 hit율",
+      "⏱️ 보유기간 분포 (터치→종결 경과, 종결 4건)" in msg_d2
+      and "24h 이내" in msg_d2 and "hit 50%" in msg_d2
+      and "24~72h" in msg_d2 and "hit 0%" in msg_d2
+      and "72h+" in msg_d2 and "hit 100%" in msg_d2)
+check("WD5 표시전용 문구", "표시 전용 — 알림 필터에 영향 없음" in msg_d2)
+
+HOLD_SPARSE = distribution.holding_period_distribution(
+    [dict(touched_at=0, resolved_at=5 * 3600, outcome="hit")])
+msg_d3 = telegram.render_weekly_report(rows_by_author, now=now, holding_period=HOLD_SPARSE, **RK)
+check("WD6 표본 없는 구간 행 생략", "24~72h" not in msg_d3 and "72h+" not in msg_d3
+      and "24h 이내" in msg_d3)
+
+check("WD7 미주입 시 두 섹션 없음 + 기존 렌더 완전 불변",
+      "R-멀티플 분포" not in msg6 and "보유기간 분포" not in msg6 and msg6 == msg)
+
+DIST_EMPTY = distribution.r_multiple_distribution([])
+HOLD_EMPTY = distribution.holding_period_distribution([])
+check("WD8 표본 0 시 섹션 통째 생략",
+      "R-멀티플 분포" not in telegram.render_weekly_report(
+          rows_by_author, now=now, r_distribution=DIST_EMPTY, **RK)
+      and "보유기간 분포" not in telegram.render_weekly_report(
+          rows_by_author, now=now, holding_period=HOLD_EMPTY, **RK))
+
+check("WD9 빈 작성자 표본에서도 독립 축으로 표시(등급 캘리브레이션과 동일 원칙)",
+      "아직 표본 부족" in telegram.render_weekly_report({}, now=now, r_distribution=DIST, **RK)
+      and "📊 R-멀티플 분포" in telegram.render_weekly_report({}, now=now, r_distribution=DIST, **RK))
+
 # ── A: 주간 감사 덤프 + raw_text 보존정책 (2026-07-27 기획 카드 #4) ──────────
 # storage/audit_dump.py + db.prune_raw_text. 알림·필터·등급과 무관한 기록 전용 기능이라
 # 여기서 검증하는 건 "파일이 정확히 나오는가 / 원문이 아카이브된 뒤에만 지워지는가 /
@@ -452,6 +503,6 @@ for _d in (A_DIR, G_DIR, N_DIR):
     shutil.rmtree(_d, ignore_errors=True)
 
 print()
-n_checks = 66
+n_checks = 75
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

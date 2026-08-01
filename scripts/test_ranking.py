@@ -10,7 +10,7 @@ try:
 except Exception:
     pass
 
-from analytics import ranking
+from analytics import distribution, ranking
 from storage import db
 
 ok = True
@@ -318,6 +318,80 @@ check("G13 조회 SQL — 미채점/섀도터치 제외",
       and calibration.calibrate_grades(fetched)["pooled"]["n"] == 2)
 os.remove(TEST_DB3)
 
+# ── DI: R-멀티플·보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4) ──────
+# 순수 함수 — analytics/calibration.py 와 동일한 "프로젝트 모듈 import 0" 원칙.
+
+R_ROWS = [(-0.5, "C"), (0.3, "C"), (1.5, "B"), (2.7, "A"), (4.0, "S")]
+dist = distribution.r_multiple_distribution(R_ROWS)
+check("DI1 R분포 버킷팅 + 평균", dist["n"] == 5 and close(dist["mean"], 1.6)
+      and {b["label"]: b["n"] for b in dist["buckets"]}
+      == {"-1~0": 1, "0~1": 1, "1~2": 1, "2~3": 1, "3+": 1})
+check("DI2 구간 경계 — [lo,hi) 반개구간",
+      distribution.r_multiple_distribution([(0.0, "C")])["buckets"][1]["n"] == 1  # 0~1
+      and distribution.r_multiple_distribution([(1.0, "C")])["buckets"][2]["n"] == 1  # 1~2
+      and distribution.r_multiple_distribution([(-1.0, "C")])["buckets"][0]["n"] == 1  # -1~0
+      and distribution.r_multiple_distribution([(5.0, "C")])["buckets"][4]["n"] == 1)  # 3+(상한 오픈)
+empty_dist = distribution.r_multiple_distribution([])
+check("DI3 빈 입력 — n=0/mean=None/전 버킷 0",
+      empty_dist["n"] == 0 and empty_dist["mean"] is None
+      and all(b["n"] == 0 for b in empty_dist["buckets"]))
+check("DI4 None(SL 미기재 tp_only) 제외",
+      distribution.r_multiple_distribution([(-0.5, "C"), (None, "C")])["n"] == 1)
+
+by_g = distribution.r_distribution_by_grade(R_ROWS + [(1.0, "X")])  # X=미정의 등급
+check("DI5 등급별 분해 + 미정의 등급 제외", by_g["C"]["n"] == 2 and close(by_g["C"]["mean"], -0.1)
+      and by_g["B"]["n"] == 1 and by_g["A"]["n"] == 1 and by_g["S"]["n"] == 1
+      and by_g["D"]["n"] == 0 and "X" not in by_g)
+
+HOLD_ROWS = [dict(touched_at=0, resolved_at=10 * 3600, outcome="hit"),
+            dict(touched_at=0, resolved_at=20 * 3600, outcome="miss"),
+            dict(touched_at=0, resolved_at=50 * 3600, outcome="miss"),
+            dict(touched_at=0, resolved_at=100 * 3600, outcome="hit")]
+hold = distribution.holding_period_distribution(HOLD_ROWS)
+check("DI6 보유기간 버킷팅 + hit율",
+      hold["n"] == 4 and hold["buckets"][0]["n"] == 2 and hold["buckets"][0]["hits"] == 1
+      and close(hold["buckets"][0]["rate"], 0.5)
+      and hold["buckets"][1]["n"] == 1 and hold["buckets"][1]["hits"] == 0
+      and hold["buckets"][2]["n"] == 1 and close(hold["buckets"][2]["rate"], 1.0))
+check("DI7 음수경과·비종결 outcome 제외",
+      distribution.holding_period_distribution(
+          [dict(touched_at=100, resolved_at=50, outcome="hit"),
+           dict(touched_at=0, resolved_at=3600, outcome="watching")])["n"] == 0)
+check("DI8 timeboxed_win 분모포함·분자제외(hit 아님)",
+      distribution.holding_period_distribution(
+          [dict(touched_at=0, resolved_at=10 * 3600, outcome="timeboxed_win")]
+      )["buckets"][0] == {"label": "24h 이내", "n": 1, "hits": 0, "rate": 0.0})
+check("DI9 튜플/dict 입력 동등(R분포)",
+      distribution.r_multiple_distribution([(-0.5, "C"), (1.5, "B")])["buckets"]
+      == distribution.r_multiple_distribution(
+          [{"r_multiple": -0.5, "grade": "C"}, {"r_multiple": 1.5, "grade": "B"}])["buckets"])
+
+TEST_DB4 = "cache/_test_distribution.db"
+if os.path.exists(TEST_DB4):
+    os.remove(TEST_DB4)
+db.init_db(TEST_DB4)
+with db.connect(TEST_DB4) as conn:
+    rows_in4 = [
+        # key, grade, outcome, r_multiple, touched_at, resolved_at
+        ("d1", "C", "hit", 0.5, now - 2 * D, now - 2 * D + 10 * 3600),
+        ("d2", "B", "miss", None, now - 2 * D, now - 2 * D + 5 * 3600),  # tp_only — r NULL
+        ("d3", "S", None, None, None, None),                             # 미터치 — 제외
+    ]
+    for k, grade, outcome, r_multiple, touched_at, resolved_at in rows_in4:
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
+            "collected_at, author, grade, outcome, touched_at, resolved_at, r_multiple) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (k, "SOL", "KRW-SOL", "long", "touched", now - 3 * D, "A", grade, outcome,
+             touched_at, resolved_at, r_multiple))
+    r_rows_db = db.get_closed_r_rows(conn)
+    hold_rows_db = db.get_closed_holding_rows(conn)
+check("DI10 get_closed_r_rows/get_closed_holding_rows 조회 SQL",
+      len(r_rows_db) == 1 and r_rows_db[0]["grade"] == "C"
+      and close(r_rows_db[0]["r_multiple"], 0.5)
+      and len(hold_rows_db) == 2 and {r["outcome"] for r in hold_rows_db} == {"hit", "miss"})
+os.remove(TEST_DB4)
+
 # ── RV: 역신호 확정/해제 판정 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──
 # 순수 함수 — 스냅샷 dict(최신순) 만 받는다. 확정은 e_lb<0 엄격, 해제는 e_lb>=0.
 # 표본 부족/게이트 미달/결측은 둘 다 False = 현 상태 보수적 유지.
@@ -358,6 +432,6 @@ check("RV11 min_neff 파라미터 — 4.9 도 min_neff=3 이면 확정",
                                    min_neff=3.0))
 
 print()
-n_checks = 52
+n_checks = 62
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

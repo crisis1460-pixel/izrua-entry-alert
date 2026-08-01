@@ -30,7 +30,7 @@ import time
 
 import requests
 
-from analytics import calibration, clustering, ranking
+from analytics import calibration, clustering, distribution, ranking
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -586,6 +586,43 @@ def _calibration_main_lines(cal: dict) -> list:
     return lines
 
 
+def _r_distribution_section(dist: dict, by_grade: dict = None) -> list:
+    """📊 R-멀티플 분포 섹션 (2026-08-01 내부기능강화 리서치 영역3). 미주입/표본 0 이면 빈 목록.
+
+    수학은 analytics.distribution 이 전부 담당하고 여기선 문구만 만든다.
+    **표시 전용** — 등급 산식·알림 필터·엔트리 알림 양식 어디에도 영향 없음."""
+    if not dist or not dist.get("n"):
+        return []
+    lines = [_SEP, f"📊 R-멀티플 분포 (종결 {dist['n']}건, R 트랙만 — SL 미기재 표본 제외)"]
+    for b in dist["buckets"]:
+        bar = "█" * min(b["n"], 20)
+        lines.append(f"  {b['label']:>5s} {bar} {b['n']}건")
+    if dist.get("mean") is not None:
+        lines.append(f"  평균 R = {dist['mean']:+.2f}")
+    if by_grade:
+        parts = [f"{g} 평균{by_grade[g]['mean']:+.2f}(n={by_grade[g]['n']})"
+                 for g in ("S", "A", "B", "C", "D")
+                 if by_grade.get(g) and by_grade[g].get("n")]
+        if parts:
+            lines.append("  등급별: " + " · ".join(parts))
+    lines.append("ℹ️ 표시 전용 — 등급 산식·알림 필터는 이 섹션으로 바뀌지 않습니다.")
+    return lines
+
+
+def _holding_period_section(hold: dict) -> list:
+    """⏱️ 보유기간(터치→종결 경과) 분포 섹션 (2026-08-01 내부기능강화 리서치 영역4).
+    미주입/표본 0 이면 빈 목록. **표시 전용** — 알림 필터에 영향 없음."""
+    if not hold or not hold.get("n"):
+        return []
+    lines = [_SEP, f"⏱️ 보유기간 분포 (터치→종결 경과, 종결 {hold['n']}건)"]
+    for b in hold["buckets"]:
+        if not b["n"]:
+            continue  # 표본 없는 구간은 행 생략(calibration.py 관례와 동일)
+        lines.append(f"  {b['label']:>8s}  {b['n']}건  hit {_pct(b['rate'])}")
+    lines.append("ℹ️ 표시 전용 — 알림 필터에 영향 없음")
+    return lines
+
+
 def render_weekly_report(rows_by_author: dict, now: float = None,
                          half_life_days: float = None, z: float = None,
                          prior_m: int = None, min_neff: float = None,
@@ -594,7 +631,10 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          confluence_min_clusters: int = None,
                          calibration_result: dict = None,
                          calibration_legacy: dict = None,
-                         reverse_confirmed: set = None) -> str:
+                         reverse_confirmed: set = None,
+                         r_distribution: dict = None,
+                         r_distribution_by_grade: dict = None,
+                         holding_period: dict = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -619,7 +659,13 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     2026-08-01 신규(S9 역신호 확정, 표시 전용):
     - reverse_confirmed: 역신호 '확정' 작성자 집합(db.get_reverse_confirmed_authors)
       → 안내 섹션에 확정 구분 한 줄. 미주입이면 종전 출력과 완전히 동일.
-      후보(🔻, E_LB≤0 현 시점)와 확정(2주 연속, 경보 발송됨)은 다른 상태다."""
+      후보(🔻, E_LB≤0 현 시점)와 확정(2주 연속, 경보 발송됨)은 다른 상태다.
+
+    2026-08-01 신규(내부기능강화 리서치 영역3·4, 둘 다 표시 전용):
+    - r_distribution / r_distribution_by_grade: analytics.distribution.r_multiple_distribution
+      / r_distribution_by_grade 결과 → '📊 R-멀티플 분포' 섹션. 미주입이면 섹션만 빠진다.
+    - holding_period: analytics.distribution.holding_period_distribution 결과 →
+      '⏱️ 보유기간 분포' 섹션. 미주입이면 섹션만 빠진다."""
     now = time.time() if now is None else now
     half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
     z = settings.get("rank_z") if z is None else z
@@ -641,6 +687,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         # 등급 캘리브레이션은 작성자 축과 독립이다 — 작성자 미상(author NULL) 종결
         # 표본만 있는 경우에도 등급 축은 볼 수 있으므로 이 경로에서도 붙인다.
         lines.extend(_calibration_section(calibration_result, calibration_legacy))
+        lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
+        lines.extend(_holding_period_section(holding_period))
         lines.append(_SEP)
         return "\n".join(lines)
 
@@ -698,7 +746,12 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     # (2026-08-01 S10 D4: 본표=현행 산식(v3) 표본, 구 산식은 참고 한 줄 병기)
     lines.extend(_calibration_section(calibration_result, calibration_legacy))
 
-    # ⑤ 안내: 표본부족 + 역신호 후보/확정
+    # ⑤ R-멀티플 분포 + ⑥ 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4) —
+    # 등급 축과도 작성자 축과도 무관한 별도 관찰, 둘 다 표시 전용
+    lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
+    lines.extend(_holding_period_section(holding_period))
+
+    # ⑦ 안내: 표본부족 + 역신호 후보/확정
     if under_sample or n_anti or reverse_confirmed:
         lines.append(_SEP)
     if under_sample:

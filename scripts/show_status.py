@@ -34,7 +34,7 @@ try:
 except Exception:
     pass
 
-from analytics import calibration, clustering, ranking
+from analytics import calibration, clustering, distribution, ranking
 from collector.grading import GRADE_ORDER
 from config import settings
 from storage import db
@@ -546,11 +546,20 @@ def print_weekly_report_text(conn, now: float) -> None:
 
     from notify import telegram
     _cal_cur, _cal_legacy = _calibration_pair(conn)
+    try:
+        _r_rows = db.get_closed_r_rows(conn)
+        _r_dist = distribution.r_multiple_distribution(_r_rows)
+        _r_dist_by_grade = distribution.r_distribution_by_grade(_r_rows)
+        _holding = distribution.holding_period_distribution(db.get_closed_holding_rows(conn))
+    except sqlite3.OperationalError:
+        _r_dist, _r_dist_by_grade, _holding = None, None, None
     text = telegram.render_weekly_report(
         rows_by_author, now=now, baseline=baseline,
         raw_records=raw_records, confluence=confluence,
         calibration_result=_cal_cur, calibration_legacy=_cal_legacy,
-        reverse_confirmed=_reverse_confirmed(conn))
+        reverse_confirmed=_reverse_confirmed(conn),
+        r_distribution=_r_dist, r_distribution_by_grade=_r_dist_by_grade,
+        holding_period=_holding)
     print(_strip_html(text))
 
 

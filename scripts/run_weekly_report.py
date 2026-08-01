@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-from analytics import clustering
+from analytics import clustering, distribution
 from config import settings
 from notify import telegram
 from scripts.show_status import _calibration_pair
@@ -67,13 +67,22 @@ def send_report(db_path: str = None, now: float = None) -> bool:
         # 역신호 확정 구분(S9, 표시 전용) — run_cycle 스냅샷 훅이 meta 에 기록한
         # 확정 상태를 안내 한 줄로만 병기한다(정렬·수식·필터 불변).
         reverse_confirmed = db.get_reverse_confirmed_authors(conn)
+        # R-멀티플 분포 + 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4).
+        # 둘 다 순수 조회 + analytics.distribution 손계산 — 외부 API 호출 0, 표시 전용.
+        r_rows = db.get_closed_r_rows(conn)
+        r_dist = distribution.r_multiple_distribution(r_rows)
+        r_dist_by_grade = distribution.r_distribution_by_grade(r_rows)
+        holding = distribution.holding_period_distribution(db.get_closed_holding_rows(conn))
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
                                          raw_records=raw_records, confluence=confluence,
                                          calibration_result=calibration_result,
                                          calibration_legacy=calibration_legacy,
-                                         reverse_confirmed=reverse_confirmed)
+                                         reverse_confirmed=reverse_confirmed,
+                                         r_distribution=r_dist,
+                                         r_distribution_by_grade=r_dist_by_grade,
+                                         holding_period=holding)
     ok = telegram.send(text)
 
     logger.info(
