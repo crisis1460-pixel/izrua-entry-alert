@@ -113,6 +113,17 @@ REAL_BUG_CASES = [
         0.30,
         {"entry": 0.30, "sl": 0.28, "tp": 0.35, "direction": "long"},
     ),
+    # 2026-08-01 실사용자 스크린샷 검토 발견 - CFX id=181 라이브 알림 원문(2026-08-01
+    # KST). Target 1(0.04087)이 entry(0.04088)보다 살짝 낮아 sanity 탈락하는데,
+    # 예전엔 이 하나 때문에 tp/tps_all 전체가 버려져 정상 Target 2/3 까지
+    # "데이터 없음"으로 알림에 노출됐다(감시밴드·다단계TP 도 영향받음).
+    (
+        "실전버그 재현 - CFX (Target1 sanity탈락 시 Target2 폴백, tp/tps_all/단계수 일치)",
+        "Entry Price: 0.04088\nTarget 1: 0.04087\nTarget 2: 0.04259\nTarget 3: 0.04392\n"
+        "Stop Loss: At the resistance zone in green.",
+        0.0409,
+        {"entry": 0.04088, "sl": None, "tp": 0.04259, "direction": "long", "rr_none_ok": True},
+    ),
 ]
 
 def _close(a, b):
@@ -179,6 +190,13 @@ TPSALL_CASES = [
         "BTC looking bullish, might pump soon. No clear levels.",
         60000,
         [],
+    ),
+    (
+        "tps_all - CFX Target1 sanity탈락해도 Target2/3 는 살아남음",
+        "Entry Price: 0.04088\nTarget 1: 0.04087\nTarget 2: 0.04259\nTarget 3: 0.04392\n"
+        "Stop Loss: At the resistance zone in green.",
+        0.0409,
+        [0.04259, 0.04392],
     ),
 ]
 for desc, text, price, exp_tpsall in TPSALL_CASES:

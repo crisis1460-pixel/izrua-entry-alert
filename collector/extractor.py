@@ -404,31 +404,42 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     sls = _grab_after(_SL_LABEL, clean)
     tps = _grab_after(_TP_LABEL, clean)
     sl = sls[0][0] if sls else None
-    tp = tps[0][-1] if tps else None  # 첫 타겟(범위면 상단)
 
-    # 방향성 sanity(방어선 2단계, 2026-07-23): 라벨 매칭이 정상이어도 파싱이 미묘하게
-    # 틀리면(신규 소스 포맷 등) TP/SL이 방향과 모순될 수 있다 — long인데 tp<=entry
-    # 이거나 sl>=entry면 손익비가 마이너스로 나오는 등 명백히 잘못된 값이므로, 값을
-    # 버리지 않고 억지로 쓰기보다 "판단 보류"(None)로 되돌린다(이 모듈의 기존 철학과
-    # 동일 — 모르는 것과 틀린 것을 구분).
+    def _tp_valid(v) -> bool:
+        """방향·크기 sanity 를 모두 통과하는 tp 후보인가 (아래 sl 사후검증과 같은 기준)."""
+        if v is None:
+            return False
+        if direction == "long" and entry is not None and v <= entry:
+            return False
+        if direction == "short" and entry is not None and v >= entry:
+            return False
+        if entry is not None and entry > 0 and not (entry * 0.25 <= v <= entry * 4):
+            return False
+        return True
+
+    # tp 후보 선정 (2026-08-01 CFX 실전 발견 — 원문 "Target 1: 0.04087(entry
+    # 0.04088과 거의 동일해 sanity 탈락) / Target 2: 0.04259 / Target 3: 0.04392").
+    # 예전엔 첫 후보(tps[0][-1])만 보고, 그게 sanity 를 통과 못 하면 tp 를 통째로
+    # None 처리했다 — 뒤따르는 멀쩡한 Target 2/3 까지 함께 버려져 tps_all 도 빈
+    # 목록이 됐다(그 목록이 감시밴드·다단계 TP 알림의 유일한 입력이라 영향이 큼).
+    # 이제 후보를 순서대로 검증해 처음 통과하는 값을 쓴다. 한 줄 사다리(tps[0]
+    # 하나뿐인 경우)는 동작 변화 없음 — 줄바꿈 나열형(여러 줄 Target N:)에서만
+    # 실질적으로 달라진다.
+    tp = next((c for grp in (tps or []) if grp for c in [grp[-1]] if _tp_valid(c)), None)
+
+    # SL 방향·크기 sanity(2026-07-23, ALGO/ARB 실전 사고 후 추가) — 라벨 매칭이
+    # 정상이어도 파싱이 미묘하게 틀리면(신규 소스 포맷 등) SL이 방향과 모순되거나
+    # (long인데 sl>=entry) 비현실적 크기(엔트리 대비 4배 초과/0.25배 미만)일 수 있다.
+    # 값을 버리지 않고 억지로 쓰기보다 "판단 보류"(None)로 되돌린다(이 모듈의 기존
+    # 철학 — 모르는 것과 틀린 것을 구분). TP는 위 _tp_valid 후보선정에서 이미 같은
+    # 기준으로 검증됐다.
     if direction == "long":
-        if tp is not None and entry is not None and tp <= entry:
-            tp = None
         if sl is not None and entry is not None and sl >= entry:
             sl = None
     else:
-        if tp is not None and entry is not None and tp >= entry:
-            tp = None
         if sl is not None and entry is not None and sl <= entry:
             sl = None
-
-    # 크기 sanity(방어선 3단계, 2026-07-23 ALGO/ARB 실전 사고 후 추가): 방향은 맞아도
-    # 엔트리 대비 4배(+300%) 초과 목표나 1/4 미만 손절은 스윙 셋업에서 비현실적 —
-    # 파싱 오인(서수/무관 숫자)일 확률이 압도적이므로 판단 보류(None)로 되돌린다.
-    # (ALGO 사례: entry 0.083에 tp 1.0 = 12배 → 알림에 '+1103%'로 노출됐던 값)
     if entry is not None and entry > 0:
-        if tp is not None and not (entry * 0.25 <= tp <= entry * 4):
-            tp = None
         if sl is not None and not (entry * 0.25 <= sl <= entry * 4):
             sl = None
 
@@ -467,7 +478,13 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             if tps.is_spec:
                 _lo, _hi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
                             else (float("-inf"), float("inf")))
-                _firsts = {v[0] for v in tps if v and _lo <= v[0] <= _hi}
+                # 2026-08-01 수정: 크기뿐 아니라 방향도 걸러 tps_all/_tp_valid 와
+                # 같은 기준으로 맞춘다 — 안 그러면 CFX 케이스처럼 entry 아래인
+                # Target 1(sanity 탈락, 실제 목표에서 제외됨)까지 단계 수에 세어
+                # "1/3단계"로 표시되는데 실제 유효 목표는 2개뿐인 불일치가 생겼다.
+                _firsts = {v[0] for v in tps if v and _lo <= v[0] <= _hi
+                          and (entry is None
+                               or (v[0] > entry if direction == "long" else v[0] < entry))}
                 if 1 < len(_firsts) <= _LADDER_MAX_STEPS:
                     tp_ladder_count = len(_firsts)
 
