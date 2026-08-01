@@ -370,30 +370,35 @@ def check_announcements(conn, now: float, cfg_get) -> dict:
             continue
         title = _notice_title(notice)
 
-        # 만료를 발송보다 먼저 한다: 텔레그램이 죽어 있어도 위험 코인의 알림은
-        # 이번 회차부터 멈춰야 한다. 다만 만료하면 그 코인이 _active_symbols() 에서
-        # 빠져 다음 폴링에 재매칭되지 않으므로, 발송 실패분은 반드시 대기 큐에
-        # 넣어 재시도 경로를 남긴다(안 그러면 경보가 조용히 영구 유실).
-        expired = 0
-        for symbol in fresh:
-            expired += db.expire_levels_for_coin(
-                conn, symbol, reason=f"upbit_notice:{nid}", now=now)
-            # 거래량 급증 감시도 즉시 종료 (S9 통합감사 m-6, 2026-07-31):
-            # 레벨만 만료하면 volume_watch 가 최대 72h 살아남아 상폐성 펌핑에
-            # 🔥 고음량 급증 알림이 나갈 수 있다 — 공지 경보와 정반대 신호.
-            db.remove_volume_watch(conn, f"KRW-{symbol}")
-        result["expired"] += expired
+        try:
+            # 만료를 발송보다 먼저 한다: 텔레그램이 죽어 있어도 위험 코인의 알림은
+            # 이번 회차부터 멈춰야 한다. 다만 만료하면 그 코인이 _active_symbols() 에서
+            # 빠져 다음 폴링에 재매칭되지 않으므로, 발송 실패분은 반드시 대기 큐에
+            # 넣어 재시도 경로를 남긴다(안 그러면 경보가 조용히 영구 유실).
+            expired = 0
+            for symbol in fresh:
+                expired += db.expire_levels_for_coin(
+                    conn, symbol, reason=f"upbit_notice:{nid}", now=now)
+                # 거래량 급증 감시도 즉시 종료 (S9 통합감사 m-6, 2026-07-31):
+                # 레벨만 만료하면 volume_watch 가 최대 72h 살아남아 상폐성 펌핑에
+                # 🔥 고음량 급증 알림이 나갈 수 있다 — 공지 경보와 정반대 신호.
+                db.remove_volume_watch(conn, f"KRW-{symbol}")
+            result["expired"] += expired
 
-        if _dispatch(title, fresh, expired, nid, sent_keys, sent_set):
-            changed = True
-            result["alerted"] += 1
-            logger.warning("[공지] 리스크 경보 발송: %s / 레벨 %d건 만료 (%s)",
-                           " · ".join(fresh), expired, title[:60])
-        else:
+            if _dispatch(title, fresh, expired, nid, sent_keys, sent_set):
+                changed = True
+                result["alerted"] += 1
+                logger.warning("[공지] 리스크 경보 발송: %s / 레벨 %d건 만료 (%s)",
+                               " · ".join(fresh), expired, title[:60])
+            else:
+                queued.append({"nid": nid, "title": title, "symbols": fresh,
+                               "expired": expired, "first_at": now})
+                logger.warning("[공지] 경보 발송 실패 - 다음 회차 재시도 대기: %s (%s)",
+                               " · ".join(fresh), title[:60])
+        except Exception as e:  # noqa: BLE001 — 한 공지 실패가 나머지를 유실시키면 안 된다
+            logger.error("[공지] %s 처리 중 예외 → 재시도큐 보존: %s", nid, e)
             queued.append({"nid": nid, "title": title, "symbols": fresh,
-                           "expired": expired, "first_at": now})
-            logger.warning("[공지] 경보 발송 실패 - 다음 회차 재시도 대기: %s (%s)",
-                           " · ".join(fresh), title[:60])
+                           "expired": 0, "first_at": now})
 
     if changed:
         _save_sent_keys(conn, sent_keys)

@@ -960,9 +960,10 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         entry_krw = (lv.get("entry_usd") or 0) * (usdt_krw or 0)
         if not current or not usdt_krw or entry_krw <= 0:
             if elapsed > window_sec + 14 * 86400:
-                conn.execute(
-                    "UPDATE levels SET status='expired', expired_at=? "
-                    "WHERE id=? AND outcome IS NULL", (now, lv["id"]))
+                db.resolve_outcome(conn, lv["id"], "expired_no_data", 0.0,
+                                   "timeboxed", now=now)
+                conn.execute("UPDATE levels SET status='expired', expired_at=? "
+                             "WHERE id=?", (now, lv["id"]))
                 logger.info("[적중판정] %s 시세 조회 불가 지속 - 판정불능 제외", ticker)
             continue
 
