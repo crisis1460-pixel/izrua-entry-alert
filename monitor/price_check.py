@@ -1064,6 +1064,18 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             elif sl_krw > 0 and current <= sl_krw:
                 outcome, resolve_price = "miss", sl_krw
 
+        # 미전송 TP 재시도: 이전 회차에서 TP 적중 확인 후 발송 실패 시,
+        # 캔들 창(since_min) 이동으로 재탐지 불가능한 경우를 복원한다.
+        # 이미 hit 판정이 나왔으면 중복일 뿐이고, SL("miss") 보다 시간적으로
+        # 먼저 발생한 TP 를 우선하므로 outcome 을 오버라이드해도 안전하다.
+        _pending_tp = lv.get("pending_tp_kind")
+        if _pending_tp:
+            if tp_krw > 0:
+                outcome, resolve_price = "hit", tp_krw
+            else:
+                db.clear_pending_tp(conn, lv["id"])
+                conn.commit()
+
         mode = ("tp_sl" if (tp_krw > 0 and sl_krw > 0)
                 else "tp_only" if tp_krw > 0 else "timeboxed")
 
@@ -1094,6 +1106,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     # 클러스터 내 중복 또는 본알림 무발송 신호: 인덱스만 전진, 알림 생략
                     if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                         conn.commit()
+                    if _pending_tp:
+                        db.clear_pending_tp(conn, lv["id"])
+                        conn.commit()
                     logger.info("[적중판정] %s %s %s (level_id=%d)",
                                 lv["coin_symbol"], _kind_inter,
                                 "클러스터 중복 차단" if _sib_dup
@@ -1112,6 +1127,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                                         _kind_inter, [lv["id"]], _tp_day, now)
                         alert_ledger.append(db_path, lv["coin_symbol"],
                                             _kind_inter, [lv["id"]], now)
+                        if _pending_tp:
+                            db.clear_pending_tp(conn, lv["id"])
                         conn.commit()
                         logger.info("[적중판정] %s TP%d 적중 → TP%d 감시 계속",
                                     ticker, _tp_alert_idx + 1, _next_idx + 1)
@@ -1123,6 +1140,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         else:
                             logger.warning("[적중판정] %s TP%d 발송 실패, 롤백 CAS 실패(경합)",
                                            ticker, _tp_alert_idx + 1)
+                        db.set_pending_tp(conn, lv["id"], _kind_inter)
+                        conn.commit()
             else:
                 # 최종 TP 또는 단일 TP 적중 — 종결
                 _best = (_tp_alert_idx + 1) if _is_multi_tp else 1
@@ -1148,10 +1167,14 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                                             _kind, [lv["id"]], _tp_day, now)
                             alert_ledger.append(db_path, lv["coin_symbol"],
                                                 _kind, [lv["id"]], now)
+                            if _pending_tp:
+                                db.clear_pending_tp(conn, lv["id"])
                             conn.commit()
                         else:
                             logger.warning("[적중판정] %s %s 발송 실패 → 종결 보류",
                                            ticker, _kind)
+                            db.set_pending_tp(conn, lv["id"], _kind)
+                            conn.commit()
                             continue
                     if not _touch_sent:
                         obs["suppressed_tp_gate"] += 1

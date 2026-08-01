@@ -517,6 +517,21 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
         return "skipped"
 
     logger.info("주간 리포트 발송: %s", reason)
+
+    # meta→commit→send: 먼저 성공으로 기록해 크래시 시 중복 발송을 방지한다.
+    # 대가: 선기록 후 발송 전 크래시 시 이번 리포트 유실(다음 주기에 새 리포트 발송).
+    try:
+        with db.connect(db_path) as conn:
+            _prev_ok = _meta_float(conn, META_LAST_REPORT)
+            db.set_meta(conn, META_LAST_REPORT, str(now))
+            db.set_meta(conn, META_LAST_REPORT_FAIL, "0")
+    except BaseException as e:  # noqa: BLE001 - meta 선기록 실패로 회차를 죽이면 안 된다
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error("주간 리포트 meta 선기록 실패: %s: %s", type(e).__name__, e)
+        print(f"::warning::주간 리포트 meta 선기록 실패 - {type(e).__name__}")
+        return "failed"
+
     try:
         sent = (report_runner or _default_report_runner)()
     except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
@@ -524,22 +539,21 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
             raise
         logger.error("주간 리포트 실패: %s: %s", type(e).__name__, e)
         sent = False
+
     if not sent:
         print(f"::warning::주간 리포트 발송 실패 - "
               f"{settings.get('weekly_report_retry_minutes')}분 후 재시도")
-
-    # meta 기록도 DB 접근 - 여기서 실패해도(잠금/디스크 등) 위 발송 결과 자체는 이미
-    # 확정됐으니 사이클을 죽이지 않고 failed 로만 남긴다(다음 회차가 재시도).
-    try:
-        _mark(db_path, META_LAST_REPORT, META_LAST_REPORT_FAIL, now, success=sent)
-    except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
-            raise
-        logger.error("주간 리포트 meta 기록 실패: %s: %s", type(e).__name__, e)
-        print(f"::warning::주간 리포트 meta 기록 실패 - {type(e).__name__}")
+        try:
+            with db.connect(db_path) as conn:
+                db.set_meta(conn, META_LAST_REPORT, str(_prev_ok))
+                db.set_meta(conn, META_LAST_REPORT_FAIL, str(now))
+        except BaseException as e:  # noqa: BLE001
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            logger.error("주간 리포트 meta 롤백 실패: %s: %s", type(e).__name__, e)
         return "failed"
 
-    return "ok" if sent else "failed"
+    return "ok"
 
 
 # ── 회차 ────────────────────────────────────────────────────────────

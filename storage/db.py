@@ -270,6 +270,9 @@ _EXTRA_COLUMNS = {
     # 소급 UPDATE 금지 — 과거 알림이 왜 나갔는지(당시 등급)의 원본 보존 원칙.
     # 캘리브레이션(show_status/run_weekly_report)이 이 값으로 신·구 표본을 분리 집계.
     "grade_ver": "TEXT",
+    # TP 발송 실패 시 재시도 마커. 캔들 창 이동으로 다음 회차에서 재탐지 불가능할 때
+    # 직전 판정을 복원한다. 발송 성공 또는 resolve 시 NULL 로 복원.
+    "pending_tp_kind": "TEXT",
 }
 
 
@@ -916,6 +919,14 @@ def advance_tp_alert_idx(conn, level_id: int, old_idx: int, new_idx: int) -> boo
         (new_idx, level_id, old_idx),
     )
     return cur.rowcount > 0
+
+
+def set_pending_tp(conn, level_id: int, kind: str) -> None:
+    conn.execute("UPDATE levels SET pending_tp_kind=? WHERE id=?", (kind, level_id))
+
+
+def clear_pending_tp(conn, level_id: int) -> None:
+    conn.execute("UPDATE levels SET pending_tp_kind=NULL WHERE id=?", (level_id,))
 
 
 def get_author_self_stats(conn, author: str) -> dict:
