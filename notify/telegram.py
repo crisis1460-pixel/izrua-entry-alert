@@ -302,11 +302,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 들여쓰기 4칸 = 52주 블록의 고가/저가 행과 시작 위치 정렬 (2026-07-23 사용자 지시).
     # R:R 행은 삭제(사용자가 직접 판단) — 그 자리에 거래량 순위.
     lines.append("타점")
-    if current_usd:
+    if current_usd and _krw(current_usd):
         lines.append(f"    현재:  {_krw(current_usd)}원")
-    if lo is not None and hi is not None and hi > lo:
+    if lo is not None and hi is not None and hi > lo and _krw(lo):
         lines.append(f"    진입:  {_krw(lo)}~{_krw(hi)}원")
-    elif entry_rep:
+    elif entry_rep and _krw(entry_rep):
         lines.append(f"    진입:  {_krw(entry_rep)}원")
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)
     # 표시 직전 최종 가드(2026-07-23 SOL 실전 사고): 파서 수정 '이전'에 수집돼 DB에
@@ -325,7 +325,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         # 단계가 1개뿐이거나 미상이면 종전과 완전히 동일한 한 줄이 나간다.
         n_tp = rep.get("tp_ladder_count") or 0
         step = f"  1/{n_tp}단계" if n_tp > 1 else ""
-        lines.append(f"    목표:  {_krw(tp)}원  ({pct:+.1f}%){step}")
+        _tp_krw = _krw(tp)
+        if _tp_krw:
+            lines.append(f"    목표:  {_tp_krw}원  ({pct:+.1f}%){step}")
+        else:
+            lines.append(f"    목표:  ({pct:+.1f}%){step}")
     else:
         lines.append("    목표:  데이터 없음")
     if volume_rank:
