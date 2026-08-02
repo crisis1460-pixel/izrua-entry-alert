@@ -231,6 +231,14 @@ def _author_block(rep: dict) -> list:
     if self_line:
         lines.append(self_line)
 
+    # 평균 보유기간 (표본 3건↑, 스윙 정렬 참고용)
+    _hold = rep.get("author_avg_holding_days")
+    if _hold is not None:
+        if _hold < 1:
+            lines.append(f"⏱ 평균 {_hold * 24:.0f}시간 보유")
+        else:
+            lines.append(f"⏱ 평균 {_hold:.1f}일 보유")
+
     # 역신호 경고 줄은 여기서 렌더하지 않는다 (2026-07-27 사용자 결정).
     # 07-27 오전에 "🔻 역신호 후보 — 자체 기대손익 -0.92R (표본 8)" 한 줄을 넣었다가
     # 같은 날 뺐다. 이유: 알림 한 건이 이미 폰 화면을 넘길 만큼 길고, 행이 하나 늘 때마다
@@ -246,7 +254,7 @@ def _author_block(rep: dict) -> list:
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
                  kimchi_pct: float = None, volume_rank: int = None,
-                 rep: dict = None) -> str:
+                 rep: dict = None, funding_rate: float = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -340,9 +348,24 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
+    # ── 포지션 참고 (SL 거리 + R:R — SL 있을 때만) ──
+    sl = rep.get("sl_usd")
+    if sl and entry_rep and entry_rep > 0 and sl > 0:
+        sl_dist = (sl - entry_rep) / entry_rep * 100
+        rr_val = rep.get("rr")
+        rr_str = f" · R:R 1:{rr_val:.1f}" if rr_val and rr_val > 0 else ""
+        lines.append(f"📐 SL {sl_dist:+.1f}%{rr_str}")
+
     # ── 시장 심리 (워쳐 표기 그대로: 김프 행 → BTC.D 행 / ALT.S 행 / F&G 행) ──
-    if sentiment or kimchi_pct is not None:
+    if sentiment or kimchi_pct is not None or funding_rate is not None:
         lines.append(_SEP)
+    if funding_rate is not None:
+        if funding_rate >= 0:
+            lines.append(f"💰 펀딩 {funding_rate:+.4f}% (롱 과열)" if funding_rate > 0.01
+                         else f"💰 펀딩 {funding_rate:+.4f}%")
+        else:
+            lines.append(f"💰 펀딩 {funding_rate:+.4f}% (숏 과열)" if funding_rate < -0.01
+                         else f"💰 펀딩 {funding_rate:+.4f}%")
     if kimchi_pct is not None:
         if abs(kimchi_pct) < 0.01:
             lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%)")

@@ -259,6 +259,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
                 source=source),
             "judgment_window_hours": judgment_window_hours(
                 tf_hours, setup["entry"], setup.get("tp")),
+            "timeframe_hours": tf_hours,
             "raw_text": text,  # 원문 저장 → 파서 개선 시 재파싱 치유 (reparse_all)
             "coin_symbol": coin["symbol"],
             "ticker": coin["ticker"],

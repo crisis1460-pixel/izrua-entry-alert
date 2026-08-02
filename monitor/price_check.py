@@ -467,7 +467,7 @@ def run_once(now: float = None) -> dict:
                "suppressed_grade_tp_penalty_only": 0, "suppressed_tp_too_close": 0,
                "preview_dwell": 0,
                "ambiguous_magnified": 0, "ambiguous_unresolved": 0,
-               "ambiguous_skipped": 0}
+               "ambiguous_skipped": 0, "suppressed_timeframe": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
         # 작성자 종결 실적 캐시 (2026-08-01 S10 v3) — author → (n, hits). 한 회차 안에서
@@ -614,6 +614,17 @@ def run_once(now: float = None) -> dict:
                         reverted_grade = grade_from_score((rep.get("score") or 0) + tp_penalty)
                         if meets_min_grade(reverted_grade, min_grade):
                             obs["suppressed_grade_tp_penalty_only"] += 1
+                # 타임프레임 필터: 스캘핑/단타(4H 미만) 아이디어 제외.
+                # NULL(미명시)은 통과 — 대부분의 아이디어가 타임프레임을 밝히지 않으므로.
+                if send_ok:
+                    _min_tf = cfg_get("alert_min_timeframe_hours")
+                    _tf = rep.get("timeframe_hours")
+                    if _min_tf and _tf is not None and _tf < _min_tf:
+                        logger.info("[체크] %s 타임프레임 %.1fh < %.1fh 알림 억제",
+                                    coin, _tf, _min_tf)
+                        send_ok = False
+                        obs["suppressed_timeframe"] += 1
+
                 # 2026-07-29 판정 B안: 마지막 TP 기준 2% 미만 신호 억제(2026-07-30 5%→2% 조정).
                 # 단일 TP < 2% → 초단타성 신호, 스윙 알림 불필요.
                 # 다중 TP → 가장 먼 마지막 TP 기준으로 판단:
@@ -717,7 +728,11 @@ def run_once(now: float = None) -> dict:
                         lv["author_self_neff_r"] = _met["neff_r"]
                         lv["author_self_e_lb"] = _met["e_lb"]
                         lv["author_rank_min_neff"] = cfg_get("rank_min_neff")
-                    # 52주 고저 + 김프는 발송 확정건에만 조회 (회당 업비트 1콜 + 바이낸스 1콜)
+                    # 대표 저자 평균 보유기간 주입 (표본 3건↑일 때만 표시)
+                    _hold = db.get_author_avg_holding_days(conn, rep.get("author"))
+                    if _hold is not None:
+                        rep["author_avg_holding_days"] = _hold
+                    # 52주 고저 + 김프 + 펀딩비는 발송 확정건에만 조회
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
                     kimchi = None
@@ -725,6 +740,11 @@ def run_once(now: float = None) -> dict:
                     if usd_global and usd_global > 0 and usdt_krw:
                         effective = current / usd_global
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
+                    _snap_funding = None
+                    try:
+                        _snap_funding = binance.fetch_funding_rate(coin, cfg_get("http_timeout_sec"))
+                    except Exception:  # noqa: BLE001
+                        pass
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
@@ -732,7 +752,8 @@ def run_once(now: float = None) -> dict:
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
                                                  volume_rank=_snap_volume_rank,
-                                                 rep=rep)  # M-1: 표시 대표 = 필터 대표
+                                                 rep=rep,
+                                                 funding_rate=_snap_funding)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로

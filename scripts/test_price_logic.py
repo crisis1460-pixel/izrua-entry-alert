@@ -262,8 +262,9 @@ check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not
 check("T4 표기수정 최종(워쳐식 타점+원화단독)", "타점" in touch_msg and "현재:" in touch_msg
       and "진입:" in touch_msg and "목표:" in touch_msg and "$" not in touch_msg
       and "엔트리" not in touch_msg and "~" in touch_msg)
-check("T4 R:R삭제+거래순위+4칸정렬", "R:R" not in touch_msg and "    거래:  5위" in touch_msg
-      and "\n    현재:" in touch_msg and "\n    고가" in touch_msg)
+check("T4 거래순위+4칸정렬+포지션참고", "    거래:  5위" in touch_msg
+      and "\n    현재:" in touch_msg and "\n    고가" in touch_msg
+      and "📐 SL" in touch_msg and "R:R 1:" in touch_msg)
 check("T4 김프+52주", "김프" in touch_msg and "52주" in touch_msg
       and "고가" in touch_msg and "지점" in touch_msg)
 

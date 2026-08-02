@@ -56,6 +56,39 @@ def _try_bybit(pair: str, timeout: float) -> Optional[float]:
     return None
 
 
+def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
+    """선물 펀딩비율(%). Binance Futures → Bybit 폴백. 인증 불필요.
+    양수=롱 과열, 음수=숏 과열. 전 경로 실패 시 None(알림에서 행 생략)."""
+    pair = f"{symbol.upper()}USDT"
+    # Binance Futures
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            params={"symbol": pair}, timeout=timeout,
+        )
+        if r.status_code == 200:
+            rate = r.json().get("lastFundingRate")
+            if rate is not None:
+                return float(rate) * 100  # 0.0001 → 0.01%
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding] Binance %s 실패: %s", pair, e)
+    # Bybit Linear
+    try:
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": pair}, timeout=timeout,
+        )
+        if r.status_code == 200:
+            items = r.json().get("result", {}).get("list", [])
+            if items:
+                rate = items[0].get("fundingRate")
+                if rate is not None:
+                    return float(rate) * 100
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding] Bybit %s 실패: %s", pair, e)
+    return None
+
+
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:
     """코인의 USDT 페어 현재가. 전 경로 실패 시 None
     (김프 줄만 생략됨 — 알림 발송은 계속된다)."""

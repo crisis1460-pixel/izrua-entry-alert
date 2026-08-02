@@ -89,6 +89,8 @@ SETTINGS = {
     # 알림 필터
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
     "alert_max_per_coin_per_day": 3,     # 코인당 하루 알림 상한
+    "alert_min_timeframe_hours": 4.0,    # 이 타임프레임 미만 아이디어는 알림 제외
+                                          # (스캘핑/단타 필터). NULL(미명시)은 통과.
 
     # 등급 산식 버전 (2026-08-01 S10 안3 — plan_S10_grade_recalibration.md)
     # grade_formula_ver: 신규 채점분에 levels.grade_ver 로 기록되는 태그. 과거 행은

@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- TP 단계 알림이 본알림 무발송 게이트(M-2, 2026-08-01)로 차단된 건수.
     -- suppressed_* 와 달리 _judge_outcomes 에서 누적 (가격체크 루프 외부).
     suppressed_tp_gate   INTEGER NOT NULL DEFAULT 0,
+    suppressed_timeframe INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 """
@@ -273,6 +274,10 @@ _EXTRA_COLUMNS = {
     # TP 발송 실패 시 재시도 마커. 캔들 창 이동으로 다음 회차에서 재탐지 불가능할 때
     # 직전 판정을 복원한다. 발송 성공 또는 resolve 시 NULL 로 복원.
     "pending_tp_kind": "TEXT",
+    # 원본 타임프레임(시간 단위). 스윙 필터용 — 4H 미만 아이디어를 알림에서 제외.
+    # NULL = 미명시(필터 통과). judgment_window_hours 는 이 값에서 파생되지만 역산
+    # 불가(동일 창에 여러 tf 가 매핑)라 원본을 따로 저장한다.
+    "timeframe_hours": "REAL",
 }
 
 
@@ -364,8 +369,8 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source, tp_ladder_count, tps_usd, grade_ver)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -383,6 +388,7 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("tps_usd") or "[]",         # 전체 TP 목표가 목록 JSON
                 # 산식 버전 태그 (2026-08-01 v3). 미지정(None)=구 호출부/테스트 호환
                 level.get("grade_ver"),
+                level.get("timeframe_hours"),
             ),
         )
         return True
@@ -971,6 +977,22 @@ def get_author_self_stats(conn, author: str) -> dict:
             "touched": row["t"] or 0, "untouched_expired": row["e"] or 0}
 
 
+def get_author_avg_holding_days(conn, author: str) -> Optional[float]:
+    """터치→종결 평균 보유 기간(일). 종결 표본 3건 미만이면 None."""
+    if not author:
+        return None
+    row = conn.execute(
+        """SELECT AVG(resolved_at - touched_at) / 86400.0 AS avg_days,
+                  COUNT(*) AS n
+           FROM levels
+           WHERE author=? AND touched_at IS NOT NULL AND resolved_at IS NOT NULL""",
+        (author,),
+    ).fetchone()
+    if not row or (row["n"] or 0) < 3:
+        return None
+    return row["avg_days"]
+
+
 # ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
 # 비용 방어 원칙: 레벨 수십~수백 개를 매번 전수 확인하면 TradingView 부담·차단
 # 위험이 커진다 - 호출부(scripts/run_collect.py)가 하루 상한(deletion_check_daily_limit)
@@ -1189,7 +1211,8 @@ _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "ambiguous_magnified", "ambiguous_unresolved",
                      "ambiguous_skipped",
                      # TP 단계 알림이 본알림 무발송 게이트(M-2, 2026-08-01)로 차단된 건수.
-                     "suppressed_tp_gate")
+                     "suppressed_tp_gate",
+                     "suppressed_timeframe")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:
@@ -1424,5 +1447,6 @@ def get_observation_report(conn, days: int = 30) -> list:
             # M-2(2026-08-01): TP 단계 알림이 본알림 게이트로 차단된 건수 — 리뷰 발견
             # (2026-08-01): 컬럼은 저장되는데 이 리포트에 빠져 있어 관찰 불가였다.
             "suppressed_tp_gate":                s.get("suppressed_tp_gate", 0),
+            "suppressed_timeframe":              s.get("suppressed_timeframe", 0),
         })
     return out
