@@ -95,7 +95,8 @@ def send(text: str, urgency: str = "high") -> bool:
     retry = 0
     while True:
         try:
-            resp = requests.post(_API.format(token=token), json=payload, timeout=10)
+            resp = requests.post(_API.format(token=token), json=payload,
+                                  timeout=settings.get("http_timeout_sec"))
         except requests.RequestException as e:
             if retry < _RETRY_MAX:
                 wait = _RETRY_BACKOFF_SEC[min(retry, len(_RETRY_BACKOFF_SEC) - 1)]
@@ -359,7 +360,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 등급·판정에는 계속 반영.
 
     # ── 시장 심리 (워쳐 표기 그대로: 김프 행 → BTC.D 행 / ALT.S 행 / F&G 행) ──
-    if sentiment or kimchi_pct is not None or funding_rate is not None:
+    # funding_regime_flip 도 세퍼레이터 조건에 포함 (2026-08-03 R1 감사): 다른
+    # 세 지표가 다 실패한 상태에서 레짐 배지만 있으면 세퍼레이터가 안 붙어
+    # 목표가 행에 바로 이어지는 렌더 이슈가 있었다.
+    if (sentiment or kimchi_pct is not None or funding_rate is not None
+            or funding_regime_flip):
         lines.append(_SEP)
     if funding_rate is not None:
         # 라벨 (2026-08-03 사용자 결정): 매수 판단에 직결되는 짧은 문구.
@@ -558,8 +563,12 @@ def _calibration_section(cal: dict, legacy: dict = None) -> list:
     lines = _calibration_main_lines(cal)
     if legacy and (legacy.get("pooled") or {}).get("n"):
         if not lines:
+            # 산식 버전은 settings 에서 읽는다 — 2026-08-03 v3→v4 승격에 하드코딩
+            # 잔재로 "v3" 로 잘못 뜨던 문구 수정(R1 감사).
+            from config import settings as _cfg
+            _ver = _cfg.get("grade_formula_ver") or "v?"
             lines = [_SEP,
-                     "🎚️ 등급 캘리브레이션 — 신 산식(v3) 종결 표본 아직 0건 (누적 대기)"]
+                     f"🎚️ 등급 캘리브레이션 — 신 산식({_ver}) 종결 표본 아직 0건 (누적 대기)"]
         parts = []
         for g in legacy.get("order") or []:
             b = (legacy.get("buckets") or {}).get(g) or {}
@@ -627,7 +636,7 @@ def _r_distribution_section(dist: dict, by_grade: dict = None) -> list:
     **표시 전용** — 등급 산식·알림 필터·엔트리 알림 양식 어디에도 영향 없음."""
     if not dist or not dist.get("n"):
         return []
-    lines = [_SEP, f"📊 R-멀티플 분포 (종결 {dist['n']}건, R 트랙만 — SL 미기재 표본 제외)"]
+    lines = [_SEP, f"📊 R-멀티플 분포 (종결 {dist['n']}건, R 트랙 — R 산출 가능한 표본만)"]
     for b in dist["buckets"]:
         bar = "█" * min(b["n"], 20)
         lines.append(f"  {b['label']:>5s} {bar} {b['n']}건")

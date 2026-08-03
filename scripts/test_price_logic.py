@@ -433,6 +433,15 @@ msg_noflip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_
                              funding_rate=0.0012, funding_regime_flip=None)
 check("T14N 레짐 전환 감지 시 '🔥 32일 음수→양수' 표시, 미감지 시 무",
       "🔥 32일 음수→양수" in msg_flip and "🔥" not in msg_noflip)
+# T14N2 (2026-08-03 R1 감사): 다른 시장심리 지표(sentiment/kimchi/funding_rate)가
+# 모두 없어도 레짐 배지만 있으면 세퍼레이터가 붙어야 한다 — 예전엔 배지가
+# 세퍼레이터 없이 목표가 행 바로 아래에 뜨는 렌더 이슈가 있었다.
+_msg_only_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                                 sentiment=None, kimchi_pct=None,
+                                 funding_rate=None, funding_regime_flip=_flip)
+check("T14N2 레짐 배지 단독 - 세퍼레이터 이후 렌더",
+      "🔥 32일 음수→양수" in _msg_only_flip
+      and _msg_only_flip.find("━━━━━━━━━━━━━━━━━━━━\n🔥") >= 0)
 # T14O: 펀딩 라벨 (매수 자제/우호/중립) — 사용자 결정 매수 판단 라벨.
 msg_hot = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                           funding_rate=0.05)
@@ -1974,6 +1983,70 @@ price_check.run_once(now + 2000 + price_check._RESEND_BLOCK_SEC + 60)
 check("RS4 차단 창을 넘기면 다시 발송된다(영구 봉인 아님)",
       len(sent_messages) == _before_rs3 + 1)
 
+# ── UPS1/UPS2/RPA1: upsert_level UPDATE 비대칭 수리 회귀 (2026-08-03 R1 감사) ──
+# 재수집 UPDATE 가 작성자 지표 3종·timeframe_hours 를 COALESCE 없이 덮어써
+# fetch 실패(None)가 기존 실측값을 지워버리던 비대칭을 수리했다. 여기서는
+# UPDATE 경로가 실제로 보호하는지, reparse_all 은 반대로(진짜 재파싱 결과이므로)
+# 명시적으로 덮어쓰는지를 함께 고정한다.
+_UPS_DB = "cache/_test_ups_upsert.db"
+if os.path.exists(_UPS_DB):
+    os.remove(_UPS_DB)
+db.init_db(_UPS_DB)
+with db.connect(_UPS_DB) as conn:
+    _lvups = dict(
+        coin_symbol="ZUPSX", ticker="KRW-ZUPSX", direction="long",
+        entry_usd=50.0, sl_usd=45.0, tp_usd=60.0, rr=2.0,
+        grade="B", score=58, author="AuthUps",
+        author_followers=8000, author_hit_rate=0.65, author_hit_count=17,
+        author_whitelisted=False, mcap_rank=80, mcap_tier_icon="🥈",
+        post_url="https://tv.com/ups", post_age_minutes=5,
+        collected_at=now - 100, timeframe_hours=4.0,
+    )
+    _lvups["signal_key"] = db.make_signal_key("ZUPSX", 50.0, "AuthUps", "ups")
+    db.upsert_level(conn, _lvups)
+    _idups = conn.execute(
+        "SELECT id FROM levels WHERE signal_key=?", (_lvups["signal_key"],)
+    ).fetchone()["id"]
+
+    # 재수집 재현: fetch 실패로 작성자 지표·timeframe_hours 가 전부 None 으로
+    # 온 재수집 결과를 그대로 upsert — COALESCE 로 기존 실측값이 보존돼야 한다.
+    _lvups_refetch = dict(_lvups)
+    _lvups_refetch.update(
+        author_followers=None, author_hit_rate=None, author_hit_count=None,
+        timeframe_hours=None, grade="C", score=40,
+    )
+    db.upsert_level(conn, _lvups_refetch)
+    _rups = conn.execute(
+        "SELECT author_followers, author_hit_rate, author_hit_count, "
+        "timeframe_hours, grade FROM levels WHERE id=?", (_idups,)
+    ).fetchone()
+
+check("UPS1 재수집 fetch 실패(None)에도 작성자 지표 3종 보존(COALESCE)",
+      _rups["author_followers"] == 8000 and _rups["author_hit_rate"] == 0.65
+      and _rups["author_hit_count"] == 17)
+check("UPS2 재수집 timeframe_hours=None 도 기존 4.0 보존(COALESCE)",
+      _rups["timeframe_hours"] == 4.0)
+check("UPS1b COALESCE 대상 아닌 필드(grade)는 정상 갱신(비대칭 수리가 전체 동결은 아님)",
+      _rups["grade"] == "C")
+
+# RPA1: reparse_all 은 진짜 재파싱 결과이므로 COALESCE 가 아니라 명시적으로 덮어써야
+# 한다 — 08-03 이전 파서가 '0h' 를 timeframe_hours=0 으로 저장한 구세대 행이 있으면,
+# 현재 파서가 재파싱해 None(무의미값 정리)으로 치유해야 한다.
+with db.connect(_UPS_DB) as conn:
+    conn.execute(
+        "UPDATE levels SET raw_text=?, timeframe_hours=0 WHERE id=?",
+        ("진입가 50 손절 45 목표 60", _idups))
+    conn.commit()
+    _changed_rpa1 = db.reparse_all(conn)
+    _rrpa1 = conn.execute(
+        "SELECT timeframe_hours FROM levels WHERE id=?", (_idups,)
+    ).fetchone()["timeframe_hours"]
+check("RPA1 reparse_all 이 구세대 timeframe_hours=0 을 재파싱 결과(None)로 치유",
+      _rrpa1 is None)
+
+if os.path.exists(_UPS_DB):
+    os.remove(_UPS_DB)
+
 # ── LG: 발송 원장이 DB 유실을 견디는가 (2026-07-28) ─────────────────────────
 # 위 RS 는 DB(alerts_log) 만으로도 통과한다. 그런데 그 표는 **경합에서 지면 통째로
 # 사라진다** — levels.db 가 바이너리라 커밋백이 전체 파일 교체밖에 못 하기 때문이다
@@ -2138,6 +2211,81 @@ if os.path.exists(_T35_DB):
     os.remove(_T35_DB)
 if os.path.exists(_t35_ledger):
     os.remove(_t35_ledger)
+
+# ── PTP1: pending_tp_kind idx 어긋남 stale clear (2026-08-03 감사 회귀) ─────
+# 다중 TP + 롤백 CAS 실패로 pending_tp_kind 가 현재 tp_alert_idx 와 어긋난
+# 채 남으면, 다음 회차가 그걸 그대로 force-hit 해 도달 안 한 TP 를 오판정한다.
+# idx 불일치면 force 대신 clear 만 하고 판정은 자연 스캔 결과(미도달=None)를
+# 따라야 한다.
+_PTP_DB = "cache/_test_ptp_pending.db"
+if os.path.exists(_PTP_DB):
+    os.remove(_PTP_DB)
+_ptp_ledger = _alert_ledger.ledger_path(_PTP_DB)
+if os.path.exists(_ptp_ledger):
+    os.remove(_ptp_ledger)
+db.init_db(_PTP_DB)
+_ptp_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _PTP_DB
+
+_ptp_now = now + 60000
+with db.connect(_PTP_DB) as conn:
+    # entry=100, tps=[103, 108]. tp_alert_idx=1 → TP1 이미 적중, TP2(108) 감시 중.
+    # 정상 pending 형식은 f"tp{idx+1}"="tp2" 인데, 여기 저장값은 "tp1" — 어긋남.
+    _lvptp = dict(
+        coin_symbol="ZPTPX", ticker="KRW-ZPTPX", direction="long",
+        entry_usd=100.0, sl_usd=90.0, tp_usd=108.0, rr=1.8,
+        grade="B", score=62, author="AuthPTP", author_followers=5000,
+        author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+        mcap_rank=50, mcap_tier_icon="🥇",
+        post_url="https://tv.com/ptp", post_age_minutes=10,
+        collected_at=_ptp_now - 3600,
+        tps_usd=_json35.dumps([103.0, 108.0]),
+    )
+    _lvptp["signal_key"] = db.make_signal_key("ZPTPX", 100.0, "AuthPTP", "ptp")
+    db.upsert_level(conn, _lvptp)
+    _idptp = conn.execute(
+        "SELECT id FROM levels WHERE signal_key=?", (_lvptp["signal_key"],)
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
+        "tp_alert_idx=1 WHERE id=?",
+        (_ptp_now - 1800, 100.0 * USDT_KRW, _idptp))
+    db.record_alert(conn, "ZPTPX", "touch", [_idptp], "2026-08-04", _ptp_now - 1800)
+    db.set_pending_tp(conn, _idptp, "tp1")
+
+# 현재가 = TP2(108) 미달(105) — 자연 스캔으로도 force 로도 TP2 는 도달하면 안 된다.
+_ptp_price_saved = fake["price"]
+_ptp_candles_saved = fake["candles"]
+_ptp_high_saved = fake["high"]
+_ptp_low_saved = fake["low"]
+fake["price"] = 105.0 * USDT_KRW
+fake["candles"] = [(_ptp_now - 1801, _ptp_now - 10,
+                    105.0 * USDT_KRW, 99.0 * USDT_KRW)]
+fake["high"] = None
+fake["low"] = None
+
+price_check.run_once(_ptp_now)
+
+fake["price"] = _ptp_price_saved
+fake["candles"] = _ptp_candles_saved
+fake["high"] = _ptp_high_saved
+fake["low"] = _ptp_low_saved
+
+with db.connect(_PTP_DB) as conn:
+    _rptp = conn.execute(
+        "SELECT status, tp_alert_idx, pending_tp_kind FROM levels WHERE id=?",
+        (_idptp,)
+    ).fetchone()
+check("PTP1 idx 어긋난 stale pending 은 force-hit 대신 clear 된다",
+      _rptp["pending_tp_kind"] is None)
+check("PTP1b clear 후에도 미도달 TP2 는 오판정되지 않는다(idx·상태 불변)",
+      _rptp["tp_alert_idx"] == 1 and _rptp["status"] == "touched")
+
+settings.SETTINGS["db_path"] = _ptp_prev_db
+if os.path.exists(_PTP_DB):
+    os.remove(_PTP_DB)
+if os.path.exists(_ptp_ledger):
+    os.remove(_ptp_ledger)
 
 # ── PV1~PV7: 접근 예고 발송 스위치 (2026-07-31 사용자 결정 — 예고 완전 제거) ──
 # preview_alert_enabled=False 면 예고는 발송·기록(alerts_log/원장) 없이 상태 전이
@@ -2946,6 +3094,9 @@ check("FR2c 30일 창 내 양수 있으면 → None (스트릭 미충족)",
 # min_neg_days 커스텀
 check("FR3 min_neg_days=14 로 낮추면 통과",
       _reg([-0.02]*(14*3) + [0.0015], min_neg_days=14) is not None)
+# 전부 0(무편향)인 창 + 미세 양수 latest → False positive 방지 (2026-08-04 R2 감사)
+check("FR4 전부 0 창은 하락 편향 아님 → None",
+      _reg([0.0]*(30*3) + [0.001], min_neg_days=30) is None)
 
 print()
 print("── 본알림 실제 렌더링 ──")

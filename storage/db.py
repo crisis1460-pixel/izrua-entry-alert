@@ -410,7 +410,8 @@ def upsert_level(conn, level: dict) -> bool:
              author_hit_rate=COALESCE(?, author_hit_rate),
              author_hit_count=COALESCE(?, author_hit_count),
              author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
-             judgment_window_hours=?, raw_text=COALESCE(?, raw_text)
+             judgment_window_hours=?, timeframe_hours=COALESCE(?, timeframe_hours),
+             raw_text=COALESCE(?, raw_text)
            WHERE signal_key=? AND status IN ('watching','previewed')""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
@@ -429,7 +430,12 @@ def upsert_level(conn, level: dict) -> bool:
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
-            level.get("judgment_window_hours"), level.get("raw_text"), key,
+            level.get("judgment_window_hours"),
+            # timeframe_hours 도 함께 갱신 (2026-08-03 R1 감사): 예전엔 UPDATE 절
+            # 자체가 없어 파생 필드(judgment_window_hours)만 움직이고 소스 필드는
+            # 얼어 있는 비대칭 상태. COALESCE 로 None(파싱 실패)는 기존 값 보존.
+            level.get("timeframe_hours"),
+            level.get("raw_text"), key,
         ),
     )
     return False
@@ -807,15 +813,27 @@ def _get_chain_tip(conn) -> str:
     """체인 tip 조회. meta 가 유실됐으나 이미 체인이 쌓인 상태라면 실 tail 에서
     복원 (2026-08-03 감사): 예전엔 meta 유실 시 무조건 GENESIS 폴백이라, 다음
     resolve_outcome 이 새 GENESIS-based 링크를 만들어 체인이 즉시 fork 됐다
-    (verify_outcome_chain broken_genesis). tail 은 outcome_hash 가 있는 가장 최근
-    (resolved_at DESC, id DESC) 행의 outcome_hash — 진짜 새 DB(체인 자체가 없음)
-    에서만 GENESIS 로 시작한다."""
+    (verify_outcome_chain broken_genesis).
+
+    tail 의 정의(2026-08-03 R1 재감사): "outcome_hash 는 있지만 그 값을
+    outcome_prev_hash 로 참조하는 다른 행이 하나도 없는 행". 예전 구현은
+    ORDER BY resolved_at DESC, id DESC LIMIT 1 이었는데, 같은 회차에서 여러 건이
+    resolve 되면 resolved_at 이 동일해 id 순서가 링크 실제 순서와 어긋날 수 있어
+    (링크 순서는 _urgency 정렬) 잘못된 tail 을 골랐다.
+
+    fork 상태(참조되지 않는 outcome_hash 가 여러 개)일 때는 여러 개 중 임의 하나가
+    나와도 어차피 다음 verify_outcome_chain 이 broken 을 잡아낸다 — 이 함수의
+    책임은 "meta 없이도 유일 tail 이 있으면 정확히 복원" 까지."""
     tip = get_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY)
     if tip:
         return tip
     row = conn.execute(
-        "SELECT outcome_hash FROM levels WHERE outcome_hash IS NOT NULL "
-        "ORDER BY resolved_at DESC, id DESC LIMIT 1"
+        "SELECT l1.outcome_hash FROM levels l1 "
+        "WHERE l1.outcome_hash IS NOT NULL "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM levels l2 "
+        "  WHERE l2.outcome_prev_hash = l1.outcome_hash"
+        ") LIMIT 1"
     ).fetchone()
     if row and row["outcome_hash"]:
         # 유실된 meta 를 복원해 다음 회차부터 자연스러운 조회로 복귀
@@ -1070,8 +1088,13 @@ def get_author_deletion_stats(conn, author: Optional[str]) -> dict:
 
 
 def record_ret(conn, level_id: int, field: str, value: float) -> None:
-    """터치 후 24h/72h 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지)."""
-    assert field in ("ret_24h", "ret_72h")
+    """터치 후 24h/72h 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지).
+
+    화이트리스트 검증(2026-08-03 R2 감사): field 는 하드코딩된 컬럼명이라야 안전한
+    f-string SQL 이다. 예전엔 assert 로 검증했으나 python -O 에서 assert 가
+    스트립되어 방어가 사라진다 — 명시 raise 로 교체."""
+    if field not in ("ret_24h", "ret_72h"):
+        raise ValueError(f"record_ret: invalid field name {field!r}")
     conn.execute(
         f"UPDATE levels SET {field}=? WHERE id=? AND {field} IS NULL", (value, level_id)
     )

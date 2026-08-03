@@ -239,7 +239,7 @@ DIST_BY_G = distribution.r_distribution_by_grade(R_ROWS)
 msg_d1 = telegram.render_weekly_report(rows_by_author, now=now,
                                        r_distribution=DIST,
                                        r_distribution_by_grade=DIST_BY_G, **RK)
-check("WD1 헤더 + 평균R", "📊 R-멀티플 분포 (종결 5건, R 트랙만 — SL 미기재 표본 제외)" in msg_d1
+check("WD1 헤더 + 평균R", "📊 R-멀티플 분포 (종결 5건, R 트랙 — R 산출 가능한 표본만)" in msg_d1
       and "평균 R = +1.60" in msg_d1)
 check("WD2 구간별 바+건수", "-1~0 █ 1건" in msg_d1 and "0~1 █ 1건" in msg_d1
       and "1~2 █ 1건" in msg_d1 and "2~3 █ 1건" in msg_d1 and "3+ █ 1건" in msg_d1)

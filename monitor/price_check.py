@@ -625,7 +625,11 @@ def run_once(now: float = None) -> dict:
                     _tf = rep.get("timeframe_hours")
                     # 부동소수 여유(1e-9): '240m' → 240*(1/60) = 3.9999...→ 4h 필터
                     # 오억제 방지. 실제 분 단위로 4h 이상을 쓰는 사례는 드무나 안전 마진.
-                    if _min_tf and _tf is not None and _tf < _min_tf - 1e-9:
+                    # timeframe_hours == 0 은 "미명시" 취급(2026-08-03 R1 감사): 08-03
+                    # 이전 파서 버그로 저장된 0 값 + raw_text NULL 인 구세대 행은
+                    # reparse_all 이 자가치유 못 해 영구 억제됐다 — NULL 과 동일
+                    # 정책(=필터 통과)으로 방어.
+                    if _min_tf and _tf is not None and _tf > 0 and _tf < _min_tf - 1e-9:
                         logger.info("[체크] %s 타임프레임 %.1fh < %.1fh 알림 억제",
                                     coin, _tf, _min_tf)
                         send_ok = False
@@ -757,8 +761,8 @@ def run_once(now: float = None) -> dict:
                             coin, cfg_get("http_timeout_sec"), days=32)
                         _snap_funding_flip = binance.detect_funding_regime_flip(
                             _hist, min_neg_days=30)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 펀딩 조회 실패(무시): %s", coin, e)
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
@@ -851,8 +855,8 @@ def run_once(now: float = None) -> dict:
                             _usd_g = _binance_m8.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
                             if _usd_g and _usd_g > 0 and usdt_krw:
                                 _snap_kimchi = (current / _usd_g - usdt_krw) / usdt_krw * 100
-                        except Exception:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
-                            pass
+                        except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
+                            logger.warning("[체크] %s 김프 스냅 실패(무시): %s", ticker, e)
 
                 if touched:
                     # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기

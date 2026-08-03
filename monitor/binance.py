@@ -168,6 +168,10 @@ def detect_funding_regime_flip(history: Optional[list],
     window = history[-(min_neg_days * 3 + 1):-1]
     if not all(v <= 0 for v in window):
         return None
+    # 전부 0(또는 사실상 0)인 구간은 "하락 편향"이 아니라 무편향 — 실제 음수가
+    # 있어야 플립으로 인정 (2026-08-04 R2 감사: [0.0]*90+[0.001] false positive)
+    if min(window) >= 0:
+        return None
     # 플립 확정 — 실제 연속 음수 구간 길이(일수)를 정확히 세어 표기 정확도 향상.
     neg_count = 0
     for v in reversed(history[:-1]):
