@@ -1265,11 +1265,14 @@ def _volume_band_tp1(rep: dict) -> Optional[float]:
 
 
 def _b_swing_pass(lv: dict) -> bool:
-    """판정 B안 스윙 필터 (2026-07-29 신설, 07-30 5%→2%) — 마지막 유효 TP 가
-    진입가 대비 SWING_MIN_TP_PCT% 미만이면 False(초단타성 신호, 스윙 알림 불필요).
-    유효 TP 가 없으면 통과. 임계는 grading.SWING_MIN_TP_PCT 상수 하나로 관리(i-10).
-    TP 목록은 _volume_band_tps 단일 출처(m-3)."""
-    from collector.grading import SWING_MIN_TP_PCT
+    """판정 B안 스윙 필터 (2026-07-29 신설, 07-30 5%→2%, 2026-08-03 설정키 분리 후
+    5% 복원 — 사용자 결정) — 마지막 유효 TP 가 진입가 대비
+    settings.alert_min_last_tp_pct% 미만이면 False("최종 목표까지 5% 미만 =
+    레버리지(선물)용 설계" — 스팟 스윙 알림 제외). 유효 TP 가 없으면 통과.
+    등급 감점표 경계(grading.SWING_MIN_TP_PCT=2)와는 분리 — 배점표는 그 상수를
+    첫 경계로 공유하므로(G1d 단조성) 필터 임계만 설정키로 조인다. 설정 누락 시
+    종전 경계(2%)로 폴백 = 필터 무단 확대 방지. TP 목록은 _volume_band_tps
+    단일 출처(m-3)."""
     entry = lv.get("entry_usd")
     if not isinstance(entry, (int, float)) or entry <= 0:
         return True
@@ -1277,7 +1280,11 @@ def _b_swing_pass(lv: dict) -> bool:
     if not tps:
         return True
     last_pct = (tps[-1] - entry) / entry * 100
-    return not (0 < last_pct < SWING_MIN_TP_PCT)
+    min_pct = settings.get("alert_min_last_tp_pct")
+    if min_pct is None:
+        from collector.grading import SWING_MIN_TP_PCT
+        min_pct = SWING_MIN_TP_PCT
+    return not (0 < last_pct < min_pct)
 
 
 def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:

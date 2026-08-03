@@ -952,9 +952,10 @@ check("T32b entry/target 없으면 0 (되돌림 판정 스킵 조건)",
 check("T32c 숏 방향도 동일 규칙", abs(price_check._tp_distance_penalty("short", 100.0, 98.5)
       - (-_tdp32("short", 100.0, 98.5, has_rr=True))) < 1e-9)
 
-# ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정, 2026-07-30 5%→2% 조정) ─────
-# 단일 TP < 2% 또는 다중 TP 에서 마지막(가장 먼) TP < 2% 이면 초단타 신호로 보아
-# 알림을 억제한다. 다중 TP 에서 마지막이 2%+ 이면 TP1 이 가깝더라도 허용(스윙 사다리).
+# ── T33~T34: B안 TP 스윙 미달 억제 (2026-07-29 판정, 07-30 5%→2%,
+#    2026-08-03 설정키 alert_min_last_tp_pct 분리 후 5% 복원 — 사용자 결정) ─────
+# 마지막(가장 먼) TP 가 진입가 대비 5% 미만이면 레버리지(선물)용 설계로 보아
+# 알림을 억제한다. 마지막이 5%+ 면 TP1 이 가깝더라도 허용(스윙 사다리).
 # tps_usd 가 NULL 인 구버전 레벨은 tp_usd 단일 값으로 폴백한다.
 #
 # 점수 계산: followers=5000(+5) / sl=95(rr=0.3<1, +0) / proximity≈0%(<2%, +20) /
@@ -2714,7 +2715,7 @@ with db.connect(_SB_DB) as conn:   # 잔여 TP2 가 이후 케이스에 섞이�
 # SB2 (R-2): 승계 발송 클러스터의 초단타 형제 — 터치 기록(ids 포함)이 있어도
 # 자신이 스윙 미달이면 TP 알림 차단(판정·인덱스 전진은 유지)
 _sb2a = _sb_level("SBH", 400.0, "sb_scalp", [402.0, 404.0], 402.0, followers=100000)
-_sb2b = _sb_level("SBH", 401.5, "sb_swing", [414.0], 414.0, followers=100)
+_sb2b = _sb_level("SBH", 401.5, "sb_swing", [423.0], 423.0, followers=100)  # 최종 TP 5.35% (5% 필터 통과)
 fake["price"] = 400.2 * USDT_KRW
 fake["low"] = None
 # _fake_range 기본 캔들은 모듈 now 기반 타임스탬프라 _sb_now 기반 collected_at 보다
@@ -2740,7 +2741,7 @@ check("SB2b R-2 스윙 게이트 - 초단타 형제의 TP 적중은 무알림·�
 # SB3 (M-1 역전 픽스처): 형제의 수집 등급이 D(30점, stale)여도 재채점으로 C 가
 # 되면 승계된다 — 전 멤버 재채점(M-1)을 rep 단독으로 되돌리면 이 케이스가 잡는다
 _sb3a = _sb_level("SBI", 500.0, "sb_short2", [507.5], 507.5, followers=100000)
-_sb3b = _sb_level("SBI", 501.0, "sb_stale", [518.0], 518.0, followers=100,
+_sb3b = _sb_level("SBI", 501.0, "sb_stale", [530.0], 530.0, followers=100,  # 최종 TP 5.79%
                   grade="D", score=30)
 fake["price"] = 500.2 * USDT_KRW
 fake["low"] = 499.0 * USDT_KRW
