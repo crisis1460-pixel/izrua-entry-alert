@@ -600,7 +600,8 @@ check("T22 DB 원본 등급/점수는 보존(불변) - 필터용 재계산은 in
       row22["grade"] == "D" and abs(row22["score"] - 13) < 1e-9)
 # regrade_current 단위 계산 검증: entry=20, current=20.12 -> diff 0.6% (<2%) -> +20점
 g22, s22score, _ = _grading.regrade_current(lv22, fake["price"] / USDT_KRW)
-check("T22 regrade_current 함수 자체 계산 정합", g22 in ("S", "A", "B") and s22score > 13)
+# v4 손계산: 팔로워100(+3) + 근접(+20) + TP+30%(+4) + 완결성 entry/TP/SL(+23) = 50 → C
+check("T22 regrade_current 함수 자체 계산 정합", g22 == "C" and abs(s22score - 50) < 1e-9)
 
 # ── 체인(카드3): 이 시점까지 T8/T9/T10/T11/T13/T15/T19~T21 등 run_once/
 #    _judge_outcomes 실경로로 쌓인 실제 판정 전체가 하나의 유효한 해시체인을

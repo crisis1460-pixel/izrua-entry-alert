@@ -1,10 +1,11 @@
-# collector/grading 단위 테스트 — 2026-08-01 v3(S10 안3: TP 원거리 보상 축소 +
-# 작성자 실적 가점) 회귀 방어. 기대값은 전부 손계산.
+# collector/grading 단위 테스트 — 2026-08-03 v4(팔로워 상단 강화 + SL 보너스 축소)
+# 회귀 방어. 기대값은 전부 손계산.
 #
-# 배점 요약(v3): 팔로워(1~10) + 가격근접도(0~20)
+# 배점 요약(v4): 팔로워(1~25: 100k+25/50k+22/10k+17/5k+12/1k+8/100+3/미만1)
+#            + 가격근접도(0~20)
 #            + 목표거리(-6 ~ +12, SL 유무 무관 전 신호 적용, 40%+ 무배점)
-#            + 데이터완결성(2/8/20/30) + 작성자 실적 가점(0/+5/+10/+15),
-#            컷 S85/A70/B55/C40
+#            + 데이터완결성(2/8/20/23 — SL 보너스 v4 +10→+3)
+#            + 작성자 실적 가점(0/+5/+10/+15), 컷 S85/A70/B55/C40
 import sys
 from pathlib import Path
 
@@ -160,21 +161,22 @@ check("G4b 실측 환상목표(SOL +56.8%, BCH +185.7%)는 무배점",
 check("G4c 극단 목표(+1000%)도 무배점",
       tp_distance_points("long", 100.0, 1100.0, False) == 0)
 
-# ── G5: SL 없는 글의 등급 상한 — v3 부터 실적 가점 없이는 B 가 상한 ────
-# (2026-07-26 대체배점 도입으로 A 까지 열렸었으나, v3 보상 축소로 다시 닫힘 —
-#  D5 승인: S/A 는 "검증된 작성자 + 완전 데이터 + 적정 TP" 전용으로 희귀화)
-_g_max, _s_max, _rr_max = s(20.0, followers=200_000)   # 10 + 20 + 8 + 20 = 58
-check("G5 SL 없는 최상급 글도 실적 가점 없이는 B 상한 (v3)",
-      eq(_s_max, 58) and _g_max == "B" and _rr_max is None)
-_g_mid, _s_mid, _ = s(10.0, followers=2_800)           # 5 + 20 + 12 + 20 = 57
-check("G5b SL 없는 평범한 팔로워 + 스윗스팟 목표 → B", eq(_s_mid, 57) and _g_mid == "B")
+# ── G5: SL 없는 글의 등급 — v4 부터 상위 팔로워/실적이면 A~S 도달 가능 ────
+# (v4 사용자 결정: SL 존재는 형식일 뿐. 유명 작성자(콜드스타트)는 A,
+#  검증 실적까지 있으면 S — SL 게이트 해제가 v4 의 설계 의도)
+_g_max, _s_max, _rr_max = s(20.0, followers=200_000)   # 25 + 20 + 8 + 20 = 73
+check("G5 SL 없는 최상급 팔로워 글 — 실적 없이도 A (v4 의도)",
+      eq(_s_max, 73) and _g_max == "A" and _rr_max is None)
+_g_mid, _s_mid, _ = s(10.0, followers=2_800)           # 8 + 20 + 12 + 20 = 60
+check("G5b SL 없는 평범한 팔로워 + 스윗스팟 목표 → B", eq(_s_mid, 60) and _g_mid == "B")
 _g_lo, _s_lo, _ = s(6.0, followers=500)                # 3 + 20 + 12 + 20 = 55
 check("G5c SL 없는 소형 작성자 + 6% 목표 → B 경계", eq(_s_lo, 55) and _g_lo == "B")
-check("G5d 대체배점만으로 S(85)에는 못 간다 (리스크 명시 글보다 항상 낮게)",
-      10 + 20 + 20 + TP_REWARD_MAX < 85)
-check("G5e 실적 가점 만점을 더해도 SL 없는 글은 S 불가 (실질 상한 검증: 87)",
-      10 + 20 + 20 + TP_REWARD_MAX + AUTHOR_TRACK_MAX < 85
-      and 10 + 20 + 30 + TP_REWARD_MAX + AUTHOR_TRACK_MAX == 87)
+check("G5d 실적 가점 없이는 SL 없는 글로 S(85) 못 간다 (콜드스타트 상한 77=A)",
+      25 + 20 + 20 + TP_REWARD_MAX < 85)
+check("G5e v4: SL 없는 글도 실적 만점이면 S 가능(92) — 실질 상한 95",
+      25 + 20 + 20 + TP_REWARD_MAX + AUTHOR_TRACK_MAX == 92
+      and 25 + 20 + 20 + TP_REWARD_MAX + AUTHOR_TRACK_MAX >= 85
+      and 25 + 20 + 23 + TP_REWARD_MAX + AUTHOR_TRACK_MAX == 95)
 
 # ── G6: 초근접 TP 글은 여전히 걸러진다 (감점 취지 유지) ──────────
 _g_close, _s_close, _ = s(1.5)     # 3 + 20 + 20 - 6 = 37
@@ -188,22 +190,22 @@ check("G6c 2.5%/4.0% 도 C 이하 유지", s(2.5)[1] == 39 and s(4.0)[1] == 41
       and s(2.5)[0] == "D" and s(4.0)[0] == "C")
 
 # ── G7: SL 있는 글도 목표거리 배점 전면 적용(2026-07-29 R:R 제거) ──
-# entry100/sl90/tp150 → rr=5(표시용, 점수無). tp_pct=50% → (60,0)밴드 → +0 (v3)
-# score = 3(팔로워) + 0(R:R 제거) + 20(근접) + 0(TP) + 30(완결) = 53 → C
+# entry100/sl90/tp150 → rr=5(표시용, 점수無). tp_pct=50% → (60,0)밴드 → +0
+# score = 3(팔로워) + 20(근접) + 0(TP) + 23(완결, v4 SL+3) = 46 → C
 _g_rr, _s_rr, _rr = calculate_grade(500, "long", 100.0, 90.0, 150.0, 100.0)
-check("G7 SL 있어도 R:R 점수無, rr 표시용 유지(53/C)", eq(_s_rr, 53) and _g_rr == "C" and eq(_rr, 5.0))
-# 과대목표 +185.7% → (inf,0)밴드 → +0. score = 3 + 20 + 0 + 30 = 53 → C
+check("G7 SL 있어도 R:R 점수無, rr 표시용 유지(46/C)", eq(_s_rr, 46) and _g_rr == "C" and eq(_rr, 5.0))
+# 과대목표 +185.7% → (inf,0)밴드 → +0. score = 3 + 20 + 0 + 23 = 46 → C
 _g_rr_far, _s_rr_far, _rr_far = calculate_grade(500, "long", 100.0, 90.0, 285.7, 100.0)
-check("G7b 과대목표 SL 있음: tp_pct 185.7% → +0, score=53/C",
-      eq(_s_rr_far, 53) and _g_rr_far == "C" and _rr_far > 5)
-# 초근접 TP +1.5% → (2,-6)밴드 → -6. rr=1.5 표시용. score = 3 + 20 - 6 + 30 = 47 → C
+check("G7b 과대목표 SL 있음: tp_pct 185.7% → +0, score=46/C",
+      eq(_s_rr_far, 46) and _g_rr_far == "C" and _rr_far > 5)
+# 초근접 TP +1.5% → (2,-6)밴드 → -6. rr=1.5 표시용. score = 3 + 20 - 6 + 23 = 40 → C
 _g_close, _s_rr_close, _rr_close = calculate_grade(500, "long", 100.0, 99.0, 101.5, 100.0)
-check("G7c SL 있는 초근접 TP: 감점(-6) 유지, R:R 점수無, score=47/C",
-      eq(_s_rr_close, 3 + 20 - 6 + 30) and _g_close == "C" and eq(_rr_close, 1.5))
+check("G7c SL 있는 초근접 TP: 감점(-6) 유지, R:R 점수無, score=40/C",
+      eq(_s_rr_close, 3 + 20 - 6 + 23) and _g_close == "C" and eq(_rr_close, 1.5))
 # 역전된 SL(risk<=0)이면 rr 계산 불가 → R:R 제거 후에도 동일(tp_distance 정상 적용)
 _, _s_bad_sl, _rr_bad = calculate_grade(500, "long", 100.0, 110.0, 120.0, 100.0)
-check("G7d 잘못된 SL(리스크<=0)로 R:R 불가 시 TP 배점 정상 적용(61/B)",
-      _rr_bad is None and eq(_s_bad_sl, 3 + 20 + 8 + 30))
+check("G7d 잘못된 SL(리스크<=0)로 R:R 불가 시 TP 배점 정상 적용(54/C)",
+      _rr_bad is None and eq(_s_bad_sl, 3 + 20 + 8 + 23))
 
 # ── G8: 데이터완결성/근접도 배점 불변 ────────────────────────────
 check("G8 목표만 있고 진입가 없음 → 완결성 8, 목표거리 배점 0",
@@ -216,9 +218,9 @@ check("G8c 가격근접도 구간 불변(-3% → +17)",
 # ── G9: regrade_current 가 새 배점을 그대로 태운다 ───────────────
 _lv = dict(author_followers=2_800, direction="long", entry_usd=100.0, sl_usd=None,
            tp_usd=110.0)
-check("G9 재채점 - 가격이 멀면 근접도 0점(37=D), 근접 시 +20(57=B)",
-      eq(regrade_current(_lv, 200.0)[1], 37) and regrade_current(_lv, 200.0)[0] == "D"
-      and eq(regrade_current(_lv, 100.0)[1], 57) and regrade_current(_lv, 100.0)[0] == "B")
+check("G9 재채점 - 가격이 멀면 근접도 0점(40=C), 근접 시 +20(60=B)",
+      eq(regrade_current(_lv, 200.0)[1], 40) and regrade_current(_lv, 200.0)[0] == "C"
+      and eq(regrade_current(_lv, 100.0)[1], 60) and regrade_current(_lv, 100.0)[0] == "B")
 check("G9b 재채점 결과가 calculate_grade 와 동일",
       regrade_current(_lv, 100.0) == calculate_grade(2_800, "long", 100.0, None, 110.0, 100.0))
 # 실적 가점 포함 재채점 동등성 (v3): level dict 의 author_closed_n/hits 키가
@@ -228,7 +230,7 @@ check("G9c 재채점 동등성 — 실적 키 주입 시에도 calculate_grade(a
       regrade_current(_lv_at, 100.0) == calculate_grade(
           2_800, "long", 100.0, None, 110.0, 100.0,
           author_closed_n=27, author_closed_hits=20)
-      and eq(regrade_current(_lv_at, 100.0)[1], 57 + 15))
+      and eq(regrade_current(_lv_at, 100.0)[1], 60 + 15))
 
 # ── G10: 등급 컷/필터 헬퍼 불변 ──────────────────────────────────
 check("G10 컷 경계", grade_from_score(85) == "S" and grade_from_score(84.9) == "A"
@@ -268,10 +270,10 @@ _base = calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0)
 check("G12 인자 생략(구 호출부) == n=0 전달 == 가점 0",
       _base == calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
                                author_closed_n=0, author_closed_hits=0)
-      and eq(_base[1], 3 + 20 + 12 + 30))
-check("G12b 실적 인자 전달 시 가점 합산 (+15 → 65+15=80/A)",
+      and eq(_base[1], 3 + 20 + 12 + 23))
+check("G12b 실적 인자 전달 시 가점 합산 (+15 → 58+15=73/A)",
       eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
-                         author_closed_n=27, author_closed_hits=20)[1], 65 + 15))
+                         author_closed_n=27, author_closed_hits=20)[1], 58 + 15))
 check("G12c 콜드스타트 작성자(n=3)는 전달해도 기존 점수 그대로 (중립)",
       calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
                       author_closed_n=3, author_closed_hits=3) == _base)
@@ -292,7 +294,7 @@ check("G13b 스위치 OFF — regrade_current 경로도 동일하게 가점 0",
       _off_re == _base)
 check("G13c 스위치 ON 복원 후 가점 재적용 (런타임 토글 즉시 반영)",
       eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
-                         author_closed_n=27, author_closed_hits=20)[1], 80))
+                         author_closed_n=27, author_closed_hits=20)[1], 73))
 
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
