@@ -89,6 +89,95 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
     return None
 
 
+def fetch_funding_history(symbol: str, timeout: float,
+                          days: int = 32) -> Optional[list]:
+    """선물 펀딩비율 히스토리(오래된 순 float 리스트, 단위 % — 원시 decimal *100).
+    Binance Futures 우선, 실패 시 Bybit Linear 폴백. 인증 불필요.
+    days: 조회할 일수 (기본 32일 — 30일 지속 음수 감지에 여유 2일).
+    반환: None(전 경로 실패) 또는 시간순 정렬된 %값 리스트.
+    Binance/Bybit 모두 펀딩 간격 8h → days*3 개 요청, 최대 1000/200 상한."""
+    pair = f"{symbol.upper()}USDT"
+    n_needed = min(days * 3 + 3, 1000)  # 8h 간격 + 여유
+    # Binance Futures /fapi/v1/fundingRate 는 limit 최대 1000
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/fundingRate",
+            params={"symbol": pair, "limit": n_needed}, timeout=timeout,
+        )
+        if r.status_code == 200:
+            items = r.json()
+            if isinstance(items, list) and items:
+                # 응답은 시간순(과거→최근). fundingRate 문자열 원시 decimal.
+                out = []
+                for it in items:
+                    v = it.get("fundingRate")
+                    if v is None:
+                        continue
+                    try:
+                        out.append(float(v) * 100)
+                    except (ValueError, TypeError):
+                        continue
+                if out:
+                    return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding-hist] Binance %s 실패: %s", pair, e)
+    # Bybit V5 /v5/market/funding/history — limit 최대 200 (약 66일치)
+    try:
+        r = requests.get(
+            "https://api.bybit.com/v5/market/funding/history",
+            params={"category": "linear", "symbol": pair,
+                    "limit": min(n_needed, 200)},
+            timeout=timeout,
+        )
+        if r.status_code == 200:
+            items = r.json().get("result", {}).get("list", [])
+            if items:
+                # Bybit 응답은 최신→과거 순 → 뒤집어서 시간순으로.
+                out = []
+                for it in reversed(items):
+                    v = it.get("fundingRate")
+                    if v is None:
+                        continue
+                    try:
+                        out.append(float(v) * 100)
+                    except (ValueError, TypeError):
+                        continue
+                if out:
+                    return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding-hist] Bybit %s 실패: %s", pair, e)
+    return None
+
+
+def detect_funding_regime_flip(history: Optional[list],
+                               min_neg_days: int = 30) -> Optional[dict]:
+    """펀딩 레짐 전환 감지 — min_neg_days 일 이상 지속 음수 후 최근 양수 플립이면
+    {"flipped": True, "neg_days": N, "latest": float} 반환, 아니면 None.
+
+    "지속 음수"는 8h 간격 기준으로 min_neg_days*3 개 연속 <=0 상태를 의미하고
+    (경계 0 포함 — 미미한 음수/제로도 롱 편향 없음), 최근 값은 양수(>0)여야 한다.
+    사용자 결정(2026-08-03 질문카드): 임계 30일(리서치 정설).
+
+    실패 시(히스토리 부재, 표본 부족) None — 알림 렌더에서 배지 생략."""
+    if not history or len(history) < min_neg_days * 3 + 1:
+        return None
+    latest = history[-1]
+    if latest <= 0:
+        return None  # 최근이 양수여야 플립
+    # 최근값 직전까지 min_neg_days*3 개가 모두 <=0
+    window = history[-(min_neg_days * 3 + 1):-1]
+    if not all(v <= 0 for v in window):
+        return None
+    # 플립 확정 — 실제 연속 음수 구간 길이(일수)를 정확히 세어 표기 정확도 향상.
+    neg_count = 0
+    for v in reversed(history[:-1]):
+        if v <= 0:
+            neg_count += 1
+        else:
+            break
+    return {"flipped": True, "neg_days": neg_count / 3.0, "latest": latest}
+
+
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:
     """코인의 USDT 페어 현재가. 전 경로 실패 시 None
     (김프 줄만 생략됨 — 알림 발송은 계속된다)."""

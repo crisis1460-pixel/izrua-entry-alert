@@ -255,7 +255,8 @@ def _author_block(rep: dict) -> list:
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
                  kimchi_pct: float = None, volume_rank: int = None,
-                 rep: dict = None, funding_rate: float = None) -> str:
+                 rep: dict = None, funding_rate: float = None,
+                 funding_regime_flip: dict = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -353,33 +354,29 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
-    # ── 포지션 참고 (SL 거리 + R:R — SL 있을 때만) ──
-    # 롱은 SL<entry, 숏은 SL>entry 가 정상 손절 방향. 부호 규약: 손실 방향(=진입에
-    # 불리한 이동)을 항상 음수로 표기 — "SL -3.5%" 는 롱/숏 무관하게 "손절가는 3.5%
-    # 손실 지점" 이라는 뜻으로 읽힌다. 반대(SL이 이익 방향)에 있으면 잘못된 SL 이므로
-    # 표시 자체를 생략한다(rr==None 인 데이터 이상 케이스와 같은 취급).
-    sl = rep.get("sl_usd")
-    _direction = rep.get("direction") or "long"
-    if sl and entry_rep and entry_rep > 0 and sl > 0:
-        if _direction == "short":
-            sl_dist = (entry_rep - sl) / entry_rep * 100
-        else:
-            sl_dist = (sl - entry_rep) / entry_rep * 100
-        if sl_dist < 0:
-            rr_val = rep.get("rr")
-            rr_str = f" · R:R 1:{rr_val:.1f}" if rr_val and rr_val > 0 else ""
-            lines.append(f"📐 SL {sl_dist:+.1f}%{rr_str}")
+    # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
+    # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는
+    # 등급·판정에는 계속 반영.
 
     # ── 시장 심리 (워쳐 표기 그대로: 김프 행 → BTC.D 행 / ALT.S 행 / F&G 행) ──
     if sentiment or kimchi_pct is not None or funding_rate is not None:
         lines.append(_SEP)
     if funding_rate is not None:
-        if funding_rate >= 0:
-            lines.append(f"💰 펀딩 {funding_rate:+.4f}% (롱 과열)" if funding_rate > 0.01
-                         else f"💰 펀딩 {funding_rate:+.4f}%")
+        # 라벨 (2026-08-03 사용자 결정): 매수 판단에 직결되는 짧은 문구.
+        # 롱 과열(>0.01%) → "매수 자제", 숏 과열(<-0.01%) → "매수 우호", 그 외 "중립".
+        if funding_rate > 0.01:
+            _flabel = " (매수 자제)"
+        elif funding_rate < -0.01:
+            _flabel = " (매수 우호)"
         else:
-            lines.append(f"💰 펀딩 {funding_rate:+.4f}% (숏 과열)" if funding_rate < -0.01
-                         else f"💰 펀딩 {funding_rate:+.4f}%")
+            _flabel = " (중립)"
+        lines.append(f"💰 펀딩 {funding_rate:+.4f}%{_flabel}")
+    # 펀딩 레짐 전환 (2026-08-03 스프린트08 사용자 결정): 30일+ 지속 음수 → 양수
+    # 플립 감지 시 🔥 강조 배지. 등급 산식엔 영향 없음(배지만).
+    # 표기 짧게 (사용자 결정): "🔥 N일 음수→양수" — 숫자·화살표만.
+    if funding_regime_flip and funding_regime_flip.get("flipped"):
+        _nd = funding_regime_flip.get("neg_days") or 0
+        lines.append(f"🔥 {_nd:.0f}일 음수→양수")
     if kimchi_pct is not None:
         if abs(kimchi_pct) < 0.01:
             lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%)")

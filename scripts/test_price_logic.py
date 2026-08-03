@@ -262,9 +262,10 @@ check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not
 check("T4 표기수정 최종(워쳐식 타점+원화단독)", "타점" in touch_msg and "현재:" in touch_msg
       and "진입:" in touch_msg and "목표:" in touch_msg and "$" not in touch_msg
       and "엔트리" not in touch_msg and "~" in touch_msg)
-check("T4 거래순위+4칸정렬+포지션참고", "    거래:  5위" in touch_msg
+# 2026-08-03 사용자 결정: 📐 SL 행 삭제. SL 은 판정 엔진 내부에서만 사용.
+check("T4 거래순위+4칸정렬+SL행 삭제", "    거래:  5위" in touch_msg
       and "\n    현재:" in touch_msg and "\n    고가" in touch_msg
-      and "📐 SL" in touch_msg and "R:R 1:" in touch_msg)
+      and "📐 SL" not in touch_msg and "R:R 1:" not in touch_msg)
 check("T4 김프+52주", "김프" in touch_msg and "52주" in touch_msg
       and "고가" in touch_msg and "지점" in touch_msg)
 
@@ -407,21 +408,41 @@ msg_i = tg.render_alert("touch", "LINK", [dict(_asym)], 8.35 * USDT_KRW, USDT_KR
 check("T14i 지표 미주입(구버전 경로)은 보수적 미표시 - 예전 raw 폴백이 그 구멍이었다",
       "승률" not in msg_i)
 
-# T14L~T14M: SL 방향 부호 규약 (2026-08-03 검토 수정) — 롱/숏 모두 손실 방향을 음수로.
-# 이전 코드는 (sl-entry)/entry 만 써서 숏(sl>entry)이면 부호가 뒤집혀 "SL +5.0%" 로
-# 나가 오해 소지가 있었다. 잘못 붙은 SL(=이익 방향)은 행 자체를 생략한다.
-# 라벨은 T14L/T14M — 아래 T14j/T14k(소스 라벨 계열)와 이름 충돌 피함.
-_short_lv = dict(coin_symbol="BTC", entry_usd=100.0, sl_usd=105.0, tp_usd=90.0, rr=2.0,
-                 direction="short", grade="B", score=60, author="ShortAuth",
-                 author_followers=None, author_hit_rate=None, author_hit_count=None,
-                 author_whitelisted=False, mcap_rank=1, mcap_tier_icon="🥇",
-                 post_url="https://tv.com/s", post_age_minutes=10, collected_at=now)
-msg_short = tg.render_alert("touch", "BTC", [_short_lv], 100.0 * USDT_KRW, USDT_KRW)
-check("T14L 숏 SL 표기 - 롱과 같은 규약(손실 방향 = 음수)",
-      "📐 SL -5.0%" in msg_short and "SL +5.0%" not in msg_short)
-_bad_sl = dict(_short_lv, sl_usd=95.0)  # 숏인데 SL이 진입가 아래 = 이익 방향, 잘못
-msg_bad = tg.render_alert("touch", "BTC", [_bad_sl], 100.0 * USDT_KRW, USDT_KRW)
-check("T14M 방향 반대 SL - 행 자체 생략(오해 소지 차단)", "📐 SL" not in msg_bad)
+# T14L~T14N: SL 행 완전 삭제 회귀 방어 (2026-08-03 사용자 결정) — SL 은 판정
+# 엔진 내부 기준선으로만 사용, 알림 화면에는 절대 노출하지 않는다.
+# 예전엔 "📐 SL -5.2% · R:R 1:5.3" 행이 표시됐으나 사용자가 SL 을 매매에 참고하지
+# 않아 화면 공간만 차지했음. rep 에 sl_usd/rr 이 채워져 있어도 렌더에 나오면 안 됨.
+_sl_long = dict(coin_symbol="BTC", entry_usd=100.0, sl_usd=95.0, tp_usd=115.0, rr=3.0,
+                direction="long", grade="B", score=60, author="LongAuth",
+                author_followers=1000, author_hit_rate=None, author_hit_count=None,
+                author_whitelisted=False, mcap_rank=1, mcap_tier_icon="🥇",
+                post_url="https://tv.com/L", post_age_minutes=10, collected_at=now)
+msg_long_sl = tg.render_alert("touch", "BTC", [_sl_long], 100.0 * USDT_KRW, USDT_KRW)
+check("T14L 롱 SL 데이터 있어도 📐 SL 행 미표시",
+      "📐" not in msg_long_sl and "R:R" not in msg_long_sl)
+_sl_short = dict(_sl_long, direction="short", sl_usd=105.0, tp_usd=90.0)
+msg_short_sl = tg.render_alert("touch", "BTC", [_sl_short], 100.0 * USDT_KRW, USDT_KRW)
+check("T14M 숏 SL 데이터 있어도 📐 SL 행 미표시",
+      "📐" not in msg_short_sl and "R:R" not in msg_short_sl)
+# T14N: 펀딩 레짐 전환 배지 (스프린트08) — 감지 시 "🔥 N일 음수→양수" 짧게, 미감지 시 무.
+_fund_lv = dict(_sl_long, author="FundAuth")
+_flip = {"flipped": True, "neg_days": 32.3, "latest": 0.0012}
+msg_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                           funding_rate=0.0012, funding_regime_flip=_flip)
+msg_noflip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                             funding_rate=0.0012, funding_regime_flip=None)
+check("T14N 레짐 전환 감지 시 '🔥 32일 음수→양수' 표시, 미감지 시 무",
+      "🔥 32일 음수→양수" in msg_flip and "🔥" not in msg_noflip)
+# T14O: 펀딩 라벨 (매수 자제/우호/중립) — 사용자 결정 매수 판단 라벨.
+msg_hot = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                          funding_rate=0.05)
+msg_cold = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                           funding_rate=-0.05)
+msg_neutral = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                              funding_rate=0.001)
+check("T14O 펀딩 라벨: 롱과열→매수 자제 / 숏과열→매수 우호 / 그 외→중립",
+      "(매수 자제)" in msg_hot and "(매수 우호)" in msg_cold
+      and "(중립)" in msg_neutral)
 
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
@@ -2904,6 +2925,27 @@ _requests_mod.get = _bn_get_factory({
 check("BN4 Binance 전면 차단 - Bybit 폴백 성공",
       _binance.fetch_usdt_price("BTC", 5.0) == 62500.0)
 _requests_mod.get = _orig_requests_get
+
+# ── FR1~FR3: 펀딩 레짐 전환 감지 (2026-08-03 스프린트08) ───────────────
+# 30일 지속 음수 후 최근 양수 플립이면 flipped=True, 그 외 None.
+# 히스토리 없음/부족은 None (안전).
+from monitor.binance import detect_funding_regime_flip as _reg
+# 91개(=30일*3+1) 미만 → None
+check("FR1 히스토리 부족 → None", _reg([-0.01]*30) is None)
+# 30일치 전부 음수 + 최근 양수 1개 = flipped=True
+_hist_flip = [-0.02] * (30 * 3) + [0.0015]
+_r = _reg(_hist_flip, min_neg_days=30)
+check("FR2 30일 음수 후 양수 플립 → flipped=True", _r is not None and _r["flipped"] is True
+      and abs(_r["neg_days"] - 30.0) < 0.34)
+# 최근 값이 음수면 플립 아님
+check("FR2b 최근값 음수 → None", _reg([-0.02]*(30*3) + [-0.001]) is None)
+# 30일 창 안에 양수 하나라도 있으면 플립 아님
+_hist_partial = [-0.02]*(30*3 - 5) + [0.005] + [-0.02]*4 + [0.001]
+check("FR2c 30일 창 내 양수 있으면 → None (스트릭 미충족)",
+      _reg(_hist_partial) is None)
+# min_neg_days 커스텀
+check("FR3 min_neg_days=14 로 낮추면 통과",
+      _reg([-0.02]*(14*3) + [0.0015], min_neg_days=14) is not None)
 
 print()
 print("── 본알림 실제 렌더링 ──")

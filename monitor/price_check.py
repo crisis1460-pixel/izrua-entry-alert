@@ -747,8 +747,16 @@ def run_once(now: float = None) -> dict:
                         effective = current / usd_global
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
                     _snap_funding = None
+                    _snap_funding_flip = None
                     try:
                         _snap_funding = binance.fetch_funding_rate(coin, cfg_get("http_timeout_sec"))
+                        # 레짐 전환 감지 (2026-08-03 스프린트08): 30일+ 지속 음수 →
+                        # 최근 양수 플립 = 역사적 강한 반전 시그널. 배지만 첨부,
+                        # 등급 산식에는 영향 없음(사용자 결정).
+                        _hist = binance.fetch_funding_history(
+                            coin, cfg_get("http_timeout_sec"), days=32)
+                        _snap_funding_flip = binance.detect_funding_regime_flip(
+                            _hist, min_neg_days=30)
                     except Exception:  # noqa: BLE001
                         pass
                     _snap_sentiment = _sentiment()
@@ -759,7 +767,8 @@ def run_once(now: float = None) -> dict:
                                                  kimchi_pct=_snap_kimchi,
                                                  volume_rank=_snap_volume_rank,
                                                  rep=rep,
-                                                 funding_rate=_snap_funding)
+                                                 funding_rate=_snap_funding,
+                                                 funding_regime_flip=_snap_funding_flip)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
