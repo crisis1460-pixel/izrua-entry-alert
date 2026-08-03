@@ -232,8 +232,9 @@ def _author_block(rep: dict) -> list:
         lines.append(self_line)
 
     # 평균 보유기간 (표본 3건↑, 스윙 정렬 참고용)
+    # 데이터 이상(resolved_at < touched_at 등)으로 음수가 나오면 표기 생략
     _hold = rep.get("author_avg_holding_days")
-    if _hold is not None:
+    if _hold is not None and _hold > 0:
         if _hold < 1:
             lines.append(f"⏱ 평균 {_hold * 24:.0f}시간 보유")
         else:
@@ -353,12 +354,21 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
     # ── 포지션 참고 (SL 거리 + R:R — SL 있을 때만) ──
+    # 롱은 SL<entry, 숏은 SL>entry 가 정상 손절 방향. 부호 규약: 손실 방향(=진입에
+    # 불리한 이동)을 항상 음수로 표기 — "SL -3.5%" 는 롱/숏 무관하게 "손절가는 3.5%
+    # 손실 지점" 이라는 뜻으로 읽힌다. 반대(SL이 이익 방향)에 있으면 잘못된 SL 이므로
+    # 표시 자체를 생략한다(rr==None 인 데이터 이상 케이스와 같은 취급).
     sl = rep.get("sl_usd")
+    _direction = rep.get("direction") or "long"
     if sl and entry_rep and entry_rep > 0 and sl > 0:
-        sl_dist = (sl - entry_rep) / entry_rep * 100
-        rr_val = rep.get("rr")
-        rr_str = f" · R:R 1:{rr_val:.1f}" if rr_val and rr_val > 0 else ""
-        lines.append(f"📐 SL {sl_dist:+.1f}%{rr_str}")
+        if _direction == "short":
+            sl_dist = (entry_rep - sl) / entry_rep * 100
+        else:
+            sl_dist = (sl - entry_rep) / entry_rep * 100
+        if sl_dist < 0:
+            rr_val = rep.get("rr")
+            rr_str = f" · R:R 1:{rr_val:.1f}" if rr_val and rr_val > 0 else ""
+            lines.append(f"📐 SL {sl_dist:+.1f}%{rr_str}")
 
     # ── 시장 심리 (워쳐 표기 그대로: 김프 행 → BTC.D 행 / ALT.S 행 / F&G 행) ──
     if sentiment or kimchi_pct is not None or funding_rate is not None:

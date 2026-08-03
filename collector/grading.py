@@ -40,6 +40,8 @@ v3 그대로** 두고 상단(5천+)만 끌어올렸다 — 소형 작성자의 �
     포맷을 채점하지 않고 실현 실적만 채점. 사용자 지시 "가산은 소폭만".
   ③ 실적 가점(+15)·목표거리·근접도·등급 임계 불변. SL 없는 글도
     "상위 팔로워 or 검증 실적"이면 A~S 도달 가능해진다.
+  ④ settings.grade_formula_ver 'v3' → 'v4' 로 태그 승격 — 신규 채점분에
+    levels.grade_ver 로 기록. 과거 v3 행은 소급 재라벨 없음(D4 유지).
 """
 
 from typing import Optional, Tuple
@@ -84,7 +86,7 @@ AUTHOR_TRACK_TIERS = [       # (Wilson 하한 문턱, 가점) — 위에서부�
     (0.40, 10),
     (0.25, 5),
 ]
-AUTHOR_TRACK_MAX = 15        # 실적 가점 상한 (이론 만점 85→100)
+AUTHOR_TRACK_MAX = 15        # 실적 가점 상한 (v4 이론 만점 80→95)
 
 
 def author_track_points(closed_n: Optional[int], closed_hits: Optional[int]) -> float:

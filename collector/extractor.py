@@ -180,12 +180,15 @@ _TF_UNIT_HOURS = {"m": 1 / 60, "min": 1 / 60, "h": 1.0, "hr": 1.0, "d": 24.0, "w
 
 def parse_timeframe_hours(text: str):
     """글에 명시된 차트 타임프레임(시간 단위). 없으면 None.
-    예: '🕒 Timeframe: 1H' → 1.0, '4h' → 4.0, '1D' → 24.0"""
+    _TIMEFRAME 은 앞의 키워드(Timeframe/타임프레임/봉)를 요구하므로 산문 속 '4h' 만
+    으로는 매칭되지 않는다. 예: '🕒 Timeframe: 1H' → 1.0, 'Timeframe: 4H' → 4.0,
+    'Timeframe: 1D' → 24.0. 0 값은 무의미해 None 반환(스캘프 판정창 오지정 방지)."""
     if not text:
         return None
     m = _TIMEFRAME.search(text)
     if m:
-        return float(m.group(1)) * _TF_UNIT_HOURS[m.group(2).lower()]
+        v = float(m.group(1)) * _TF_UNIT_HOURS[m.group(2).lower()]
+        return v if v > 0 else None
     w = _TIMEFRAME_WORD.search(text)
     if w:
         return 168.0 if w.group(1).lower() in ("weekly", "주봉") else 24.0

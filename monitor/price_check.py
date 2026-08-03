@@ -619,7 +619,9 @@ def run_once(now: float = None) -> dict:
                 if send_ok:
                     _min_tf = cfg_get("alert_min_timeframe_hours")
                     _tf = rep.get("timeframe_hours")
-                    if _min_tf and _tf is not None and _tf < _min_tf:
+                    # 부동소수 여유(1e-9): '240m' → 240*(1/60) = 3.9999...→ 4h 필터
+                    # 오억제 방지. 실제 분 단위로 4h 이상을 쓰는 사례는 드무나 안전 마진.
+                    if _min_tf and _tf is not None and _tf < _min_tf - 1e-9:
                         logger.info("[체크] %s 타임프레임 %.1fh < %.1fh 알림 억제",
                                     coin, _tf, _min_tf)
                         send_ok = False

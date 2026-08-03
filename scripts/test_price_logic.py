@@ -407,6 +407,21 @@ msg_i = tg.render_alert("touch", "LINK", [dict(_asym)], 8.35 * USDT_KRW, USDT_KR
 check("T14i 지표 미주입(구버전 경로)은 보수적 미표시 - 예전 raw 폴백이 그 구멍이었다",
       "승률" not in msg_i)
 
+# T14j~T14k: SL 방향 부호 규약 (2026-08-03 검토 수정) — 롱/숏 모두 손실 방향을 음수로.
+# 이전 코드는 (sl-entry)/entry 만 써서 숏(sl>entry)이면 부호가 뒤집혀 "SL +5.0%" 로
+# 나가 오해 소지가 있었다. 잘못 붙은 SL(=이익 방향)은 행 자체를 생략한다.
+_short_lv = dict(coin_symbol="BTC", entry_usd=100.0, sl_usd=105.0, tp_usd=90.0, rr=2.0,
+                 direction="short", grade="B", score=60, author="ShortAuth",
+                 author_followers=None, author_hit_rate=None, author_hit_count=None,
+                 author_whitelisted=False, mcap_rank=1, mcap_tier_icon="🥇",
+                 post_url="https://tv.com/s", post_age_minutes=10, collected_at=now)
+msg_short = tg.render_alert("touch", "BTC", [_short_lv], 100.0 * USDT_KRW, USDT_KRW)
+check("T14j 숏 SL 표기 - 롱과 같은 규약(손실 방향 = 음수)",
+      "📐 SL -5.0%" in msg_short and "SL +5.0%" not in msg_short)
+_bad_sl = dict(_short_lv, sl_usd=95.0)  # 숏인데 SL이 진입가 아래 = 이익 방향, 잘못
+msg_bad = tg.render_alert("touch", "BTC", [_bad_sl], 100.0 * USDT_KRW, USDT_KRW)
+check("T14k 방향 반대 SL - 행 자체 생략(오해 소지 차단)", "📐 SL" not in msg_bad)
+
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
 # 넘겨서, 행이 늘면 정작 봐야 할 타점·가격이 밀린다. 지표는 계속 쌓이고 show_status
