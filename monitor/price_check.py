@@ -467,7 +467,11 @@ def run_once(now: float = None) -> dict:
                "suppressed_grade_tp_penalty_only": 0, "suppressed_tp_too_close": 0,
                "preview_dwell": 0,
                "ambiguous_magnified": 0, "ambiguous_unresolved": 0,
-               "ambiguous_skipped": 0, "suppressed_timeframe": 0}
+               "ambiguous_skipped": 0, "suppressed_timeframe": 0,
+               # suppressed_tp_gate: _judge_outcomes 가 실제 증분(TP 단계 알림이 본알림
+               # 게이트로 차단된 건수). 그 함수의 setdefault(945) 와 bump_daily_stats
+               # 의 .get 폴백이 이미 방어하지만, 초기화 대칭성 유지(2026-08-03 감사).
+               "suppressed_tp_gate": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
         # 작성자 종결 실적 캐시 (2026-08-01 S10 v3) — author → (n, hits). 한 회차 안에서
@@ -1023,8 +1027,13 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             _tps_raw = json.loads(lv["tps_usd"]) if lv.get("tps_usd") else []
         except (ValueError, TypeError):
             _tps_raw = []
+        # isinstance 가드 (2026-08-03 감사): _tps_raw 에 문자열이 섞여 있으면
+        # `entry_usd < t` 비교가 TypeError 를 던져 판정 사이클 전체가 멎었다.
+        # _volume_band_tps(1249) 와 같은 방어 패턴으로 통일.
         _tps_valid = (
-            [t for t in _tps_raw if entry_usd > 0 and entry_usd < t <= entry_usd * 4]
+            [t for t in _tps_raw
+             if isinstance(t, (int, float))
+             and entry_usd > 0 and entry_usd < t <= entry_usd * 4]
             if lv.get("direction") == "long" else []
         )
         _is_multi_tp = len(_tps_valid) > 1
@@ -1098,13 +1107,26 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         # 캔들 창(since_min) 이동으로 재탐지 불가능한 경우를 복원한다.
         # 이미 hit 판정이 나왔으면 중복일 뿐이고, SL("miss") 보다 시간적으로
         # 먼저 발생한 TP 를 우선하므로 outcome 을 오버라이드해도 안전하다.
+        # 인덱스 일치 가드 (2026-08-03 감사): 다중 TP + 롤백 CAS 실패로 pending_tp_kind
+        # 가 현재 idx 와 어긋난 상태에서 force-hit 하면 도달 안 한 TP 를 hit 로
+        # 오판정한다. pending 이 현재 인덱스와 일치할 때만 force, 아니면 stale
+        # pending 으로 보고 clear.
         _pending_tp = lv.get("pending_tp_kind")
         if _pending_tp:
-            if tp_krw > 0:
+            # pending 저장 형식은 set_pending_tp 호출부 모두 f"tp{_tp_alert_idx + 1}"
+            # (중간·최종 TP·단일 TP 공통). idx 가 어긋나 있으면 stale 로 보고 clear —
+            # 다중 TP + 롤백 CAS 실패로 pending 이 이전 idx 를 가리키는 채 남으면 다음
+            # 회차가 그걸 그대로 force-hit 하여 도달 안 한 TP 를 잘못 종결시켰다.
+            if _pending_tp != f"tp{_tp_alert_idx + 1}":
+                db.clear_pending_tp(conn, lv["id"])
+                conn.commit()
+                _pending_tp = None
+            elif tp_krw > 0:
                 outcome, resolve_price = "hit", tp_krw
             else:
                 db.clear_pending_tp(conn, lv["id"])
                 conn.commit()
+                _pending_tp = None
 
         mode = ("tp_sl" if (tp_krw > 0 and sl_krw > 0)
                 else "tp_only" if tp_krw > 0 else "timeboxed")
@@ -1132,18 +1154,26 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 _sib_dup = _tp_cluster_dup(
                     lv, _tp_loop_levels, _kind_inter, db_path,
                     _cluster_band_pct, now - _RESEND_BLOCK_SEC)
-                if _sib_dup or not _touch_sent:
-                    # 클러스터 내 중복 또는 본알림 무발송 신호: 인덱스만 전진, 알림 생략
+                # self-resend block (2026-08-03 감사): 최종 TP 브랜치(1207-)는
+                # alert_ledger.recent_exists 로 이 방어를 하고 있는데, 중간 TP 는
+                # advance_tp_alert_idx CAS 만 의존해 cross-runner 경합에서 중복이
+                # 새어나갈 수 있었다. 원장이 최근 10분에 같은 알림을 기록했으면
+                # CAS 만 전진시키고 알림은 생략(대칭).
+                _self_recent = alert_ledger.recent_exists(
+                    db_path, lv["coin_symbol"], _kind_inter, [lv["id"]],
+                    now - _RESEND_BLOCK_SEC)
+                if _sib_dup or not _touch_sent or _self_recent:
+                    # 클러스터 내 중복·본알림 무발송·자기 최근 발송: 인덱스만 전진.
                     if db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                         conn.commit()
                     if _pending_tp:
                         db.clear_pending_tp(conn, lv["id"])
                         conn.commit()
+                    _reason = ("클러스터 중복 차단" if _sib_dup
+                               else "자기 최근 발송 차단(cross-runner)" if _self_recent
+                               else "게이트 차단(본알림 무발송·초단타) - TP 알림 생략")
                     logger.info("[적중판정] %s %s %s (level_id=%d)",
-                                lv["coin_symbol"], _kind_inter,
-                                "클러스터 중복 차단" if _sib_dup
-                                else "게이트 차단(본알림 무발송·초단타) - TP 알림 생략",
-                                lv["id"])
+                                lv["coin_symbol"], _kind_inter, _reason, lv["id"])
                     if not _touch_sent:
                         obs["suppressed_tp_gate"] += 1
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
@@ -1347,7 +1377,12 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
             continue
         current_bil = vol["last_60m"] / 1e8
         avg_bil = vol["avg_20h"] / 1e8
-        db.mark_volume_alerted(conn, ticker, now)
+        # CAS 게이팅 (2026-08-03 감사): 동시 사이클 두 개가 같은 티커를 잡으면
+        # 예전엔 둘 다 발송했다. mark_volume_alerted 가 alerted=0 조건으로 CAS 를
+        # 걸어 False (=다른 사이클이 이미 표시) 면 발송 자체를 건너뛴다.
+        if not db.mark_volume_alerted(conn, ticker, now):
+            conn.commit()
+            continue
         conn.commit()
         # 다음 TP 선정 (2026-07-31 2차): 알림 시점 현재가 바로 위의 TP 를 (k/N단계)
         # 로 표시 — 사다리 중간 급증에서 "다음 목표까지 얼마"를 바로 보여준다.

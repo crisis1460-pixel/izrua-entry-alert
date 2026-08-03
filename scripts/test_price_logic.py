@@ -407,20 +407,21 @@ msg_i = tg.render_alert("touch", "LINK", [dict(_asym)], 8.35 * USDT_KRW, USDT_KR
 check("T14i 지표 미주입(구버전 경로)은 보수적 미표시 - 예전 raw 폴백이 그 구멍이었다",
       "승률" not in msg_i)
 
-# T14j~T14k: SL 방향 부호 규약 (2026-08-03 검토 수정) — 롱/숏 모두 손실 방향을 음수로.
+# T14L~T14M: SL 방향 부호 규약 (2026-08-03 검토 수정) — 롱/숏 모두 손실 방향을 음수로.
 # 이전 코드는 (sl-entry)/entry 만 써서 숏(sl>entry)이면 부호가 뒤집혀 "SL +5.0%" 로
 # 나가 오해 소지가 있었다. 잘못 붙은 SL(=이익 방향)은 행 자체를 생략한다.
+# 라벨은 T14L/T14M — 아래 T14j/T14k(소스 라벨 계열)와 이름 충돌 피함.
 _short_lv = dict(coin_symbol="BTC", entry_usd=100.0, sl_usd=105.0, tp_usd=90.0, rr=2.0,
                  direction="short", grade="B", score=60, author="ShortAuth",
                  author_followers=None, author_hit_rate=None, author_hit_count=None,
                  author_whitelisted=False, mcap_rank=1, mcap_tier_icon="🥇",
                  post_url="https://tv.com/s", post_age_minutes=10, collected_at=now)
 msg_short = tg.render_alert("touch", "BTC", [_short_lv], 100.0 * USDT_KRW, USDT_KRW)
-check("T14j 숏 SL 표기 - 롱과 같은 규약(손실 방향 = 음수)",
+check("T14L 숏 SL 표기 - 롱과 같은 규약(손실 방향 = 음수)",
       "📐 SL -5.0%" in msg_short and "SL +5.0%" not in msg_short)
 _bad_sl = dict(_short_lv, sl_usd=95.0)  # 숏인데 SL이 진입가 아래 = 이익 방향, 잘못
 msg_bad = tg.render_alert("touch", "BTC", [_bad_sl], 100.0 * USDT_KRW, USDT_KRW)
-check("T14k 방향 반대 SL - 행 자체 생략(오해 소지 차단)", "📐 SL" not in msg_bad)
+check("T14M 방향 반대 SL - 행 자체 생략(오해 소지 차단)", "📐 SL" not in msg_bad)
 
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
@@ -1023,6 +1024,34 @@ check("T34 다중 TP 마지막 13% - 알림 발송됨",
       len(sent_messages) == sent_before34 + 1)
 check("T34b suppressed_tp_too_close 불변(T33b 이후 그대로)",
       (_obs_row() or {})["suppressed_tp_too_close"] == _tp_before33 + 1)
+
+# T34c: _judge_outcomes tps_usd 방어 (2026-08-03 감사) — 리스트에 문자열이 섞여도
+# TypeError 로 판정 사이클 전체가 멎지 않는다. 저장된 tps_usd 를 오염시켜 놓고
+# 그 레벨을 활성화 → run_once 가 예외 없이 완주하는지만 본다.
+_lv34c_key = db.make_signal_key("ZTPBAD", 100.0, "Auth34c", "u34c")
+with db.connect(TEST_DB) as conn:
+    _lv34c = dict(coin_symbol="ZTPBAD", ticker="KRW-ZTPBAD", direction="long",
+                  entry_usd=100.0, sl_usd=95.0, tp_usd=110.0, rr=2.0,
+                  grade="B", score=62, author="Auth34c", author_followers=5000,
+                  author_hit_rate=None, author_hit_count=None,
+                  author_whitelisted=False, mcap_rank=19, mcap_tier_icon="🥇",
+                  post_url="https://tv.com/u34c", post_age_minutes=10,
+                  collected_at=now - 1200, signal_key=_lv34c_key,
+                  tps_usd='[105.0, "bad", 115.0]')  # 파서 밖에서 손상된 사례 시뮬
+    db.upsert_level(conn, _lv34c)
+    # 강제 touched 로 만들어 _judge_outcomes 진입 대상으로
+    conn.execute("UPDATE levels SET status='touched', touched_at=?, "
+                 "touch_price_krw=? WHERE signal_key=?",
+                 (now - 1000, 100.0 * USDT_KRW, _lv34c_key))
+    conn.commit()
+fake["price"] = 100.0 * USDT_KRW
+_no_crash = True
+try:
+    price_check.run_once(now + 1500)
+except Exception:  # noqa: BLE001
+    _no_crash = False
+check("T34c 오염된 tps_usd 원소 - _judge_outcomes 크래시 없이 완주",
+      _no_crash)
 
 # ── BM: 동시터치 하위 타임프레임 재검사 (Bar Magnifier, 2026-07-26) ──────────
 # 한 캔들 안에서 TP·SL 이 둘 다 닿으면 예전엔 무조건 보수적 miss+ambiguous 였다.
@@ -2420,6 +2449,15 @@ _vs_vol["val"] = {"last_60m": 5e8, "avg_20h": 1e8}
 _vs_run({"KRW-VSB": 1000.0})
 check("VS5b 정확히 ×5 - 발송(이상 경계)", len(sent_messages) == sent_before_vs + 2
       and _vs_row("KRW-VSB")["alerted"] == 1)
+
+# VS5c: mark_volume_alerted CAS (2026-08-03 감사) — alerted=1 인 행에 재호출하면
+# False 반환(경합 사이클이 이미 잡음 시나리오). rowcount=0.
+with db.connect(_VS_DB) as conn:
+    _cas_first = db.mark_volume_alerted(conn, "KRW-VSB", _vs_now + 90)
+    _cas_second = db.mark_volume_alerted(conn, "KRW-VSB", _vs_now + 91)
+    conn.commit()
+check("VS5c mark_volume_alerted CAS - 이미 alerted=1 이면 False (동시 사이클 중복 차단)",
+      _cas_first is False and _cas_second is False)
 
 # VS6: ratio 는 넘어도 최근 1h 절대금액 < volume_spike_min_krw_60m 이면 미발송
 with db.connect(_VS_DB) as conn:

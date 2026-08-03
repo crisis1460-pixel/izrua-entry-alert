@@ -406,7 +406,9 @@ def upsert_level(conn, level: dict) -> bool:
              sl_usd=?, tp_usd=?,
              tp_ladder_count=?,
              tps_usd=COALESCE(?, tps_usd),
-             author_followers=?, author_hit_rate=?, author_hit_count=?,
+             author_followers=COALESCE(?, author_followers),
+             author_hit_rate=COALESCE(?, author_hit_rate),
+             author_hit_count=COALESCE(?, author_hit_count),
              author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
              judgment_window_hours=?, raw_text=COALESCE(?, raw_text)
            WHERE signal_key=? AND status IN ('watching','previewed')""",
@@ -420,6 +422,10 @@ def upsert_level(conn, level: dict) -> bool:
             # None → COALESCE 가 기존 값을 보존 (backfill 값 보호).
             # "[]" → 명시적 클리어(유효 TP 없는 재수집 결과)라 그대로 덮어씀.
             level.get("tps_usd"),
+            # 작성자 지표 3종은 COALESCE 로 보호 (2026-08-03 감사): fetch_author_followers
+            # 가 프로필 예산 소진/네트워크 실패로 None 을 돌려주면 기존 팔로워 값이
+            # NULL 로 덮어써져 v4 팔로워 배점(최대 25)이 사라지고 재채점 등급이
+            # 흔들렸다. None → 기존 값 보존, 실측치 → 갱신.
             level.get("author_followers"), level.get("author_hit_rate"),
             level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
@@ -446,7 +452,7 @@ def reparse_all(conn) -> int:
     # DB 무결성을 위해 방향 한정.
     rows = conn.execute(
         "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text, "
-        "tp_ladder_count, tps_usd "
+        "tp_ladder_count, tps_usd, timeframe_hours "
         "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
         "AND direction='long'"
     ).fetchall()
@@ -464,7 +470,11 @@ def reparse_all(conn) -> int:
         rr = None
         if new_sl and new_tp and entry > new_sl:
             rr = round((new_tp - entry) / (entry - new_sl), 2)
-        win = judgment_window_hours(parse_timeframe_hours(r["raw_text"]), entry, new_tp)
+        # 타임프레임도 재파싱: 2026-08-03 extractor 수정으로 '0h' → None 이 됐는데
+        # reparse_all 이 이 컬럼을 안 갱신하면 8/3 이전 저장된 timeframe_hours=0 값이
+        # alert_min_timeframe_hours(4) 필터에 계속 걸려 만료(168h)까지 억제됐다.
+        new_tf = parse_timeframe_hours(r["raw_text"])
+        win = judgment_window_hours(new_tf, entry, new_tp)
         # 사다리 단계 수 치유 (tp 폐기 시 0으로)
         new_lad = (setup.get("tp_ladder_count") or 0) if new_tp is not None else 0
         # 전체 TP 목록 치유 (tp 폐기 시 [])
@@ -473,12 +483,13 @@ def reparse_all(conn) -> int:
         if (new_sl == r["sl_usd"] and new_tp == r["tp_usd"]
                 and rr == r["rr"] and win == r["judgment_window_hours"]
                 and new_lad == (r["tp_ladder_count"] or 0)
-                and new_tps_usd == old_tps_usd):
+                and new_tps_usd == old_tps_usd
+                and new_tf == r["timeframe_hours"]):
             continue
         conn.execute(
             "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=?, "
-            "tp_ladder_count=?, tps_usd=? WHERE id=?",
-            (new_sl, new_tp, rr, win, new_lad, new_tps_usd, r["id"]),
+            "tp_ladder_count=?, tps_usd=?, timeframe_hours=? WHERE id=?",
+            (new_sl, new_tp, rr, win, new_lad, new_tps_usd, new_tf, r["id"]),
         )
         changed += 1
     return changed
@@ -793,7 +804,24 @@ def _compute_outcome_hash(prev_hash: str, level_id, outcome, resolved_at,
 
 
 def _get_chain_tip(conn) -> str:
-    return get_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY) or _OUTCOME_CHAIN_GENESIS
+    """체인 tip 조회. meta 가 유실됐으나 이미 체인이 쌓인 상태라면 실 tail 에서
+    복원 (2026-08-03 감사): 예전엔 meta 유실 시 무조건 GENESIS 폴백이라, 다음
+    resolve_outcome 이 새 GENESIS-based 링크를 만들어 체인이 즉시 fork 됐다
+    (verify_outcome_chain broken_genesis). tail 은 outcome_hash 가 있는 가장 최근
+    (resolved_at DESC, id DESC) 행의 outcome_hash — 진짜 새 DB(체인 자체가 없음)
+    에서만 GENESIS 로 시작한다."""
+    tip = get_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY)
+    if tip:
+        return tip
+    row = conn.execute(
+        "SELECT outcome_hash FROM levels WHERE outcome_hash IS NOT NULL "
+        "ORDER BY resolved_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if row and row["outcome_hash"]:
+        # 유실된 meta 를 복원해 다음 회차부터 자연스러운 조회로 복귀
+        set_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY, row["outcome_hash"])
+        return row["outcome_hash"]
+    return _OUTCOME_CHAIN_GENESIS
 
 
 def _set_chain_tip(conn, chain_hash: str) -> None:
@@ -1401,10 +1429,20 @@ def remove_volume_watch(conn, ticker: str) -> None:
     conn.execute("DELETE FROM volume_watch WHERE ticker=?", (ticker,))
 
 
-def mark_volume_alerted(conn, ticker: str, now: float) -> None:
-    """거래량 급증 알림 발송 완료 표시."""
-    conn.execute(
-        "UPDATE volume_watch SET alerted=1, alerted_at=? WHERE ticker=?", (now, ticker))
+def mark_volume_alerted(conn, ticker: str, now: float) -> bool:
+    """거래량 급증 알림 발송 완료 표시. 반환: CAS 성공 여부(True=이번 호출이
+    실제로 표식을 세움, False=다른 회차가 이미 세워둠).
+
+    CAS(2026-08-03 감사): 예전엔 조건 없는 UPDATE 라 동시 사이클 두 개가 모두
+    active 를 읽고(get_volume_watch_active 는 alerted=0 필터) 각자 send + mark 하면
+    같은 코인이 두 번 알림 나갔다. `AND alerted=0` 을 걸고 rowcount 로 게이팅해
+    승자만 발송하도록 호출부가 판단할 수 있게 한다."""
+    cur = conn.execute(
+        "UPDATE volume_watch SET alerted=1, alerted_at=? "
+        "WHERE ticker=? AND alerted=0",
+        (now, ticker),
+    )
+    return cur.rowcount > 0
 
 
 def prune_volume_watch(conn, now: float, max_age_sec: float) -> None:
