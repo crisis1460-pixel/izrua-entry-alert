@@ -488,11 +488,15 @@ def render_tv_block_alert(reason) -> str:
 
 def _weekly_rank_line(rank: int, author: str, met: dict) -> tuple:
     """랭킹 한 줄 + 역신호 후보 여부(E_LB<=0, 게이트는 통과) 반환."""
-    is_anti = met["e_lb"] is not None and met["e_lb"] <= 0
+    e_lb = met.get("e_lb")
+    e_lb_display = met.get("e_lb_display")
+    neff_r = met.get("neff_r") or 0.0
+    is_anti = e_lb is not None and e_lb <= 0
     mark = " 🔻" if is_anti else ""
     pct = f", 승률{met['p_hat'] * 100:.0f}%" if met.get("p_hat") is not None else ""
+    e_txt = f"{e_lb_display:+.2f}" if e_lb_display is not None else "-"
     line = (f"  {rank}. @{html.escape(author)}{mark}  "
-            f"E_LB {met['e_lb_display']:+.2f} (n_eff {met['neff_r']:.1f}{pct})")
+            f"E_LB {e_txt} (n_eff {neff_r:.1f}{pct})")
     return line, is_anti
 
 
@@ -504,8 +508,10 @@ def _confluence_line(confluence: dict, author: str, min_clusters: int) -> str:
     s = confluence.get(author)
     if not s or s.get("total", 0) < min_clusters:
         return None
+    cr = s.get("cr")
+    cr_txt = f"{cr * 100:.0f}%" if cr is not None else "-"
     return (f"     🤝 합의 참여 {s['multi']}/{s['total']}회"
-            f"({s['cr'] * 100:.0f}%)")
+            f"({cr_txt})")
 
 
 def _baseline_section(rows_by_author: dict, order: list, baseline: dict,
@@ -923,6 +929,7 @@ def render_reverse_confirm_alert(author: str, snaps: list) -> str:
     lines.extend(_reverse_snap_lines(snaps))
     lines.append("이 작성자의 신호는 계속 알림드리지만")
     lines.append("참고용으로 활용하세요.")
+    lines.append(_SEP)
     return "\n".join(lines)
 
 
@@ -937,6 +944,7 @@ def render_reverse_release_alert(author: str, snaps: list) -> str:
     lines.extend(_reverse_snap_lines(snaps))
     lines.append("역신호 확정 표시를 해제합니다.")
     lines.append("(알림 발송은 확정 중에도 그대로였습니다)")
+    lines.append(_SEP)
     return "\n".join(lines)
 
 

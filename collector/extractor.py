@@ -503,7 +503,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             # list(tps[0])=[first] 은 tp 계산용 하나뿐이라 tps_all 에는 불충분.
             _cands = getattr(tps[0], "ladder_values", None) or list(tps[0])
         elif tps.is_spec:
-            _cands = [v[0] for v in tps if v]   # 줄바꿈 스펙형: 각 줄 대표 값
+            _cands = [v[-1] for v in tps if v]  # 줄바꿈 스펙형: tp 선정(grp[-1])과 동일 기준
         else:
             _cands = [tps[0][-1]] if tps[0] else []  # 단순 TP 단일 값
         # 방향·크기 sanity 적용 (tp 에 적용한 것과 동일 기준)

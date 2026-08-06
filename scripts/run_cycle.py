@@ -543,14 +543,19 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     if not sent:
         print(f"::warning::주간 리포트 발송 실패 - "
               f"{settings.get('weekly_report_retry_minutes')}분 후 재시도")
-        try:
-            with db.connect(db_path) as conn:
-                db.set_meta(conn, META_LAST_REPORT, str(_prev_ok))
-                db.set_meta(conn, META_LAST_REPORT_FAIL, str(now))
-        except BaseException as e:  # noqa: BLE001
-            if isinstance(e, KeyboardInterrupt):
-                raise
-            logger.error("주간 리포트 meta 롤백 실패: %s: %s", type(e).__name__, e)
+        # META_LAST_REPORT 롤백과 META_LAST_REPORT_FAIL 설정을 분리한다.
+        # 한 트랜잭션으로 묶으면 DB 오류 시 둘 다 실패 → last_ok=now 고착 →
+        # retry_minutes 무시하고 전체 인터벌(168h) 후에야 재시도하는 무력화 발생.
+        for _key, _val in [(META_LAST_REPORT, str(_prev_ok or 0)),
+                           (META_LAST_REPORT_FAIL, str(now))]:
+            try:
+                with db.connect(db_path) as conn:
+                    db.set_meta(conn, _key, _val)
+            except BaseException as e:  # noqa: BLE001
+                if isinstance(e, KeyboardInterrupt):
+                    raise
+                logger.error("주간 리포트 meta 롤백 실패(%s): %s: %s", _key, type(e).__name__, e)
+                print(f"::error::주간 리포트 meta 롤백 실패({_key}) - {type(e).__name__}")
         return "failed"
 
     return "ok"

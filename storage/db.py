@@ -409,7 +409,7 @@ def upsert_level(conn, level: dict) -> bool:
              author_followers=COALESCE(?, author_followers),
              author_hit_rate=COALESCE(?, author_hit_rate),
              author_hit_count=COALESCE(?, author_hit_count),
-             author_whitelisted=?, mcap_rank=?, mcap_tier_icon=?,
+             author_whitelisted=COALESCE(?,author_whitelisted), mcap_rank=?, mcap_tier_icon=?,
              judgment_window_hours=?, timeframe_hours=COALESCE(?, timeframe_hours),
              raw_text=COALESCE(?, raw_text)
            WHERE signal_key=? AND status IN ('watching','previewed')""",
@@ -518,7 +518,7 @@ def get_active_levels(conn, direction: Optional[str] = "long") -> list:
 def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
     conn.execute(
         "UPDATE levels SET status='previewed', previewed_at=? WHERE id=? AND status='watching'",
-        (now or time.time(), level_id),
+        (now if now is not None else time.time(), level_id),
     )
 
 
@@ -544,7 +544,7 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
     bid_ask_ratio 는 터치 시점 호가 매수/매도 잔량비 스냅샷(2026-07-26 카드 #19).
     **기록 전용** — 알림·필터·판정 어디에도 쓰이지 않는다. 실제 도달 터치에만
     남긴다(섀도 터치는 그 레벨의 엔트리에 닿은 게 아니라 시점이 무의미)."""
-    now = now or time.time()
+    now = now if now is not None else time.time()
     for lid, price, t_anchor in touches:
         if price is None:
             conn.execute(
@@ -940,7 +940,7 @@ def resolve_outcome(conn, level_id: int, outcome: str, resolve_price_krw: float,
                     judgment_mode: str, r_multiple: Optional[float] = None,
                     ambiguous: bool = False, best_tp_hit: Optional[int] = None,
                     now: Optional[float] = None) -> None:
-    now_val = now or time.time()
+    now_val = now if now is not None else time.time()
     # 체인 계산은 판정 로직/값 자체와 무관 - 이 함수가 실제로 새 판정을 쓸 때만
     # (WHERE outcome IS NULL 에 걸려 rowcount>0 일 때만) tip 을 전진시킨다. 이미
     # 종결된 행에 재호출되면(no-op) tip 도 건드리지 않는다.
@@ -1015,7 +1015,9 @@ def get_author_self_stats(conn, author: str) -> dict:
                        AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
                       THEN 1 ELSE 0 END) AS l,
              SUM(CASE WHEN touched_at IS NOT NULL THEN 1 ELSE 0 END) AS t,
-             SUM(CASE WHEN status='expired' AND touched_at IS NULL THEN 1 ELSE 0 END) AS e
+             SUM(CASE WHEN status='expired' AND touched_at IS NULL
+                       AND (expired_reason IS NULL OR expired_reason != 'shadow_touch')
+                      THEN 1 ELSE 0 END) AS e
            FROM levels WHERE author=?""",
         (author,),
     ).fetchone()
@@ -1115,7 +1117,7 @@ def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
         감시 시간이 하루도 안 남는다. 수집 지연(차단·순환)이 곧 기회 상실이 된다.
     수집 게이트(max_post_age_hours=168)가 있어 이 기준의 절대 상한은 자동으로
     게시 후 14일이다 — 실측 최장 터치가 10.5일이라 충분히 여유롭다."""
-    now = now or time.time()
+    now = now if now is not None else time.time()
     cutoff = now - max_age_sec
     cur = conn.execute(
         "UPDATE levels SET status='expired', expired_at=? "
@@ -1123,9 +1125,10 @@ def expire_old(conn, max_age_sec: float, now: Optional[float] = None) -> int:
         (now, cutoff),
     )
     # 섀도 터치(재알림 방지용 전이만, 판정·통계 제외)도 수명이 다하면 만료 —
-    # 안 하면 영구 잔류하며 stats() 의 touched 집계를 오염 (2026-07-26 감사 minor8)
+    # 안 하면 영구 잔류하며 stats() 의 touched 집계를 오염 (2026-07-26 감사 minor8).
+    # expired_reason='shadow_touch' 를 기록해 untouched_expired(진짜 미터치)와 구분한다.
     cur2 = conn.execute(
-        "UPDATE levels SET status='expired', expired_at=? "
+        "UPDATE levels SET status='expired', expired_at=?, expired_reason='shadow_touch' "
         "WHERE status='touched' AND touched_at IS NULL AND collected_at < ?",
         (now, cutoff),
     )
@@ -1143,7 +1146,7 @@ def expire_levels_for_coin(conn, coin_symbol: str, reason: str,
        빼버리면 승패가 조용히 유실돼 적중 DB 가 오염된다. 상장폐지로 시세 조회가
        끊긴 건은 _judge_outcomes 의 기존 '판정불능 제외' 경로가 이미 처리한다.
     outcome 이 이미 확정된 건도 당연히 손대지 않는다(불변 스냅샷 원칙)."""
-    now = now or time.time()
+    now = now if now is not None else time.time()
     cur = conn.execute(
         "UPDATE levels SET status='expired', expired_at=?, expired_reason=? "
         "WHERE coin_symbol=? AND status IN ('watching','previewed')",

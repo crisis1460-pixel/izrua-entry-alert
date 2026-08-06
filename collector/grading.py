@@ -228,7 +228,10 @@ def calculate_grade(
 
 
 def meets_min_grade(grade: str, min_grade: str) -> bool:
-    return GRADE_ORDER.index(grade) <= GRADE_ORDER.index(min_grade)
+    try:
+        return GRADE_ORDER.index(grade) <= GRADE_ORDER.index(min_grade)
+    except ValueError:
+        return False
 
 
 def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[str, float, Optional[float]]:

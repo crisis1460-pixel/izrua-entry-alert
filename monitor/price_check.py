@@ -544,7 +544,10 @@ def run_once(now: float = None) -> dict:
                 return min([current] + lows)
 
             for cluster in _build_clusters(tlevels, cluster_band):
-                top_krw = cluster[0]["entry_usd"] * usdt_krw
+                _top_entry_usd = cluster[0].get("entry_usd") or 0
+                if not _top_entry_usd:
+                    continue
+                top_krw = _top_entry_usd * usdt_krw
                 touched = _eff_low(cluster[0]) <= top_krw
                 previewing = (not touched) and current <= top_krw * (1 + preview_band)
                 if not (touched or previewing):
@@ -984,6 +987,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
             db.record_ret(conn, lv["id"], "ret_24h", ret_pct)
         if lv.get("ret_72h") is None and 72 * 3600 <= elapsed <= 78 * 3600:
             db.record_ret(conn, lv["id"], "ret_72h", ret_pct)
+    conn.commit()  # 수익률 기록 즉시 확정 — 이후 예외 시 롤백 방지(6h 허용창 재기록 불가)
 
     # 판정창 만료 임박 순 정렬 — DB 순서(id순) 그대로 돌면 캔들 예산 고갈 시 뒤쪽
     # 티커가 매 회차 반복적으로 밀릴 수 있다(2026-07-26 재감사 minor10). run_once의
