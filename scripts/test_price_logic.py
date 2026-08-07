@@ -518,6 +518,46 @@ check("RPV4 렌더: 🌡️ 자리 줄이 52주 블록 뒤에 표시",
       "🌡️ 자리: 우호 (눌림목·일38)" in _msg_pos
       and _msg_pos.find("현재") < _msg_pos.find("🌡️"))
 
+# ── VR1~VR3: 판정 로깅 + 자가검증 집계 (2026-08-07) ─────────────────────────
+_VR_DB = "cache/_test_verdict.db"
+if os.path.exists(_VR_DB):
+    os.remove(_VR_DB)
+db.init_db(_VR_DB)
+with db.connect(_VR_DB) as conn:
+    _vr_ids = []
+    for i, (ret24, ret72) in enumerate([(3.0, 5.0), (1.0, 2.0), (-2.0, -1.0)]):
+        conn.execute(
+            "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
+            "entry_usd, status, collected_at, ret_24h, ret_72h) "
+            "VALUES (?,?,?,'long',1.0,'touched',?,?,?)",
+            (f"vr-{i}", "VRC", "KRW-VRC", now - 1000, ret24, ret72))
+        _vr_ids.append(conn.execute("SELECT last_insert_rowid() AS i").fetchone()[0])
+    # 앞 2건 우호, 뒤 1건 주의로 기록
+    db.record_touch_verdicts(conn, _vr_ids[:2], ("우호", "숏 몰림"), ("우호", "눌림목·일38"))
+    db.record_touch_verdicts(conn, _vr_ids[2:], ("주의", "롱 과열"), None)
+    # 재기록 시도(재발송 재현) — 최초 기록이 보존돼야 한다
+    db.record_touch_verdicts(conn, _vr_ids[:1], ("중립", ""), ("중립", ""))
+    _vr_first = conn.execute(
+        "SELECT touch_supply_verdict AS s, touch_position_verdict AS p "
+        "FROM levels WHERE id=?", (_vr_ids[0],)).fetchone()
+    _vs = db.get_verdict_stats(conn)
+check("VR1 판정 기록 - 최초 기록 우선(재발송이 덮어쓰지 않음)",
+      _vr_first["s"] == "우호|숏 몰림" and _vr_first["p"] == "우호|눌림목·일38")
+check("VR2 집계 - 라벨별 n·평균 24h/72h (position 미기록 건은 해당 축 제외)",
+      _vs["supply"]["우호"]["n"] == 2 and abs(_vs["supply"]["우호"]["avg24"] - 2.0) < 1e-9
+      and abs(_vs["supply"]["우호"]["avg72"] - 3.5) < 1e-9
+      and _vs["supply"]["주의"]["n"] == 1
+      and "주의" not in _vs["position"] and _vs["position"]["우호"]["n"] == 2)
+# VR3: 리포트 섹션 게이트 — 축 합계 n<10 생략, 충분하면 표시
+check("VR3 렌더 게이트 - n<10 축 생략 / 충분하면 판정 검증 섹션 표시",
+      tg._verdict_section(_vs) == []
+      and "🧭 판정 검증" in "\n".join(tg._verdict_section(
+          {"supply": {"우호": {"n": 8, "avg24": 2.5, "avg72": 4.0},
+                      "주의": {"n": 4, "avg24": -1.2, "avg72": -0.5}},
+           "position": {}})))
+if os.path.exists(_VR_DB):
+    os.remove(_VR_DB)
+
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
 # 넘겨서, 행이 늘면 정작 봐야 할 타점·가격이 밀린다. 지표는 계속 쌓이고 show_status

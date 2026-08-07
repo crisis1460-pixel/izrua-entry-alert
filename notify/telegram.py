@@ -680,6 +680,34 @@ def _holding_period_section(hold: dict) -> list:
     return lines
 
 
+_VERDICT_MIN_N = 10  # 축별 표본 게이트 — 이 미만이면 섹션에서 그 축 생략
+
+
+def _verdict_section(vs: dict) -> list:
+    """🧭 판정 검증 섹션 (2026-08-07 자가검증) — 터치 시점 수급/자리 판정별
+    실측 24h/72h 평균 수익률. 축별 표본 합이 _VERDICT_MIN_N 미만이면 그 축 생략,
+    두 축 다 미달이면 빈 목록(섹션 자체 생략). **표시 전용**."""
+    if not vs:
+        return []
+    lines = []
+    for axis, title in (("supply", "수급"), ("position", "자리")):
+        rows = vs.get(axis) or {}
+        total = sum(v["n"] for v in rows.values())
+        if total < _VERDICT_MIN_N:
+            continue
+        for label in ("우호", "중립", "주의"):
+            v = rows.get(label)
+            if not v:
+                continue
+            _a24 = f"{v['avg24']:+.1f}%" if v["avg24"] is not None else "-"
+            _a72 = f"{v['avg72']:+.1f}%" if v["avg72"] is not None else "-"
+            lines.append(f"  {title} {label}: n{v['n']} · 24h {_a24} / 72h {_a72}")
+    if not lines:
+        return []
+    return [_SEP, "🧭 판정 검증 (터치 시점 판정 → 실측 평균)"] + lines + [
+        "ℹ️ 표시 전용 — 판정 매트릭스·알림 필터에 영향 없음"]
+
+
 def render_weekly_report(rows_by_author: dict, now: float = None,
                          half_life_days: float = None, z: float = None,
                          prior_m: int = None, min_neff: float = None,
@@ -691,7 +719,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          reverse_confirmed: set = None,
                          r_distribution: dict = None,
                          r_distribution_by_grade: dict = None,
-                         holding_period: dict = None) -> str:
+                         holding_period: dict = None,
+                         verdict_stats: dict = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -746,6 +775,7 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         lines.extend(_calibration_section(calibration_result, calibration_legacy))
         lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
         lines.extend(_holding_period_section(holding_period))
+        lines.extend(_verdict_section(verdict_stats))
         lines.append(_SEP)
         return "\n".join(lines)
 
@@ -807,6 +837,7 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     # 등급 축과도 작성자 축과도 무관한 별도 관찰, 둘 다 표시 전용
     lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
     lines.extend(_holding_period_section(holding_period))
+    lines.extend(_verdict_section(verdict_stats))
 
     # ⑦ 안내: 표본부족 + 역신호 후보/확정
     if under_sample or n_anti or reverse_confirmed:

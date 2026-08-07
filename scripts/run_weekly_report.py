@@ -73,6 +73,9 @@ def send_report(db_path: str = None, now: float = None) -> bool:
         r_dist = distribution.r_multiple_distribution(r_rows)
         r_dist_by_grade = distribution.r_distribution_by_grade(r_rows)
         holding = distribution.holding_period_distribution(db.get_closed_holding_rows(conn))
+        # 판정 검증 (2026-08-07 자가검증) — 터치 시점 수급/자리 판정별 실측
+        # 수익률. 순수 조회, 표시 전용. 표본 미달이면 렌더러가 섹션 생략.
+        verdict_stats = db.get_verdict_stats(conn)
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
@@ -82,7 +85,8 @@ def send_report(db_path: str = None, now: float = None) -> bool:
                                          reverse_confirmed=reverse_confirmed,
                                          r_distribution=r_dist,
                                          r_distribution_by_grade=r_dist_by_grade,
-                                         holding_period=holding)
+                                         holding_period=holding,
+                                         verdict_stats=verdict_stats)
     ok = telegram.send(text)
 
     logger.info(

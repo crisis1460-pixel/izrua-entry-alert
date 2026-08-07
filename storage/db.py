@@ -233,6 +233,12 @@ _OUTCOME_COLUMNS = {
     # >1 이면 매수 잔량 우위. **순수 로깅 컬럼** - 알림·필터·등급 어디에도 쓰이지
     # 않는다. 나중에 outcome 과의 상관을 사후 분석하기 위한 원천 데이터.
     "touch_bid_ask_ratio": "REAL",
+    # 터치 알림에 표시된 판정 2종 (2026-08-07 자가검증) — "라벨|근거" 형식
+    # (예: "우호|숏 몰림", "주의|과열·일74·주66"). touch_bid_ask_ratio 와 동일한
+    # **순수 로깅 컬럼** — 알림·필터·등급 무관, 주간 리포트의 판정별 실측
+    # 수익률(ret_24h/72h) 검증에만 쓴다. 발송 성공 건에만 기록(표시=기록 일치).
+    "touch_supply_verdict": "TEXT",
+    "touch_position_verdict": "TEXT",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -1248,6 +1254,44 @@ def set_meta(conn, key: str, value: str) -> None:
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
+
+
+# ── 터치 판정 로깅 + 자가검증 집계 (2026-08-07) ──────────────────────────
+def record_touch_verdicts(conn, level_ids: list, supply, position) -> None:
+    """터치 알림에 표시된 수급/자리 판정을 레벨 행에 기록. (label, reason) 튜플
+    또는 None. 최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
+    if not level_ids:
+        return
+    ph = ",".join("?" * len(level_ids))
+    for col, v in (("touch_supply_verdict", supply),
+                   ("touch_position_verdict", position)):
+        if not v or not v[0]:
+            continue
+        val = f"{v[0]}|{v[1] or ''}"
+        conn.execute(
+            f"UPDATE levels SET {col}=? WHERE id IN ({ph}) AND {col} IS NULL",
+            (val, *level_ids),
+        )
+
+
+def get_verdict_stats(conn) -> dict:
+    """판정 라벨별 실측 수익률 집계 — 주간 리포트 '판정 검증' 섹션용.
+    반환 {"supply": {라벨: {n, avg24, avg72}}, "position": {...}}.
+    n 은 ret_24h 기록 완료 표본 수(24h 미도과 터치는 제외). 라벨은 저장값
+    "라벨|근거" 의 앞부분."""
+    out = {"supply": {}, "position": {}}
+    for axis, col in (("supply", "touch_supply_verdict"),
+                      ("position", "touch_position_verdict")):
+        for r in conn.execute(
+            f"""SELECT substr({col}, 1, instr({col}, '|') - 1) AS label,
+                       COUNT(*) AS n, AVG(ret_24h) AS avg24, AVG(ret_72h) AS avg72
+                FROM levels
+                WHERE {col} IS NOT NULL AND ret_24h IS NOT NULL
+                GROUP BY label""").fetchall():
+            if r["label"]:
+                out[axis][r["label"]] = {
+                    "n": r["n"], "avg24": r["avg24"], "avg72": r["avg72"]}
+    return out
 
 
 # ── OI 스냅샷 (2026-08-07 수급 판정) ─────────────────────────────────────

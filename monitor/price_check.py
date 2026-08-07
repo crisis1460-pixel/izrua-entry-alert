@@ -820,6 +820,11 @@ def run_once(now: float = None) -> dict:
                         # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
                         alert_ledger.append(db_path, coin, kind, ids, now)
+                        # 표시된 판정 2종 로깅 (2026-08-07 자가검증) — 터치 본알림만.
+                        # 발송 성공 직후에 기록해 "표시된 것만 기록" 불변식 유지.
+                        if touched:
+                            db.record_touch_verdicts(conn, ids, _snap_supply,
+                                                     _snap_position)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1
