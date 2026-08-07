@@ -287,14 +287,19 @@ def _sma(closes: list, period: int) -> Optional[float]:
 
 
 def fetch_position_data(market: str, timeout: float) -> dict:
-    """자리 판정 입력 일괄 조회 — RSI(일/주) + SMA(20/60/120/200).
+    """자리 판정 입력 일괄 조회 — RSI(일/주/4h) + SMA(20/60/120/200).
     일봉 1콜을 RSI 와 MA 가 공유(2026-08-08 MA 확장 — 추가 API 콜 0).
-    각 값은 실패/표본부족 시 None."""
+    4h RSI(2026-08-08, 극단 경고 오버레이용)는 별도 콜 — 회당 3콜(일/주/4h),
+    52주 조회와 동일하게 발송 확정건에만 부른다. 각 값은 실패/표본부족 시 None."""
     d = _fetch_closes(market, "days", 200, timeout)
     w = _fetch_closes(market, "weeks", 200, timeout)
+    # RSI(14) 최소 표본(15개) 확보용 여유(100개) — 업비트 4h(240분) 캔들 1콜 상한
+    # 200 안에서 넉넉히, 일/주봉처럼 최대치를 쓸 필요는 없다(추세 아닌 순간 경고용).
+    h4 = _fetch_closes(market, "minutes/240", 100, timeout)
     return {
         "rsi_d": _wilder_rsi(d) if d else None,
         "rsi_w": _wilder_rsi(w) if w else None,
+        "rsi_4h": _wilder_rsi(h4) if h4 else None,
         "ma20": _sma(d, 20), "ma60": _sma(d, 60),
         "ma120": _sma(d, 120), "ma200": _sma(d, 200),
     }
@@ -324,20 +329,10 @@ def _nearest_support(price, mas: dict):
     return (best[0], best[1]) if best else None
 
 
-def derive_position_verdict(rsi_d, rsi_w, price=None,
-                            ma20=None, ma60=None, ma120=None) -> tuple:
-    """일/주봉 RSI + MA(지지 근접·배열) → 매수 관점 '자리' 5단계 판정.
-
-    label ∈ '최적'/'우호'/'중립'/'주의'/'위험', reason 은 근거 토큰 최대 3개
-    (모바일 한 줄 유지). 2026-08-08 MA 확장 + 기준값 검토 반영:
-      · 최적 = 3박자(지지 근접 + 정배열 + RSI 조정권<=50) — 컨플루언스 관례
-      · 우호 = 2박자 또는 강한 단독 신호(바닥권<=30, 장기바닥)
-      · RSI 단독 눌림목(30~50)은 중립 — Cardwell 정설(30~40 은 추세이탈 경고
-        구간)에 따라 확인 신호 없는 눌림목을 우호로 올리지 않는다
-      · 역배열(20<60<120)은 강등: 조정권이면 주의(함정), 과열이면 위험
-      · 주봉 극단(>=70 위험 / <=30 장기바닥)은 종전대로 최우선
-    MA 인자 미전달(구 호출부·데이터 부족)이면 RSI 단독 판정으로 폴백.
-    입력 전부 None 이면 (None, None) — 호출부가 행을 생략한다."""
+def _base_position_verdict(rsi_d, rsi_w, price=None,
+                           ma20=None, ma60=None, ma120=None) -> tuple:
+    """derive_position_verdict 의 일/주봉+MA 기반 판정 본체.
+    4h 오버레이 적용 전 값 — derive_position_verdict 를 통해서만 호출할 것."""
     # 배열 판정 — 3선 전부 있을 때만 (표본 부족 신규상장은 혼조 취급)
     aligned_up = aligned_down = False
     if ma20 and ma60 and ma120:
@@ -386,6 +381,49 @@ def derive_position_verdict(rsi_d, rsi_w, price=None,
         return "중립", d_tok
     _al = "·정배열" if aligned_up else ""
     return "중립", f"상승중{_al}·{d_tok}"
+
+
+# 4h RSI 오버레이 (2026-08-08 사용자 결정: "극단값만 경고로 개입") — 일/주봉
+# 조합 결과에 참고만 하고, 4h 극단(>=70/<=30)일 때만 개입한다. 과열(>=70)은
+# 방금 단기 펌프가 났다는 뜻이라 우호성 판정을 한 단계 낮추는 경고로 작동
+# (최적→우호→중립, 이미 중립 이하면 등급은 그대로 두고 태그만 병기).
+# 급락(<=30)은 일/주봉 프레임의 '과매도=우호' 철학과 방향이 같아 등급은
+# 건드리지 않고 정보 태그만 붙인다(경고가 아니라 참고).
+_TIER_ORDER = ["최적", "우호", "중립", "주의", "위험"]
+RSI_4H_HOT = 70
+RSI_4H_COLD = 30
+
+
+def derive_position_verdict(rsi_d, rsi_w, price=None,
+                            ma20=None, ma60=None, ma120=None,
+                            rsi_4h=None) -> tuple:
+    """일/주봉 RSI + MA(지지 근접·배열) → 매수 관점 '자리' 5단계 판정
+    (+ 선택적 4h RSI 극단 경고 오버레이).
+
+    label ∈ '최적'/'우호'/'중립'/'주의'/'위험', reason 은 근거 토큰
+    (모바일 한 줄 유지 — 4h 오버레이 미발동 시 최대 3개). 2026-08-08
+    MA 확장 + 기준값 검토 반영:
+      · 최적 = 3박자(지지 근접 + 정배열 + RSI 조정권<=50) — 컨플루언스 관례
+      · 우호 = 2박자 또는 강한 단독 신호(바닥권<=30, 장기바닥)
+      · RSI 단독 눌림목(30~50)은 중립 — Cardwell 정설(30~40 은 추세이탈 경고
+        구간)에 따라 확인 신호 없는 눌림목을 우호로 올리지 않는다
+      · 역배열(20<60<120)은 강등: 조정권이면 주의(함정), 과열이면 위험
+      · 주봉 극단(>=70 위험 / <=30 장기바닥)은 종전대로 최우선
+      · rsi_4h(선택, 2026-08-08): >=70 이면 단기과열 경고 — 우호성 판정
+        (최적/우호) 을 한 단계 강등 + '4h과열' 태그. <=30 은 방향이 같은
+        신호라 강등 없이 '4h급락' 태그만.
+    MA 인자 미전달(구 호출부·데이터 부족)이면 RSI 단독 판정으로 폴백.
+    입력 전부 None 이면 (None, None) — 호출부가 행을 생략한다."""
+    label, reason = _base_position_verdict(rsi_d, rsi_w, price, ma20, ma60, ma120)
+    if label is None or rsi_4h is None:
+        return label, reason
+    if rsi_4h >= RSI_4H_HOT:
+        if label in ("최적", "우호"):
+            label = _TIER_ORDER[_TIER_ORDER.index(label) + 1]
+        reason = f"{reason}·4h과열" if reason else "4h과열"
+    elif rsi_4h <= RSI_4H_COLD:
+        reason = f"{reason}·4h급락" if reason else "4h급락"
+    return label, reason
 
 
 _RANGE_MAX_PAGES = 3  # 안전판 — 정상 유동성 마켓은 1페이지(1콜)로 끝난다

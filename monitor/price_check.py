@@ -771,7 +771,8 @@ def run_once(now: float = None) -> dict:
                             ticker, cfg_get("http_timeout_sec"))
                         _snap_position = upbit.derive_position_verdict(
                             _pd["rsi_d"], _pd["rsi_w"], price=current,
-                            ma20=_pd["ma20"], ma60=_pd["ma60"], ma120=_pd["ma120"])
+                            ma20=_pd["ma20"], ma60=_pd["ma60"], ma120=_pd["ma120"],
+                            rsi_4h=_pd["rsi_4h"])
                         if _snap_position[0] is None:
                             _snap_position = None
                         # 200일선 상/하 — 내부 축적 전용 (알림 무노출, 사용자 확정)
