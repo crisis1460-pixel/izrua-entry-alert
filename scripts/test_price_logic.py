@@ -3381,6 +3381,127 @@ check("MA200-1 record_touch_verdicts ma200_above 기록 + 최초값 보존",
 if os.path.exists(_MA200_DB):
     os.remove(_MA200_DB)
 
+# ── OS1~OS7: OI 급증 알림 (2026-08-08 사용자 결정) ─────────────────────────
+# 진입가 터치와 무관한 별도 알림 — _snapshot_oi 의 시간당 사이클에 얹혀 직전
+# 스냅샷 대비 변화율을 판정한다. 거래량 급증 알림과 같은 격식, 코인당 쿨다운.
+_OS_DB = "cache/_test_oi_spike.db"
+if os.path.exists(_OS_DB):
+    os.remove(_OS_DB)
+db.init_db(_OS_DB)
+with db.connect(_OS_DB) as conn:
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
+        "entry_usd, status, collected_at) VALUES "
+        "('os-1','OSC','KRW-OSC','long',1.0,'watching',?)", (now,))
+    conn.commit()
+
+
+def _os_map(oi_value):
+    return {"tickers": [{"symbol": "OSCUSDT", "funding_rate": 0.0,
+                         "open_interest_usd": oi_value}]}
+
+
+_os_prices = {"KRW-OSC": 5000.0}
+
+# OS1: 직전 스냅샷(1h 전, 1000) → 현재 1200 = +20% (임계 15% 초과) → 발동
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(1_200_000.0))})
+with db.connect(_OS_DB) as conn:
+    db.record_oi_snapshots(conn, [("OSC", 1_000_000.0)], now - 3600)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, now, settings.get, _os_prices)
+check("OS1 직전 대비 +20% 급증 → 알림 발동 + 렌더 포맷(단위·부호)",
+      len(sent_messages) == 1 and "[OI 급증]" in sent_messages[0]
+      and "+20.0%" in sent_messages[0] and "$1.2M" in sent_messages[0]
+      and "$1.0M" in sent_messages[0] and "5,000원" in sent_messages[0])
+
+# OS2: 쿨다운(기본 6h) 내 재급증 → 재발동 안 함
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(1_500_000.0))})
+with db.connect(_OS_DB) as conn:
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(now - 4000))  # 게이트 통과
+    db.record_oi_snapshots(conn, [("OSC", 1_200_000.0)], now - 100)  # 새 '직전' 값
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, now + 100, settings.get, _os_prices)
+check("OS2 쿨다운 내 재급증 - 재발동 안 함", len(sent_messages) == 0)
+
+# OS3: 쿨다운 경과 후 재급증 → 다시 발동
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(2_000_000.0))})
+_os_cooldown = settings.get("oi_spike_cooldown_hours") * 3600
+with db.connect(_OS_DB) as conn:
+    _t2 = now + 100 + _os_cooldown + 3700
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_t2 - 3700))
+    db.record_oi_snapshots(conn, [("OSC", 1_500_000.0)], _t2 - 100)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _t2, settings.get, _os_prices)
+check("OS3 쿨다운 경과 후 재급증 - 다시 발동", len(sent_messages) == 1)
+
+# OS4: 임계 미만 변화 → 발동 안 함
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(1_050_000.0))})
+with db.connect(_OS_DB) as conn:
+    _t3 = now + 900000
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_t3 - 3700))
+    db.record_oi_snapshots(conn, [("OSC", 1_000_000.0)], _t3 - 100)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _t3, settings.get, _os_prices)
+check("OS4 임계(15%) 미만 변화 - 발동 안 함", len(sent_messages) == 0)
+
+# OS5: 직전 스냅샷 없음(신규 감시 코인 첫 적재) → 비교 기준 없어 판정 보류,
+# 그래도 이번 값은 정상 적재(다음 회차 비교용 기준이 된다)
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(999_000.0))})
+_OS_DB2 = "cache/_test_oi_spike_fresh.db"
+if os.path.exists(_OS_DB2):
+    os.remove(_OS_DB2)
+db.init_db(_OS_DB2)
+with db.connect(_OS_DB2) as conn:
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
+        "entry_usd, status, collected_at) VALUES "
+        "('os-2','OSC','KRW-OSC','long',1.0,'watching',?)", (now,))
+    conn.commit()
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, now, settings.get, _os_prices)
+    _os5_n = conn.execute("SELECT COUNT(*) AS n FROM oi_history").fetchone()["n"]
+check("OS5 직전 스냅샷 없음(첫 적재) - 알림 보류하되 값은 적재",
+      len(sent_messages) == 0 and _os5_n == 1)
+if os.path.exists(_OS_DB2):
+    os.remove(_OS_DB2)
+
+# OS6: oi_spike_enabled=False → 임계 초과해도 무발동(적재는 계속)
+_saved_oi_spike = settings.SETTINGS["oi_spike_enabled"]
+settings.SETTINGS["oi_spike_enabled"] = False
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(3_000_000.0))})
+with db.connect(_OS_DB) as conn:
+    _t4 = now + 2000000
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_t4 - 3700))
+    db.record_oi_snapshots(conn, [("OSC", 2_000_000.0)], _t4 - 100)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _t4, settings.get, _os_prices)
+    _os6_n = conn.execute("SELECT COUNT(*) AS n FROM oi_history WHERE ts=?", (_t4,)).fetchone()["n"]
+check("OS6 설정 OFF - 급증해도 무발동하되 적재는 계속",
+      len(sent_messages) == 0 and _os6_n == 1)
+settings.SETTINGS["oi_spike_enabled"] = _saved_oi_spike
+
+# OS7: prices 미전달(구 호출부 호환) → 급증 검사 자체를 건너뜀(예외 없이)
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(5_000_000.0))})
+with db.connect(_OS_DB) as conn:
+    _t5 = now + 3000000
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_t5 - 3700))
+    db.record_oi_snapshots(conn, [("OSC", 3_000_000.0)], _t5 - 100)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _t5, settings.get, None)
+check("OS7 prices 미전달 - 예외 없이 급증검사만 생략(적재는 정상)",
+      len(sent_messages) == 0)
+
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+if os.path.exists(_OS_DB):
+    os.remove(_OS_DB)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)

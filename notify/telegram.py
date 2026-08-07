@@ -905,6 +905,33 @@ def render_volume_spike_alert(coin: str, multiplier: float,
     return "\n".join(lines)
 
 
+def _fmt_usd_notional(v: float) -> str:
+    """OI 명목가액(USD) 표기 — 억 단위(원화 전용 어휘)와 섞이지 않게
+    B(십억)/M(백만) 그대로 사용. 예: 4.83B / 210.5M."""
+    if v >= 1e9:
+        return f"${v / 1e9:.2f}B"
+    return f"${v / 1e6:.1f}M"
+
+
+def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
+                          pct: float, current_krw: float = None) -> str:
+    """OI(미결제약정) 급증 알림 (2026-08-08 사용자 결정) — 진입가 터치와
+    무관한 별도 이벤트. 거래량 급증 알림(render_volume_spike_alert)과 같은
+    격식의 독립 카드. OI 는 CoinGecko 가 이미 USD 로 주는 값이라 원화 환산
+    없이 그대로 표시(B/M 단위 — "억"은 원화 전용 어휘라 혼동 방지).
+    current_krw 는 참고용 현재가 한 줄, 없으면 생략."""
+    lines = [
+        _SEP,
+        f"📈 <b>[OI 급증]</b> <b>{html.escape(coin)}</b>",
+        f"    1시간 전 OI:  {_fmt_usd_notional(prev_oi_usd)}",
+        f"    현재 OI:      {_fmt_usd_notional(cur_oi_usd)}  ({pct:+.1f}%)",
+    ]
+    if current_krw:
+        lines.append(f"    현재가:       {current_krw:,.0f}원")
+    lines.append(_SEP)
+    return "\n".join(lines)
+
+
 # ── 역신호 확정/해제 경보 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──────
 # 기존 렌더러와 무관한 별도 함수 — 본알림(render_alert) 양식은 §4 불변. 중복 방지는
 # 호출부(scripts/run_cycle.py 스냅샷 훅)의 meta 확정 기록이 담당하고, 여긴 순수

@@ -999,7 +999,7 @@ def run_once(now: float = None) -> dict:
         # 게이트. CoinGecko 맵 1콜(모듈 캐시 공유)로 일괄 적재 + 48h 프룬.
         # 실패해도 회차 생존 — 수급 줄은 펀딩 단독 폴백으로 계속 나간다.
         try:
-            _snapshot_oi(conn, now)
+            _snapshot_oi(conn, now, cfg_get, prices)
         except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
             logger.warning("[체크] OI 스냅샷 실패(무시하고 진행): %s", e)
 
@@ -1409,10 +1409,17 @@ _META_LAST_OI_SNAP = "last_oi_snapshot_at"
 _OI_SNAP_INTERVAL_SEC = 3600.0  # 60분 — 24h 변화율 용도라 이보다 촘촘할 필요 없음
 
 
-def _snapshot_oi(conn, now: float) -> None:
+def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
     """활성(watching/previewed/touched) 레벨 코인의 OI 를 oi_history 에 주기 적재.
-    60분 게이트 — 2분 핫패스에서 회차당 호출되지만 실제 적재는 시간당 1회."""
+    60분 게이트 — 2분 핫패스에서 회차당 호출되지만 실제 적재는 시간당 1회.
+
+    OI 급증 알림 (2026-08-08 사용자 결정): 같은 시간당 사이클에서 직전
+    스냅샷 대비 변화율을 계산해 임계 초과 시 별도 발송 — 터치와 무관한
+    독립 이벤트. cfg_get/prices 미전달(구 호출부·테스트)이면 급증 검사만
+    건너뛰고 적재는 그대로 수행(하위 호환)."""
     from monitor import binance
+    from notify import telegram
+    cfg_get = cfg_get or settings.get
     last = db.get_meta(conn, _META_LAST_OI_SNAP)
     if last is not None:
         try:
@@ -1430,14 +1437,38 @@ def _snapshot_oi(conn, now: float) -> None:
     # 맵 자체 실패(None) 시 게이트를 갱신하지 않아 다음 회차(2분 뒤) 재시도 —
     # 시간당 1회 원칙보다 적재 연속성 우선. 미상장 코인만 있는 경우(rows 빈)는
     # 정상 처리로 보고 게이트를 갱신한다.
-    cg_map = binance._coingecko_binance_funding_map(settings.get("http_timeout_sec"))
+    cg_map = binance._coingecko_binance_funding_map(cfg_get("http_timeout_sec"))
     if cg_map is None:
         return
+    spike_pct = cfg_get("oi_spike_pct") or 15.0
+    cooldown_sec = (cfg_get("oi_spike_cooldown_hours") or 6.0) * 3600
+    spike_on = cfg_get("oi_spike_enabled") and prices is not None
     rows = []
     for c in coins:
         oi = (cg_map.get(f"{c.upper()}USDT") or {}).get("oi")
-        if oi:
-            rows.append((c, oi))
+        if not oi:
+            continue
+        rows.append((c, oi))
+        if not spike_on:
+            continue
+        # 직전 스냅샷은 이번 회차 INSERT **전**에 조회해야 자기 자신과 비교하지
+        # 않는다 (record_oi_snapshots 는 rows 를 이 루프 뒤 일괄 삽입).
+        try:
+            prev = db.get_prev_oi_snapshot(conn, c, now)
+            if not prev:
+                continue  # 첫 스냅샷 — 비교 기준 없음, 급증 판정 보류
+            pct = (oi - prev) / prev * 100
+            if abs(pct) < spike_pct:
+                continue
+            last_alert = db.get_oi_spike_last_alert(conn, c)
+            if last_alert is not None and now - last_alert < cooldown_sec:
+                continue
+            cur_krw = prices.get(f"KRW-{c}")
+            text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw)
+            if telegram.send(text, urgency="low"):
+                db.record_oi_spike_alert(conn, c, now)
+        except Exception as e:  # noqa: BLE001 - 급증 알림 실패가 스냅샷 적재를 막으면 안 됨
+            logger.warning("[체크] %s OI 급증 판정 실패(무시): %s", c, e)
     if rows:
         db.record_oi_snapshots(conn, rows, now)
     db.set_meta(conn, _META_LAST_OI_SNAP, str(now))

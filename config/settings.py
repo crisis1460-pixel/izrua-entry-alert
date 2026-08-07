@@ -268,6 +268,14 @@ SETTINGS = {
     "volume_spike_min_krw_60m": 200_000_000,
     "volume_spike_watch_hours": 72,        # 터치 후 이 시간(3일) 동안만 감시, 초과 시 만료
 
+    # OI(미결제약정) 급증 알림 (2026-08-08 사용자 결정) — 진입가 터치와 무관한
+    # 별도 알림. oi_history 시간당 스냅샷(수급 판정용, 08-07 도입)을 그대로
+    # 재사용 — 추가 API 콜 0. 1시간 전 대비 변화율이 임계 이상이면 발동, 코인당
+    # 쿨다운 내 재발동 금지(같은 급증 구간에서 매시 반복 스팸 방지).
+    "oi_spike_enabled": True,
+    "oi_spike_pct": 15.0,           # 1h 전 대비 |변화율| 이 이상이면 급증 판정
+    "oi_spike_cooldown_hours": 6.0,  # 코인당 재발동 최소 간격
+
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
     "universe_cache_path": "data/universe.json",

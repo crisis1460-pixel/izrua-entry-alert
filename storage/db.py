@@ -180,6 +180,13 @@ CREATE INDEX IF NOT EXISTS idx_oi_history ON oi_history (coin_symbol, ts);
 -- (2026-08-08 재검토) — record_oi_snapshots 호출마다 전체 스캔이 되지 않게
 -- ts 단독 인덱스를 별도로 둔다. 조회(get_oi_baseline)는 위 복합 인덱스 그대로 사용.
 CREATE INDEX IF NOT EXISTS idx_oi_history_ts ON oi_history (ts);
+
+-- OI 급증 알림 쿨다운 상태 (2026-08-08) — 코인당 마지막 발동 시각 1행.
+-- volume_watch 처럼 이벤트별 등록이 아니라 코인당 상시 1행(재발동마다 UPDATE).
+CREATE TABLE IF NOT EXISTS oi_spike_state (
+    coin_symbol   TEXT PRIMARY KEY,
+    last_alert_at REAL NOT NULL
+);
 """
 
 
@@ -1340,6 +1347,34 @@ def get_oi_baseline(conn, coin_symbol: str, now: Optional[float] = None):
         (coin_symbol, lo, hi, now - 24 * 3600),
     ).fetchone()
     return row["oi_usd"] if row else None
+
+
+def get_prev_oi_snapshot(conn, coin_symbol: str, before_ts: float):
+    """OI 급증 판정용 — before_ts 이전 가장 최근 스냅샷(직전 시간당 값).
+    없으면 None(첫 스냅샷·신규 감시 코인 — 급증 판정 보류)."""
+    row = conn.execute(
+        "SELECT oi_usd FROM oi_history WHERE coin_symbol=? AND ts < ? "
+        "ORDER BY ts DESC LIMIT 1",
+        (coin_symbol, before_ts),
+    ).fetchone()
+    return row["oi_usd"] if row else None
+
+
+def get_oi_spike_last_alert(conn, coin_symbol: str):
+    """이 코인의 마지막 OI 급증 알림 시각. 없으면 None."""
+    row = conn.execute(
+        "SELECT last_alert_at FROM oi_spike_state WHERE coin_symbol=?",
+        (coin_symbol,),
+    ).fetchone()
+    return row["last_alert_at"] if row else None
+
+
+def record_oi_spike_alert(conn, coin_symbol: str, now: float) -> None:
+    conn.execute(
+        "INSERT INTO oi_spike_state (coin_symbol, last_alert_at) VALUES (?,?) "
+        "ON CONFLICT(coin_symbol) DO UPDATE SET last_alert_at=excluded.last_alert_at",
+        (coin_symbol, now),
+    )
 
 
 def stats(conn) -> dict:
