@@ -137,22 +137,29 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
 ━━━━━━━━━━━━━━━━━━━━
 타점 (현재/진입/목표/거래순위)
 52주 (고가/저가/위치바)
+🌡️ 자리: 우호 (60일지지·정배열·일38)  ← RSI+MA 5단계 판정(08-08). 52주 블록 아래.
 ━━━━━━━━━━━━━━━━━━━━
-💰 펀딩 +0.05% (매수 자제)     ← 롱 과열 / 숏 과열=(매수 우호) / 그 외=(중립)
+🧭 수급: 우호 (숏 몰림)         ← 펀딩×OI 합성 판정(08-07). 옛 "💰 펀딩" 줄 대체.
 🔥 32일 음수→양수              ← 레짐 전환 감지 시에만 (스프린트08)
 ❄️ 김프 -0.13%
 🌍 BTC.D 56.6% · 🪙 ALT.S 32 · 😨 F&G 28
 ━━━━━━━━━━━━━━━━━━━━
 🔗 출처 링크
 ```
+- 🌡️ 자리 5단계: 최적/우호/중립/주의/위험 (monitor/upbit.py derive_position_verdict)
+- 🧭 수급 3단계: 우호/중립/주의 (monitor/binance.py derive_supply_verdict)
+- 펀딩 데이터는 Binance 직접→CoinGecko(Binance 원본)→Bybit→OKX 폴백 (08-07,
+  Actions 미국 IP 가 Binance/Bybit 선물 직접 차단 — CoinGecko 가 사실상 주 경로)
+- 터치 시점 판정(수급/자리/200일선상하)은 **내부 축적 전용** — 알림·리포트
+  어디에도 미노출(사용자 확정, storage.db.record_touch_verdicts/get_verdict_stats)
 **손절 행(📐 SL·R:R) 완전 삭제**(2026-08-03 사용자 결정) — SL 은 판정 엔진 내부
 기준선으로만 사용, 알림엔 절대 노출 안 함. rep.sl_usd/rr 은 등급·판정에 계속 반영.
 사용자 스타일: 스윙 트레이더로 손절 비중시 — SL 감점류 기능 제안 금지.
 
 ## 5. 검증 (신뢰 기준선)
 
-- **테스트 7종** — extractor / grading / price_logic / ranking / weekly_report / cycle /
-  show_status. **push 전 필수**, 2026-07-26부터 **CI(tests.yml)에서 자동 실행**
+- **테스트 8종** — extractor / grading / price_logic / ranking / weekly_report / cycle /
+  show_status / resilience. **push 전 필수**, 2026-07-26부터 **CI(tests.yml)에서 자동 실행**
   (파일별 독립 프로세스 — settings 전역 오염 때문에 한 프로세스에 모으면 안 됨)
 - 감사 이력: 07-24 전수감사 15건 + major3/minor2, 07-26 재감사(major3+minor7),
   07-26 밤 당일배포 전수감사(MAJOR 3건 — 2건 즉시 수정, 1건 시간 경과 대기)

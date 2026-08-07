@@ -176,6 +176,10 @@ CREATE TABLE IF NOT EXISTS oi_history (
     ts          REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oi_history ON oi_history (coin_symbol, ts);
+-- 프룬 쿼리(DELETE WHERE ts < ?)는 coin_symbol 선행 복합 인덱스를 못 쓴다
+-- (2026-08-08 재검토) — record_oi_snapshots 호출마다 전체 스캔이 되지 않게
+-- ts 단독 인덱스를 별도로 둔다. 조회(get_oi_baseline)는 위 복합 인덱스 그대로 사용.
+CREATE INDEX IF NOT EXISTS idx_oi_history_ts ON oi_history (ts);
 """
 
 
@@ -1270,7 +1274,11 @@ def record_touch_verdicts(conn, level_ids: list, supply, position,
     ph = ",".join("?" * len(level_ids))
     for col, v in (("touch_supply_verdict", supply),
                    ("touch_position_verdict", position)):
-        if not v or not v[0]:
+        # 2026-08-08 재검토: 길이 검증 없이 v[1] 을 바로 읽으면 1원소
+        # 튜플/리스트가 들어올 때 IndexError — send_ok 경로 예외는 그 회차의
+        # 다른 미커밋 작업까지 통째로 롤백시킨다(위 자체성적 블록과 동일 위험군).
+        # 계약 위반 입력은 이 로깅 전용 기능만 조용히 건너뛴다.
+        if not v or len(v) < 2 or not v[0]:
             continue
         val = f"{v[0]}|{v[1] or ''}"
         conn.execute(

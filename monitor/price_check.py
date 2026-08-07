@@ -722,29 +722,41 @@ def run_once(now: float = None) -> dict:
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
-                    for lv in cluster:
-                        st = db.get_author_self_stats(conn, lv.get("author"))
-                        lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
-                        lv["author_touched_n"] = st["touched"]
-                        lv["author_untouched_expired"] = st["untouched_expired"]
-                        # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →
-                        # n_eff≥5. 최신성 가중 유효표본 — 데이터가 젊은 동안은 raw 동일)
-                        # + 역신호 경고용 E_LB (2026-07-27). 주간 리포트·show_status 가
-                        # 쓰는 것과 같은 analytics.ranking.author_metrics 를 그대로 부른다
-                        # — 지표를 알림에서 따로 재구현하면 두 화면이 갈린다.
-                        # get_author_outcome_rows 의 필터(outcome·touched_at NOT NULL)가
-                        # author_metrics 내부 outc 필터와 동일해 neff_win 은 종전 값과 같다.
-                        hl = cfg_get("rank_half_life_days")
-                        _met = ranking.author_metrics(
-                            db.get_author_outcome_rows(conn, lv.get("author")), now, hl)
-                        lv["author_self_neff"] = _met["neff_win"]
-                        lv["author_self_neff_r"] = _met["neff_r"]
-                        lv["author_self_e_lb"] = _met["e_lb"]
-                        lv["author_rank_min_neff"] = cfg_get("rank_min_neff")
-                    # 대표 저자 평균 보유기간 주입 (표본 3건↑일 때만 표시)
-                    _hold = db.get_author_avg_holding_days(conn, rep.get("author"))
-                    if _hold is not None:
-                        rep["author_avg_holding_days"] = _hold
+                    # 2026-08-08 재검토(전체 감사): 아래 3개 DB 조회에 예외 격리가
+                    # 빠져 있었다 — 바로 위 author_closed_stats 블록·바로 아래
+                    # binance/upbit 조회는 전부 try/except 로 감싸는데 이 블록만
+                    # 예외였다. 이 시점(send_ok=True)의 예외는 connect() 의 with
+                    # 블록을 그대로 빠져나가 commit 없이 종료 → 이번 회차에서 이미
+                    # 처리한 다른 티커의 터치·알림·daily_stats 까지 통째로 롤백되는
+                    # 최악의 실패 모드였다. 실패해도 발송 자체는 계속 — 표시값만
+                    # 미주입(렌더러가 자체 표시 게이트로 알아서 생략).
+                    try:
+                        for lv in cluster:
+                            st = db.get_author_self_stats(conn, lv.get("author"))
+                            lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
+                            lv["author_touched_n"] = st["touched"]
+                            lv["author_untouched_expired"] = st["untouched_expired"]
+                            # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →
+                            # n_eff≥5. 최신성 가중 유효표본 — 데이터가 젊은 동안은 raw 동일)
+                            # + 역신호 경고용 E_LB (2026-07-27). 주간 리포트·show_status 가
+                            # 쓰는 것과 같은 analytics.ranking.author_metrics 를 그대로 부른다
+                            # — 지표를 알림에서 따로 재구현하면 두 화면이 갈린다.
+                            # get_author_outcome_rows 의 필터(outcome·touched_at NOT NULL)가
+                            # author_metrics 내부 outc 필터와 동일해 neff_win 은 종전 값과 같다.
+                            hl = cfg_get("rank_half_life_days")
+                            _met = ranking.author_metrics(
+                                db.get_author_outcome_rows(conn, lv.get("author")), now, hl)
+                            lv["author_self_neff"] = _met["neff_win"]
+                            lv["author_self_neff_r"] = _met["neff_r"]
+                            lv["author_self_e_lb"] = _met["e_lb"]
+                            lv["author_rank_min_neff"] = cfg_get("rank_min_neff")
+                        # 대표 저자 평균 보유기간 주입 (표본 3건↑일 때만 표시)
+                        _hold = db.get_author_avg_holding_days(conn, rep.get("author"))
+                        if _hold is not None:
+                            rep["author_avg_holding_days"] = _hold
+                    except Exception as e:  # noqa: BLE001 - 회차 생존(커밋 보존) 최우선
+                        logger.warning("[체크] %s 자체 성적 조회 실패(표시값 없이 진행): %s",
+                                       coin, e)
                     # 52주 고저 + 김프 + 펀딩비는 발송 확정건에만 조회
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))

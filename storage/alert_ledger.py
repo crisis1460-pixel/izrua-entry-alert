@@ -139,7 +139,7 @@ def merge_files(*paths: str, out_path: str, keep_sec: float = 7 * 86400,
 
     keep_sec 이전 줄은 버린다 — 원장은 재발송 차단(_RESEND_BLOCK_SEC=10분)에만
     쓰이므로 7일이면 차고 넘치고, 안 지우면 파일이 무한히 자란다."""
-    cutoff = (now or time.time()) - keep_sec
+    cutoff = (now if now is not None else time.time()) - keep_sec
     merged = {}
     for p in paths:
         merged.update(_load(p))

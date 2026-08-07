@@ -3184,7 +3184,9 @@ class _BnResp:
 def _bn_get_factory(by_host):
     calls = []
 
-    def _get(url, params=None, timeout=None):
+    def _get(url, params=None, timeout=None, **_kw):
+        # **_kw (2026-08-08): CoinGecko 경로가 headers= 를 추가로 넘긴다 —
+        # 나머지 경로와 시그니처를 공유하기 위해 무시하고 받기만 한다.
         calls.append(url)
         for host, resp in by_host.items():
             if host in url:
@@ -3257,6 +3259,127 @@ check("FR3 min_neg_days=14 로 낮추면 통과",
 # 전부 0(무편향)인 창 + 미세 양수 latest → False positive 방지 (2026-08-04 R2 감사)
 check("FR4 전부 0 창은 하락 편향 아님 → None",
       _reg([0.0]*(30*3) + [0.001], min_neg_days=30) is None)
+
+# ── OI1~OI5 / CG1~CG2: 2026-08-08 재검토 커버리지 공백 메우기 ─────────────
+# (교차감사 발견: OI 스냅샷 게이트·get_oi_baseline 경계·CoinGecko 캐시 히트·
+#  record_touch_verdicts 의 ma200_above 파라미터가 전부 무테스트였음)
+
+# get_oi_baseline 경계값 — 18h/30h 창 정확히 걸치는 지점 + 창 밖은 None
+_OI_DB = "cache/_test_oi_baseline.db"
+if os.path.exists(_OI_DB):
+    os.remove(_OI_DB)
+db.init_db(_OI_DB)
+_oi_now = now
+with db.connect(_OI_DB) as conn:
+    db.record_oi_snapshots(conn, [("OIC", 1000.0)], _oi_now - 24 * 3600)   # 정확히 24h 전
+    db.record_oi_snapshots(conn, [("OIC", 1100.0)], _oi_now - 18 * 3600)   # 창 상단 경계(포함)
+    db.record_oi_snapshots(conn, [("OIC", 900.0)], _oi_now - 30 * 3600)    # 창 하단 경계(포함)
+    db.record_oi_snapshots(conn, [("OIC", 500.0)], _oi_now - 31 * 3600)    # 창 밖(30h 초과)
+    db.record_oi_snapshots(conn, [("OIC", 1200.0)], _oi_now - 17 * 3600)   # 창 밖(18h 미만)
+    _base_exact = db.get_oi_baseline(conn, "OIC", _oi_now)
+    _base_none = db.get_oi_baseline(conn, "OINONE", _oi_now)
+check("OI1 get_oi_baseline: 24h 정확히 일치하는 스냅샷을 최우선 선택",
+      _base_exact == 1000.0)
+check("OI2 get_oi_baseline: 스냅샷 자체가 없는 코인은 None",
+      _base_none is None)
+with db.connect(_OI_DB) as conn:
+    conn.execute("DELETE FROM oi_history")
+    db.record_oi_snapshots(conn, [("OIC2", 700.0)], _oi_now - 18 * 3600)   # 경계 포함 확인
+    _base_edge_hi = db.get_oi_baseline(conn, "OIC2", _oi_now)
+    conn.execute("DELETE FROM oi_history")
+    db.record_oi_snapshots(conn, [("OIC3", 800.0)], _oi_now - 30 * 3600)   # 경계 포함 확인
+    _base_edge_lo = db.get_oi_baseline(conn, "OIC3", _oi_now)
+check("OI3 창 경계(정확히 18h/30h)는 포함(BETWEEN 양끝단)",
+      _base_edge_hi == 700.0 and _base_edge_lo == 800.0)
+if os.path.exists(_OI_DB):
+    os.remove(_OI_DB)
+
+# record_oi_snapshots 프룬 — 48h 보존기간 밖은 삭제
+_OI_DB2 = "cache/_test_oi_prune.db"
+if os.path.exists(_OI_DB2):
+    os.remove(_OI_DB2)
+db.init_db(_OI_DB2)
+with db.connect(_OI_DB2) as conn:
+    db.record_oi_snapshots(conn, [("OIP", 1.0)], now - 50 * 3600)  # 48h 보존 밖 → 프룬 대상
+    db.record_oi_snapshots(conn, [("OIP", 2.0)], now)  # 이 호출이 프룬을 트리거
+    _remaining = conn.execute("SELECT COUNT(*) AS n FROM oi_history").fetchone()["n"]
+check("OI4 48h 보존기간 밖 스냅샷은 다음 적재 시 프룬", _remaining == 1)
+if os.path.exists(_OI_DB2):
+    os.remove(_OI_DB2)
+
+# _snapshot_oi 60분 게이트 — 재호출 시 실제 적재 스킵 + 실패 시 게이트 미갱신(재시도)
+_OI_DB3 = "cache/_test_oi_gate.db"
+if os.path.exists(_OI_DB3):
+    os.remove(_OI_DB3)
+db.init_db(_OI_DB3)
+with db.connect(_OI_DB3) as conn:
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd, status, collected_at) "
+        "VALUES ('oig-1','OIG','KRW-OIG','long',1.0,'watching',?)", (now,))
+    conn.commit()
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({
+    "coingecko.com": _BnResp(200, {"tickers": [
+        {"symbol": "OIGUSDT", "open_interest_usd": 12345.0}]}),
+})
+with db.connect(_OI_DB3) as conn:
+    price_check._snapshot_oi(conn, now)  # 최초 호출 — 적재 + 게이트 기록
+    _n1 = conn.execute("SELECT COUNT(*) AS n FROM oi_history").fetchone()["n"]
+    price_check._snapshot_oi(conn, now + 600)  # 10분 후 재호출 — 게이트 안에 있어 스킵
+    _n2 = conn.execute("SELECT COUNT(*) AS n FROM oi_history").fetchone()["n"]
+check("OI5a 60분 게이트 - 재호출이 게이트 안이면 추가 적재 없음", _n1 == 1 and _n2 == 1)
+# CoinGecko 맵 자체가 실패(None)하면 게이트를 갱신하지 않아 다음 회차 재시도돼야 한다
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(500)})
+with db.connect(_OI_DB3) as conn:
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(now + 601))  # 게이트 강제 통과 위치로
+    price_check._snapshot_oi(conn, now + 4000)  # 게이트 밖 + 맵 실패
+    _gate_after_fail = db.get_meta(conn, price_check._META_LAST_OI_SNAP)
+check("OI5b CoinGecko 맵 실패 시 게이트 미갱신(다음 회차 재시도 보장)",
+      _gate_after_fail == str(now + 601))
+if os.path.exists(_OI_DB3):
+    os.remove(_OI_DB3)
+
+# CoinGecko TTL 캐시 — TTL 이내 재호출은 실제 HTTP 콜 없이 캐시 반환
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_cg_calls = _bn_get_factory({
+    "coingecko.com": _BnResp(200, {"tickers": [
+        {"symbol": "CGCUSDT", "funding_rate": 0.01, "open_interest_usd": 999.0}]}),
+})
+_requests_mod.get = _cg_calls
+_m1 = _binance._coingecko_binance_funding_map(5.0)
+_calls_after_first = len(_cg_calls.calls)
+_m2 = _binance._coingecko_binance_funding_map(5.0)  # TTL(180s) 이내 — 캐시 히트
+_calls_after_second = len(_cg_calls.calls)
+check("CG1 TTL 캐시 - TTL 이내 재호출은 실제 HTTP 콜 없이 동일 데이터 반환",
+      _calls_after_first == 1 and _calls_after_second == 1 and _m1 == _m2)
+# TTL 만료 후에는 재호출되어야 한다(캐시 타임스탬프를 과거로 되돌려 시뮬레이션)
+_binance._cg_funding_cache["ts"] -= (_binance._CG_FUNDING_TTL_SEC + 1)
+_m3 = _binance._coingecko_binance_funding_map(5.0)
+check("CG2 TTL 만료 후 재호출 - 새 HTTP 콜 발생", len(_cg_calls.calls) == 2 and _m3 is not None)
+_binance._cg_funding_cache.update(ts=0.0, map=None)  # 다음 테스트 오염 방지
+
+# record_touch_verdicts 의 ma200_above 파라미터 — VR1/VR2 는 이 인자 없이 호출했었다
+_MA200_DB = "cache/_test_ma200_verdict.db"
+if os.path.exists(_MA200_DB):
+    os.remove(_MA200_DB)
+db.init_db(_MA200_DB)
+with db.connect(_MA200_DB) as conn:
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd, status, collected_at) "
+        "VALUES ('m200-1','M2C','KRW-M2C','long',1.0,'touched',?)", (now,))
+    _m200_id = conn.execute("SELECT last_insert_rowid() AS i").fetchone()[0]
+    db.record_touch_verdicts(conn, [_m200_id], None, None, ma200_above=1)
+    _m200_val = conn.execute(
+        "SELECT touch_ma200_above FROM levels WHERE id=?", (_m200_id,)).fetchone()[0]
+    # 최초 기록 우선 — 재기록 시도(0)는 무시되고 1 그대로 보존
+    db.record_touch_verdicts(conn, [_m200_id], None, None, ma200_above=0)
+    _m200_after_retry = conn.execute(
+        "SELECT touch_ma200_above FROM levels WHERE id=?", (_m200_id,)).fetchone()[0]
+check("MA200-1 record_touch_verdicts ma200_above 기록 + 최초값 보존",
+      _m200_val == 1 and _m200_after_retry == 1)
+if os.path.exists(_MA200_DB):
+    os.remove(_MA200_DB)
 
 print()
 print("── 본알림 실제 렌더링 ──")

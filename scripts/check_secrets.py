@@ -48,8 +48,13 @@ UPBIT_ASSIGN = re.compile(
     r"(?i)UPBIT_(?:ACCESS|SECRET)_KEY\s*[=:]\s*['\"]?[A-Za-z0-9]{30,}"
 )
 # 일반 대입형 시크릿(길이 20+ 무작위값이 KEY/TOKEN/SECRET 변수에 하드코딩)
+# 2026-08-08 재검토: 값을 따옴표로 감싼 형태만 잡았다 — YAML 은 값에 따옴표가
+# 필수가 아니라(`token: abc123...`) .py 밖 설정 파일 유출을 놓쳤다. 값 부분을
+# 따옴표 유무 양쪽 다 잡게 확장. (bare "key" 변수명 추가도 검토했으나 SQL
+# `WHERE key='...'` 같은 meta 테이블 컬럼 리터럴과 충돌해 오탐 — 보류.)
 GENERIC_ASSIGN = re.compile(
-    r"(?i)(?:api_?key|secret|token|password|passwd)\s*[=:]\s*['\"][A-Za-z0-9_\-]{20,}['\"]"
+    r"(?i)(?:api_?key|secret|token|password|passwd)\s*[=:]\s*"
+    r"['\"]?[A-Za-z0-9_\-]{20,}['\"]?"
 )
 # 견본 파일이 쓰는 한글 플레이스홀더는 오탐이므로 제외
 PLACEHOLDER_HINT = re.compile(r"여기에|placeholder|your_|xxxx|<.*>|example", re.IGNORECASE)
