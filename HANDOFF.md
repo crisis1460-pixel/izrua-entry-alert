@@ -112,7 +112,7 @@ Actions 는 전부 success 로 보여 3일간 아무도 몰랐다. → **라이�
 - **타임프레임 필터**(2026-08-02 스프린트07): `alert_min_timeframe_hours=4.0` — 이 미만
   아이디어는 알림 억제(`suppressed_timeframe`). NULL(미명시) + 0(파서 이상)은 통과 —
   08-03 R1 감사로 0 케이스도 NULL 취급하도록 방어 추가(로컬 미커밋 상태).
-- **펀딩 레짐 전환**(2026-08-03 스프린트08): Binance/Bybit 8h 히스토리 30일 조회 →
+- **펀딩 레짐 전환**(2026-08-03 스프린트08): Binance/Bybit/OKX 8h 히스토리 30일 조회(08-07 OKX 3차 폴백 — Actions 미국 IP 가 Binance·Bybit 선물 차단) →
   min_neg_days*3 연속 <=0 후 최근 >0 이면 flipped 판정 → 알림에 "🔥 N일 음수→양수" 배지.
   등급 산식엔 영향 없음(배지만). `binance.fetch_funding_history` / `detect_funding_regime_flip`.
 - **역신호 확정**(2026-08-01 S9 구현): 주간 스냅샷 2주 연속 neff_r≥5 & E_LB<0

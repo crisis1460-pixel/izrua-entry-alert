@@ -485,11 +485,15 @@ def parse_setup(text: str, current_price: Optional[float] = None,
                 # 같은 기준으로 맞춘다 — 안 그러면 CFX 케이스처럼 entry 아래인
                 # Target 1(sanity 탈락, 실제 목표에서 제외됨)까지 단계 수에 세어
                 # "1/3단계"로 표시되는데 실제 유효 목표는 2개뿐인 불일치가 생겼다.
-                _firsts = {v[0] for v in tps if v and _lo <= v[0] <= _hi
+                # v[-1] 기준 (2026-08-07 재검토): tp 선정(grp[-1])·tps_all 과 동일
+                # 끝값으로 통일 — 범위형 스펙(TP1: 5.0~5.5)에서 하한(v[0])은 entry
+                # 아래라 방향 필터에 걸리는데 상한(v[-1])은 tps_all 에 살아남아
+                # "1/N단계" 표시와 감시 목록 개수가 어긋나던 불일치 제거.
+                _lasts = {v[-1] for v in tps if v and _lo <= v[-1] <= _hi
                           and (entry is None
-                               or (v[0] > entry if direction == "long" else v[0] < entry))}
-                if 1 < len(_firsts) <= _LADDER_MAX_STEPS:
-                    tp_ladder_count = len(_firsts)
+                               or (v[-1] > entry if direction == "long" else v[-1] < entry))}
+                if 1 < len(_lasts) <= _LADDER_MAX_STEPS:
+                    tp_ladder_count = len(_lasts)
 
     # 전체 TP 목표가 목록 — 가장 가까운 것부터 먼 것 순. B안 필터에서 "마지막 TP가
     # 스윙급(5%+)인가"를 판단하는 데 쓴다. tp 가 sanity 로 폐기됐으면 전체를 비운다

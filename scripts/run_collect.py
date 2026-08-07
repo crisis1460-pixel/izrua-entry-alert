@@ -278,7 +278,11 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "author_followers": followers,
             "author_hit_rate": stats_row.get("hit_rate"),
             "author_hit_count": stats_row.get("hit_count"),
-            "author_whitelisted": stats_row.get("whitelisted", False),
+            # author_stats 전체가 비면(토큰 없음/아티팩트 로드 실패) '알 수 없음' —
+            # None 을 흘려 upsert COALESCE 가 기존 값을 보존한다. 로드 성공 시 부재
+            # 작성자는 진짜 비화이트(False → 0 확정). (2026-08-07 재검토 C1 재수정)
+            "author_whitelisted": (stats_row.get("whitelisted", False)
+                                   if author_stats else None),
             "mcap_rank": coin.get("rank"),
             "mcap_tier_icon": coin.get("tier_icon"),
             "post_url": idea.get("url"),

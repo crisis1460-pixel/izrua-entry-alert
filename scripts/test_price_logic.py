@@ -1701,6 +1701,15 @@ check("EX1 늦게 주운 글(게시 10.6일)도 수집 4일이면 감시 유지 
 check("EX2 수집 후 8일 지나면 만료", _ex_st[_ex_stale] == "expired")
 check("EX3 게시 시각 결측이어도 수집 기준으로 동일 판단", _ex_st[_ex_null] == "watching")
 check("EX4 섀도 터치도 수집 기준으로 만료", _ex_st[_ex_shadow] == "expired")
+# EX4b (2026-08-07 재검토 I2 회귀): 섀도 터치 만료는 expired_reason='shadow_touch'
+# 마커가 남아야 한다 — get_author_self_stats 의 untouched_expired 집계에서 이 행을
+# 제외하는 근거 컬럼. 일반 만료(EXSTALE)는 마커 없이(NULL) 남는다.
+with db.connect(TEST_DB) as conn:
+    _ex_reasons = {r[0]: r[1] for r in conn.execute(
+        "SELECT id, expired_reason FROM levels WHERE id IN (?,?)",
+        (_ex_stale, _ex_shadow)).fetchall()}
+check("EX4b 섀도 만료엔 shadow_touch 마커, 일반 만료엔 NULL",
+      _ex_reasons[_ex_shadow] == "shadow_touch" and _ex_reasons[_ex_stale] is None)
 
 # ── SS1~SS6: 자체 승률의 분자·분모는 R 트랙 한정 (2026-07-27 교차감사 B-m1) ──
 # 같은 날 오전 알림의 승률 '표시 게이트'가 neff_win → neff_r 로 옮겨졌는데
@@ -2043,6 +2052,29 @@ with db.connect(_UPS_DB) as conn:
     ).fetchone()["timeframe_hours"]
 check("RPA1 reparse_all 이 구세대 timeframe_hours=0 을 재파싱 결과(None)로 치유",
       _rrpa1 is None)
+
+# ── UPS3: author_whitelisted 3상 보존 회귀 (2026-08-07 재검토 C1 재수정) ──
+# 종전 `1 if ... else 0` 바인딩은 NULL 을 만들 수 없어 COALESCE 가 죽은 코드 —
+# 워쳐 통계 로드 실패(None=알 수 없음)마다 whitelist 1→0 으로 덮어썼다.
+# 3상 의미론 고정: True→1 확정, None→기존 보존, False→0 확정(진짜 비화이트).
+with db.connect(_UPS_DB) as conn:
+    _lvwl = dict(_lvups)
+    _lvwl.update(coin_symbol="ZWLX", ticker="KRW-ZWLX", author="AuthWl",
+                 author_whitelisted=True)
+    _lvwl["signal_key"] = db.make_signal_key("ZWLX", 50.0, "AuthWl", "wl")
+    db.upsert_level(conn, _lvwl)
+    # 재수집 1: 통계 미로드(None) → 기존 1 보존돼야 한다
+    _lvwl_unknown = dict(_lvwl, author_whitelisted=None)
+    db.upsert_level(conn, _lvwl_unknown)
+    _wl1 = conn.execute("SELECT author_whitelisted FROM levels WHERE signal_key=?",
+                        (_lvwl["signal_key"],)).fetchone()["author_whitelisted"]
+    # 재수집 2: 통계 로드됨 + 진짜 비화이트(False) → 0 확정 덮어쓰기
+    _lvwl_false = dict(_lvwl, author_whitelisted=False)
+    db.upsert_level(conn, _lvwl_false)
+    _wl2 = conn.execute("SELECT author_whitelisted FROM levels WHERE signal_key=?",
+                        (_lvwl["signal_key"],)).fetchone()["author_whitelisted"]
+check("UPS3 whitelist 3상: None(미로드) 재수집은 1 보존, False(확정)는 0 덮어쓰기",
+      _wl1 == 1 and _wl2 == 0)
 
 if os.path.exists(_UPS_DB):
     os.remove(_UPS_DB)

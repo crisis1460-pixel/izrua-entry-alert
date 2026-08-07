@@ -238,6 +238,11 @@ check("G10 컷 경계", grade_from_score(85) == "S" and grade_from_score(84.9) =
       and grade_from_score(40) == "C" and grade_from_score(39.9) == "D")
 check("G10b meets_min_grade", meets_min_grade("B", "C") and meets_min_grade("C", "C")
       and not meets_min_grade("D", "C"))
+# G10c (2026-08-07 재검토 W1 회귀): 미지 등급 문자열은 어느 쪽 인자든 False —
+# 종전엔 ValueError 로 run_once 크래시. 억제(False)가 크래시보다 안전.
+check("G10c 미지 등급은 False (ValueError 크래시 방지)",
+      not meets_min_grade("X", "C") and not meets_min_grade("B", "X")
+      and not meets_min_grade("", "C"))
 
 # ── G11: 작성자 실적 가점 author_track_points (2026-08-01 v3 안2) ──────────
 # 게이트: 종결 n>=5 + Wilson 80% 단측 하한(z=1.28) >= 0.55/0.40/0.25 → +15/+10/+5.

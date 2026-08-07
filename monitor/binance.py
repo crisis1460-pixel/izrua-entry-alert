@@ -122,7 +122,10 @@ def fetch_funding_history(symbol: str, timeout: float,
     반환: None(전 경로 실패) 또는 시간순 정렬된 %값 리스트.
     Binance/Bybit 모두 펀딩 간격 8h → days*3 개 요청, 최대 1000/200 상한.
     OKX 는 페이지당 100 상한 — 기본 32일(99개)은 1페이지로 충분
-    (2026-08-07 미국 IP 차단 대응, fetch_funding_rate 주석 참고)."""
+    (2026-08-07 미국 IP 차단 대응, fetch_funding_rate 주석 참고).
+    주의: days>32 를 넘기면 Bybit(66일)/OKX(33일) 폴백 경로는 요청보다 짧은
+    리스트를 조용히 반환할 수 있다 — detect_funding_regime_flip 은 표본 부족 시
+    None(배지 생략)이라 안전하지만, 새 호출부는 이 상한을 알고 써야 한다."""
     pair = f"{symbol.upper()}USDT"
     n_needed = min(days * 3 + 3, 1000)  # 8h 간격 + 여유
     # Binance Futures /fapi/v1/fundingRate 는 limit 최대 1000

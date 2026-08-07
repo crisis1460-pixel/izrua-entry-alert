@@ -428,7 +428,13 @@ def upsert_level(conn, level: dict) -> bool:
             # NULL 로 덮어써져 v4 팔로워 배점(최대 25)이 사라지고 재채점 등급이
             # 흔들렸다. None → 기존 값 보존, 실측치 → 갱신.
             level.get("author_followers"), level.get("author_hit_rate"),
-            level.get("author_hit_count"), 1 if level.get("author_whitelisted") else 0,
+            level.get("author_hit_count"),
+            # None(워쳐 통계 미로드 = 알 수 없음) → NULL 바인딩 → COALESCE 가 기존 값
+            # 보존. False(통계 로드됨, 진짜 비화이트) → 0 으로 확정 덮어쓰기.
+            # (2026-08-07 재검토: 종전 `1 if ... else 0` 은 NULL 이 나올 수 없어
+            # COALESCE 가 죽은 코드였다 — 통계 로드 실패마다 1→0 덮어쓰던 원버그 잔존)
+            (None if level.get("author_whitelisted") is None
+             else (1 if level.get("author_whitelisted") else 0)),
             level.get("mcap_rank"), level.get("mcap_tier_icon"),
             level.get("judgment_window_hours"),
             # timeframe_hours 도 함께 갱신 (2026-08-03 R1 감사): 예전엔 UPDATE 절
@@ -578,7 +584,7 @@ def get_ret_pending(conn, now: Optional[float] = None) -> list:
     2026-07-26 감사 minor5: 기록 가능 시한(24h+6h / 72h+6h 허용오차)을 이미 넘긴
     행은 제외 — 구세대 결손 행이 매 회차 영구 선택되며 시세조회 티커 목록을
     좀비로 불리던 문제."""
-    now = now or time.time()
+    now = now if now is not None else time.time()
     return [dict(r) for r in conn.execute(
         "SELECT id, ticker, touched_at, touch_price_krw, touch_usdt_krw, entry_usd, "
         "ret_24h, ret_72h FROM levels WHERE touched_at IS NOT NULL "
@@ -1068,7 +1074,7 @@ def mark_deletion_checked(conn, level_id: int, deleted: bool, now: Optional[floa
     '확인함'으로 기록) 다음 순번이 같은 글을 바로 다시 뽑지 않게 한다."""
     conn.execute(
         "UPDATE levels SET deleted=?, deleted_checked_at=? WHERE id=?",
-        (1 if deleted else 0, now or time.time(), level_id),
+        (1 if deleted else 0, now if now is not None else time.time(), level_id),
     )
 
 
@@ -1217,7 +1223,7 @@ def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: st
                  now: Optional[float] = None) -> None:
     conn.execute(
         "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
-        (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)), now or time.time(), day_kst),
+        (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)), now if now is not None else time.time(), day_kst),
     )
 
 
@@ -1288,7 +1294,7 @@ def bump_daily_stats(conn, day_kst: str, **deltas) -> None:
 
 def prune_daily_stats(conn, now: Optional[float] = None, keep_days: int = 60) -> int:
     """보존기간(기본 60일) 넘은 관찰집계 삭제 — DB 무한 증가 방지. 반환: 삭제 행 수."""
-    now = now or time.time()
+    now = now if now is not None else time.time()
     cutoff_day = datetime.fromtimestamp(now - keep_days * 86400, tz=_KST).strftime("%Y-%m-%d")
     cur = conn.execute("DELETE FROM daily_stats WHERE day_kst < ?", (cutoff_day,))
     return cur.rowcount
@@ -1315,7 +1321,7 @@ def prune_raw_text(conn, now: Optional[float] = None, keep_days: int = 14) -> in
       · 종결 시각(resolved_at > expired_at > touched_at > collected_at 순 폴백)이
         보존기간을 넘긴 행만. 섀도 터치(touched_at NULL)는 collected_at 로 떨어진다.
     """
-    now = now or time.time()
+    now = now if now is not None else time.time()
     cutoff = now - keep_days * 86400
     cur = conn.execute(
         "UPDATE levels SET raw_text=NULL "
