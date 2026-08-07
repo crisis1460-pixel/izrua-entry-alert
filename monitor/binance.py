@@ -57,8 +57,13 @@ def _try_bybit(pair: str, timeout: float) -> Optional[float]:
 
 
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
-    """선물 펀딩비율(%). Binance Futures → Bybit 폴백. 인증 불필요.
-    양수=롱 과열, 음수=숏 과열. 전 경로 실패 시 None(알림에서 행 생략)."""
+    """선물 펀딩비율(%). Binance Futures → Bybit → OKX 폴백. 인증 불필요.
+    양수=롱 과열, 음수=숏 과열. 전 경로 실패 시 None(알림에서 행 생략).
+
+    2026-08-07 OKX 3차 폴백 추가: fapi.binance.com 과 Bybit linear 는 미국 IP
+    지역 차단(451/403) — GitHub Actions 러너(미국 Azure)에서 두 경로 모두 막혀
+    프로덕션 알림에 펀딩 행이 항상 생략되던 문제. OKX 공개 API 는 미국 접근 가능.
+    비-200 응답에도 경고를 남긴다(예전엔 조용히 폴백해 로그 무흔적)."""
     pair = f"{symbol.upper()}USDT"
     # Binance Futures
     try:
@@ -70,6 +75,8 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
             rate = r.json().get("lastFundingRate")
             if rate is not None:
                 return float(rate) * 100  # 0.0001 → 0.01%
+        else:
+            logger.warning("[funding] Binance %s HTTP %s", pair, r.status_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] Binance %s 실패: %s", pair, e)
     # Bybit Linear
@@ -84,18 +91,38 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
                 rate = items[0].get("fundingRate")
                 if rate is not None:
                     return float(rate) * 100
+        else:
+            logger.warning("[funding] Bybit %s HTTP %s", pair, r.status_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] Bybit %s 실패: %s", pair, e)
+    # OKX Swap (미상장 심볼은 51001 코드 200 응답 — data 비어 폴백 없이 None)
+    try:
+        r = requests.get(
+            "https://www.okx.com/api/v5/public/funding-rate",
+            params={"instId": f"{symbol.upper()}-USDT-SWAP"}, timeout=timeout,
+        )
+        if r.status_code == 200:
+            data = r.json().get("data") or []
+            if data:
+                rate = data[0].get("fundingRate")
+                if rate is not None:
+                    return float(rate) * 100
+        else:
+            logger.warning("[funding] OKX %s HTTP %s", pair, r.status_code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding] OKX %s 실패: %s", pair, e)
     return None
 
 
 def fetch_funding_history(symbol: str, timeout: float,
                           days: int = 32) -> Optional[list]:
     """선물 펀딩비율 히스토리(오래된 순 float 리스트, 단위 % — 원시 decimal *100).
-    Binance Futures 우선, 실패 시 Bybit Linear 폴백. 인증 불필요.
+    Binance Futures → Bybit Linear → OKX 폴백. 인증 불필요.
     days: 조회할 일수 (기본 32일 — 30일 지속 음수 감지에 여유 2일).
     반환: None(전 경로 실패) 또는 시간순 정렬된 %값 리스트.
-    Binance/Bybit 모두 펀딩 간격 8h → days*3 개 요청, 최대 1000/200 상한."""
+    Binance/Bybit 모두 펀딩 간격 8h → days*3 개 요청, 최대 1000/200 상한.
+    OKX 는 페이지당 100 상한 — 기본 32일(99개)은 1페이지로 충분
+    (2026-08-07 미국 IP 차단 대응, fetch_funding_rate 주석 참고)."""
     pair = f"{symbol.upper()}USDT"
     n_needed = min(days * 3 + 3, 1000)  # 8h 간격 + 여유
     # Binance Futures /fapi/v1/fundingRate 는 limit 최대 1000
@@ -146,6 +173,33 @@ def fetch_funding_history(symbol: str, timeout: float,
                     return out
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding-hist] Bybit %s 실패: %s", pair, e)
+    # OKX /api/v5/public/funding-rate-history — limit 최대 100 (약 33일치)
+    try:
+        r = requests.get(
+            "https://www.okx.com/api/v5/public/funding-rate-history",
+            params={"instId": f"{symbol.upper()}-USDT-SWAP",
+                    "limit": min(n_needed, 100)},
+            timeout=timeout,
+        )
+        if r.status_code == 200:
+            items = r.json().get("data") or []
+            if items:
+                # OKX 응답은 최신→과거 순 → 뒤집어서 시간순으로.
+                out = []
+                for it in reversed(items):
+                    v = it.get("fundingRate")
+                    if v is None:
+                        continue
+                    try:
+                        out.append(float(v) * 100)
+                    except (ValueError, TypeError):
+                        continue
+                if out:
+                    return out
+        else:
+            logger.warning("[funding-hist] OKX %s HTTP %s", pair, r.status_code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding-hist] OKX %s 실패: %s", pair, e)
     return None
 
 
