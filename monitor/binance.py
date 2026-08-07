@@ -56,14 +56,66 @@ def _try_bybit(pair: str, timeout: float) -> Optional[float]:
     return None
 
 
+# CoinGecko 경유 Binance 펀딩비 캐시 — 엔드포인트가 심볼 단위가 아니라 거래소
+# 전체(754 티커, ~630KB)를 주므로 한 회차의 다중 터치가 각각 재호출하지 않게
+# TTL 캐시로 묶는다. 무료 keyless 레이트리밋(분당 한 자릿수)도 이걸로 방어.
+_CG_FUNDING_TTL_SEC = 180.0
+_cg_funding_cache: dict = {"ts": 0.0, "map": None}
+
+
+def _coingecko_binance_funding_map(timeout: float) -> Optional[dict]:
+    """CoinGecko /derivatives/exchanges/binance_futures → {심볼페어: 펀딩%}.
+    Binance 원본 수치(소수 3자리 반올림)를 미국 IP 에서도 받을 수 있는 유일한
+    무료 경로 (2026-08-07 — CoinGlass 무료 티어 폐지 확인 후 채택).
+    실패 시 None — 호출부가 다음 폴백으로 넘어간다."""
+    import time as _time
+    now = _time.time()
+    if (_cg_funding_cache["map"] is not None
+            and now - _cg_funding_cache["ts"] < _CG_FUNDING_TTL_SEC):
+        return _cg_funding_cache["map"]
+    headers = {}
+    try:
+        from config import settings as _settings  # 지연 로드 — 순환 의존 방지
+        key = _settings.secret("COINGECKO_API_KEY")
+        if key:
+            headers["x-cg-demo-api-key"] = key
+    except Exception:  # noqa: BLE001 - 키는 선택사항, 설정 로드 실패는 keyless 진행
+        pass
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/derivatives/exchanges/binance_futures",
+            params={"include_tickers": "unexpired"}, headers=headers,
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            logger.warning("[funding] CoinGecko HTTP %s", r.status_code)
+            return None
+        out = {}
+        for t in r.json().get("tickers") or []:
+            v = t.get("funding_rate")
+            sym = t.get("symbol")
+            if sym and v is not None:
+                try:
+                    out[sym] = float(v)  # 이미 % 단위 (BTC 0.006 = 0.006%)
+                except (ValueError, TypeError):
+                    continue
+        if out:
+            _cg_funding_cache.update(ts=now, map=out)
+            return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding] CoinGecko 실패: %s", e)
+    return None
+
+
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
-    """선물 펀딩비율(%). Binance Futures → Bybit → OKX 폴백. 인증 불필요.
+    """선물 펀딩비율(%). Binance 직접 → CoinGecko(Binance 원본) → Bybit → OKX.
     양수=롱 과열, 음수=숏 과열. 전 경로 실패 시 None(알림에서 행 생략).
 
-    2026-08-07 OKX 3차 폴백 추가: fapi.binance.com 과 Bybit linear 는 미국 IP
-    지역 차단(451/403) — GitHub Actions 러너(미국 Azure)에서 두 경로 모두 막혀
-    프로덕션 알림에 펀딩 행이 항상 생략되던 문제. OKX 공개 API 는 미국 접근 가능.
-    비-200 응답에도 경고를 남긴다(예전엔 조용히 폴백해 로그 무흔적)."""
+    2026-08-07 폴백 체인 확장: fapi.binance.com 과 Bybit linear 는 미국 IP
+    지역 차단(451/403) — GitHub Actions 러너(미국 Azure)에서 막혀 프로덕션
+    알림에 펀딩 행이 항상 생략되던 문제. 2차 CoinGecko 는 Binance 원본 수치를
+    미국에서도 주므로(거래량 대표성 — 사용자 결정) 프로덕션 주 경로가 되고,
+    Bybit/OKX 는 최후 폴백. 비-200 응답에도 경고를 남긴다."""
     pair = f"{symbol.upper()}USDT"
     # Binance Futures
     try:
@@ -79,6 +131,13 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
             logger.warning("[funding] Binance %s HTTP %s", pair, r.status_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] Binance %s 실패: %s", pair, e)
+    # CoinGecko 경유 Binance 원본 (프로덕션 주 경로 — 위 직접 호출은 미국 차단)
+    _cg_map = _coingecko_binance_funding_map(timeout)
+    if _cg_map is not None:
+        rate = _cg_map.get(pair)
+        if rate is not None:
+            return rate
+        # Binance 미상장 심볼 — Bybit/OKX 로 계속 폴백
     # Bybit Linear
     try:
         r = requests.get(
