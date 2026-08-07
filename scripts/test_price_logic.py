@@ -548,13 +548,12 @@ check("VR2 집계 - 라벨별 n·평균 24h/72h (position 미기록 건은 해�
       and abs(_vs["supply"]["우호"]["avg72"] - 3.5) < 1e-9
       and _vs["supply"]["주의"]["n"] == 1
       and "주의" not in _vs["position"] and _vs["position"]["우호"]["n"] == 2)
-# VR3: 리포트 섹션 게이트 — 축 합계 n<10 생략, 충분하면 표시
-check("VR3 렌더 게이트 - n<10 축 생략 / 충분하면 판정 검증 섹션 표시",
-      tg._verdict_section(_vs) == []
-      and "🧭 판정 검증" in "\n".join(tg._verdict_section(
-          {"supply": {"우호": {"n": 8, "avg24": 2.5, "avg72": 4.0},
-                      "주의": {"n": 4, "avg24": -1.2, "avg72": -0.5}},
-           "position": {}})))
+# VR3 (2026-08-07 사용자 확정): 판정 데이터는 **내부 축적 전용** — 알림·주간
+# 리포트 어디에도 노출하지 않는다(기획/후속 개발 참고용 원천 데이터).
+# 렌더러에 노출 경로가 다시 생기면 이 체크가 깨진다.
+check("VR3 내부 전용 - 렌더러에 verdict 노출 경로 없음",
+      not hasattr(tg, "_verdict_section")
+      and "verdict_stats" not in tg.render_weekly_report.__code__.co_varnames)
 if os.path.exists(_VR_DB):
     os.remove(_VR_DB)
 
