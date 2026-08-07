@@ -478,6 +478,46 @@ check("SV4 OI 보합(<3%)/미확보 → 펀딩 단독 폴백",
 check("SV5 전부 없음 → (None, None) - 행 생략",
       _sv(None, None, None) == (None, None))
 
+# ── RS-RSI/PV: Wilder RSI 계산 + 자리 판정 (2026-08-07) ────────────────────
+from monitor.upbit import _wilder_rsi as _rsi, derive_position_verdict as _pv
+# 검증 벡터: Wilder 원저 방식 손계산 대조 (period=14, 상승분·하락분 평활).
+# 전형 시퀀스 — 연속 상승만 있으면 100, 연속 하락만 있으면 0 근접.
+check("RSI1 단조 상승 → 100 / 단조 하락 → 0",
+      _rsi([float(i) for i in range(1, 31)]) == 100.0
+      and _rsi([float(i) for i in range(30, 0, -1)]) < 1e-9)
+# 표본 부족(period+1 미만) → None
+check("RSI2 표본 부족 → None", _rsi([1.0] * 14) is None and _rsi([]) is None)
+# 상승·하락 균등 교대(±1 반복) → RS≈1 → RSI≈50 (Wilder 평활 수렴 성질)
+_alt = [100.0 + (i % 2) for i in range(100)]
+_rsi_alt = _rsi(_alt)
+check("RSI3 등폭 교대 시퀀스 → 50 부근 수렴", 45.0 < _rsi_alt < 55.0)
+# 변동 없음(전부 동일 종가) → avg_loss 0 → 100 (0 나눗셈 없이)
+check("RSI4 무변동 → 100 (division-safe)", _rsi([5.0] * 30) == 100.0)
+
+check("RPV1 일봉 축: 바닥권(≤30)/눌림목(≤45)/중립/상승중/과열(≥70) — 주봉 병기",
+      _pv(27.0, 50.0) == ("우호", "바닥권·일27·주50")
+      and _pv(38.0, 50.0) == ("우호", "눌림목·일38·주50")
+      and _pv(52.0, 50.0) == ("중립", "일52·주50")
+      and _pv(64.0, 50.0) == ("중립", "상승중·일64·주50")
+      and _pv(74.0, 50.0) == ("주의", "과열·일74·주50"))
+check("RPV1b 주봉 결측 시 일봉 숫자만 (병기 생략)",
+      _pv(38.0, None) == ("우호", "눌림목·일38"))
+check("RPV2 주봉 보정: 주≥70 은 일봉 무관 장기과열 / 주≤30+일≤45 는 장기바닥",
+      _pv(38.0, 72.0) == ("주의", "장기과열·주72")
+      and _pv(38.0, 28.0) == ("우호", "장기바닥·주28")
+      and _pv(60.0, 28.0) == ("중립", "상승중·일60·주28"))
+check("RPV3 결측: 일봉 없으면 주봉 극단만 판정, 전부 없으면 (None,None)",
+      _pv(None, 72.0) == ("주의", "장기과열·주72")
+      and _pv(None, 50.0) == (None, None)
+      and _pv(None, None) == (None, None))
+# 렌더: 52주 블록 아래 자리 줄
+_msg_pos = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                           week52=(200.0 * USDT_KRW, 50.0 * USDT_KRW),
+                           position=("우호", "눌림목·일38"))
+check("RPV4 렌더: 🌡️ 자리 줄이 52주 블록 뒤에 표시",
+      "🌡️ 자리: 우호 (눌림목·일38)" in _msg_pos
+      and _msg_pos.find("현재") < _msg_pos.find("🌡️"))
+
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을
 # 넘겨서, 행이 늘면 정작 봐야 할 타점·가격이 밀린다. 지표는 계속 쌓이고 show_status

@@ -219,6 +219,95 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
         return None
 
 
+# ── RSI 자리 판정 (2026-08-07 사용자 결정: 판정+숫자 한 줄) ────────────────
+RSI_PERIOD = 14
+
+
+def _wilder_rsi(closes: list, period: int = RSI_PERIOD) -> Optional[float]:
+    """Wilder 평활 RSI — TradingView/업계 표준과 동일 방식.
+    closes: 과거→최신 순 종가. 표본 < period+1 이면 None.
+    단순이동평균(SMA) RSI 와 값이 갈리므로 방식 주석 고정: 첫 평균은 SMA,
+    이후 avg = (prev*(period-1) + cur) / period (Wilder smoothing)."""
+    if not closes or len(closes) < period + 1:
+        return None
+    gains = losses = 0.0
+    for i in range(1, period + 1):
+        d = closes[i] - closes[i - 1]
+        if d >= 0:
+            gains += d
+        else:
+            losses -= d
+    avg_gain, avg_loss = gains / period, losses / period
+    for i in range(period + 1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        g = d if d > 0 else 0.0
+        l = -d if d < 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + g) / period
+        avg_loss = (avg_loss * (period - 1) + l) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optional[list]:
+    """캔들 종가(과거→최신). unit: 'days'|'weeks'. 실패 시 None."""
+    try:
+        resp = requests.get(
+            f"{_BASE}/candles/{unit}",
+            params={"market": market, "count": count},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        candles = resp.json()
+        if not candles:
+            return None
+        time.sleep(_CANDLE_PACE_SEC)
+        # 업비트 응답은 최신→과거 순 → 뒤집어 시간순으로
+        return [float(c["trade_price"]) for c in reversed(candles)]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[upbit] %s %s 캔들 조회 실패: %s", market, unit, e)
+        return None
+
+
+def fetch_rsi_pair(market: str, timeout: float) -> tuple:
+    """(일봉 RSI, 주봉 RSI) — 각각 실패 시 None. 터치 발송 확정건에만 호출
+    (52주 조회와 동일 원칙, 회당 2콜). 200개 요청 — Wilder 평활은 표본이
+    길수록 수렴하고 업비트 1콜 상한이 200이라 그대로 쓴다."""
+    d = _fetch_closes(market, "days", 200, timeout)
+    w = _fetch_closes(market, "weeks", 200, timeout)
+    return (_wilder_rsi(d) if d else None, _wilder_rsi(w) if w else None)
+
+
+def derive_position_verdict(rsi_d, rsi_w) -> tuple:
+    """일/주봉 RSI → 매수 관점 '자리' 판정 (label, reason).
+
+    label ∈ '우호'/'주의'/'중립', reason 은 근거+숫자 (예: '눌림목·일38').
+    주봉 보정 2가지가 일봉 판정에 우선한다 — 장기 흐름이 단기 자리를 뒤집는
+    경우만(주봉 과열 속 일봉 눌림목은 함정 확률). 입력 전부 None 이면
+    (None, None) — 호출부가 행을 생략한다. 2026-08-07 사용자 확정 매트릭스."""
+    if rsi_w is not None:
+        if rsi_w >= 70:
+            return "주의", f"장기과열·주{rsi_w:.0f}"
+        if rsi_w <= 30 and rsi_d is not None and rsi_d <= 45:
+            return "우호", f"장기바닥·주{rsi_w:.0f}"
+    if rsi_d is None:
+        return None, None
+    # 주봉 숫자 병기 (2026-08-07 사용자 지적): 일봉 과매도가 '상승 추세 속
+    # 눌림'인지 '하락 추세 속 낙하 나이프'인지는 주봉이 가른다 — 판정 라벨은
+    # 일봉 축 그대로 두고 장기 배경 숫자만 덧붙여 한 줄에서 함께 읽게 한다.
+    _w = f"·주{rsi_w:.0f}" if rsi_w is not None else ""
+    if rsi_d <= 30:
+        return "우호", f"바닥권·일{rsi_d:.0f}{_w}"
+    if rsi_d <= 45:
+        return "우호", f"눌림목·일{rsi_d:.0f}{_w}"
+    if rsi_d < 60:
+        return "중립", f"일{rsi_d:.0f}{_w}"
+    if rsi_d < 70:
+        return "중립", f"상승중·일{rsi_d:.0f}{_w}"
+    return "주의", f"과열·일{rsi_d:.0f}{_w}"
+
+
 _RANGE_MAX_PAGES = 3  # 안전판 — 정상 유동성 마켓은 1페이지(1콜)로 끝난다
 
 

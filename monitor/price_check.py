@@ -748,6 +748,18 @@ def run_once(now: float = None) -> dict:
                     # 52주 고저 + 김프 + 펀딩비는 발송 확정건에만 조회
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
+                    # RSI 자리 판정 (2026-08-07) — 발송 확정건에만 2콜(일/주봉).
+                    # 조회·계산 실패는 (None,None) → 행 생략, 발송은 계속.
+                    _snap_position = None
+                    try:
+                        _rsi_d, _rsi_w = upbit.fetch_rsi_pair(
+                            ticker, cfg_get("http_timeout_sec"))
+                        _snap_position = upbit.derive_position_verdict(_rsi_d, _rsi_w)
+                        if _snap_position[0] is None:
+                            _snap_position = None
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s RSI 판정 실패(무시): %s", coin, e)
+                        _snap_position = None
                     kimchi = None
                     usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
                     if usd_global and usd_global > 0 and usdt_krw:
@@ -796,7 +808,8 @@ def run_once(now: float = None) -> dict:
                                                  rep=rep,
                                                  funding_rate=_snap_funding,
                                                  funding_regime_flip=_snap_funding_flip,
-                                                 supply=_snap_supply)
+                                                 supply=_snap_supply,
+                                                 position=_snap_position)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로

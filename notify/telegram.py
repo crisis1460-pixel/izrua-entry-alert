@@ -257,7 +257,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
                  kimchi_pct: float = None, volume_rank: int = None,
                  rep: dict = None, funding_rate: float = None,
-                 funding_regime_flip: dict = None, supply: tuple = None) -> str:
+                 funding_regime_flip: dict = None, supply: tuple = None,
+                 position: tuple = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -354,6 +355,12 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append("")
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
+
+    # RSI 자리 판정 (2026-08-07): 52주 위치와 같은 '코인 자체 위치' 묶음이라
+    # 이 블록 끝에 붙인다. 수급 줄과 동일 문법 — 판정 + (근거·숫자) 한 줄.
+    if position and position[0]:
+        _pv, _pr = position
+        lines.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는
