@@ -748,17 +748,25 @@ def run_once(now: float = None) -> dict:
                     # 52주 고저 + 김프 + 펀딩비는 발송 확정건에만 조회
                     from monitor import binance
                     week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
-                    # RSI 자리 판정 (2026-08-07) — 발송 확정건에만 2콜(일/주봉).
-                    # 조회·계산 실패는 (None,None) → 행 생략, 발송은 계속.
+                    # 자리 판정 (2026-08-07 RSI, 08-08 MA 확장) — 발송 확정건에만
+                    # 2콜(일/주봉, MA 는 일봉 공유라 추가 콜 0). 조회·계산 실패는
+                    # (None,None) → 행 생략, 발송은 계속. MA 비교가는 터치 시점
+                    # 현재가(KRW) — 캔들과 같은 단위.
                     _snap_position = None
+                    _snap_ma200_above = None
                     try:
-                        _rsi_d, _rsi_w = upbit.fetch_rsi_pair(
+                        _pd = upbit.fetch_position_data(
                             ticker, cfg_get("http_timeout_sec"))
-                        _snap_position = upbit.derive_position_verdict(_rsi_d, _rsi_w)
+                        _snap_position = upbit.derive_position_verdict(
+                            _pd["rsi_d"], _pd["rsi_w"], price=current,
+                            ma20=_pd["ma20"], ma60=_pd["ma60"], ma120=_pd["ma120"])
                         if _snap_position[0] is None:
                             _snap_position = None
+                        # 200일선 상/하 — 내부 축적 전용 (알림 무노출, 사용자 확정)
+                        if _pd["ma200"] and current:
+                            _snap_ma200_above = 1 if current >= _pd["ma200"] else 0
                     except Exception as e:  # noqa: BLE001
-                        logger.warning("[체크] %s RSI 판정 실패(무시): %s", coin, e)
+                        logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
                     kimchi = None
                     usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
@@ -822,9 +830,11 @@ def run_once(now: float = None) -> dict:
                         alert_ledger.append(db_path, coin, kind, ids, now)
                         # 표시된 판정 2종 로깅 (2026-08-07 자가검증) — 터치 본알림만.
                         # 발송 성공 직후에 기록해 "표시된 것만 기록" 불변식 유지.
+                        # ma200_above (08-08): 내부 축적 전용 — 알림 무노출.
                         if touched:
                             db.record_touch_verdicts(conn, ids, _snap_supply,
-                                                     _snap_position)
+                                                     _snap_position,
+                                                     ma200_above=_snap_ma200_above)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1

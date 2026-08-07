@@ -279,33 +279,113 @@ def fetch_rsi_pair(market: str, timeout: float) -> tuple:
     return (_wilder_rsi(d) if d else None, _wilder_rsi(w) if w else None)
 
 
-def derive_position_verdict(rsi_d, rsi_w) -> tuple:
-    """일/주봉 RSI → 매수 관점 '자리' 판정 (label, reason).
+def _sma(closes: list, period: int) -> Optional[float]:
+    """단순이동평균 — 최근 period 개 종가 평균. 표본 부족 시 None."""
+    if not closes or len(closes) < period:
+        return None
+    return sum(closes[-period:]) / period
 
-    label ∈ '우호'/'주의'/'중립', reason 은 근거+숫자 (예: '눌림목·일38').
-    주봉 보정 2가지가 일봉 판정에 우선한다 — 장기 흐름이 단기 자리를 뒤집는
-    경우만(주봉 과열 속 일봉 눌림목은 함정 확률). 입력 전부 None 이면
-    (None, None) — 호출부가 행을 생략한다. 2026-08-07 사용자 확정 매트릭스."""
+
+def fetch_position_data(market: str, timeout: float) -> dict:
+    """자리 판정 입력 일괄 조회 — RSI(일/주) + SMA(20/60/120/200).
+    일봉 1콜을 RSI 와 MA 가 공유(2026-08-08 MA 확장 — 추가 API 콜 0).
+    각 값은 실패/표본부족 시 None."""
+    d = _fetch_closes(market, "days", 200, timeout)
+    w = _fetch_closes(market, "weeks", 200, timeout)
+    return {
+        "rsi_d": _wilder_rsi(d) if d else None,
+        "rsi_w": _wilder_rsi(w) if w else None,
+        "ma20": _sma(d, 20), "ma60": _sma(d, 60),
+        "ma120": _sma(d, 120), "ma200": _sma(d, 200),
+    }
+
+
+# MA 지지 근접 밴드 (2026-08-08 기준값 검토): 상단 +3% — 크립토 변동성(알트
+# 일변동 5%+)에 ±2% 는 좁다는 리서치 결론. 하단 -1% — 가격이 선 아래로 크게
+# 빠진 상태는 '지지 테스트'가 아니라 이탈이므로 좁게 잡는다(지지 꼬리 허용치).
+MA_SUPPORT_ABOVE_PCT = 3.0   # 가격이 MA 위로 +3% 이내
+MA_SUPPORT_BELOW_PCT = 1.0   # 가격이 MA 아래로 -1% 이내
+RSI_PULLBACK_MAX = 50        # 조정권 상한 (Cardwell 강세장 눌림목 40~50 관례)
+
+
+def _nearest_support(price, mas: dict):
+    """터치 가격에 근접(-1%~+3%)한 MA 중 가장 가까운 것 → (기간, ma값)|None.
+    mas: {20: v, 60: v, 120: v} (None 값은 무시)."""
+    if not price or price <= 0:
+        return None
+    best = None
+    for period, ma in mas.items():
+        if not ma or ma <= 0:
+            continue
+        diff_pct = (price - ma) / ma * 100
+        if -MA_SUPPORT_BELOW_PCT <= diff_pct <= MA_SUPPORT_ABOVE_PCT:
+            if best is None or abs(diff_pct) < abs(best[2]):
+                best = (period, ma, diff_pct)
+    return (best[0], best[1]) if best else None
+
+
+def derive_position_verdict(rsi_d, rsi_w, price=None,
+                            ma20=None, ma60=None, ma120=None) -> tuple:
+    """일/주봉 RSI + MA(지지 근접·배열) → 매수 관점 '자리' 5단계 판정.
+
+    label ∈ '최적'/'우호'/'중립'/'주의'/'위험', reason 은 근거 토큰 최대 3개
+    (모바일 한 줄 유지). 2026-08-08 MA 확장 + 기준값 검토 반영:
+      · 최적 = 3박자(지지 근접 + 정배열 + RSI 조정권<=50) — 컨플루언스 관례
+      · 우호 = 2박자 또는 강한 단독 신호(바닥권<=30, 장기바닥)
+      · RSI 단독 눌림목(30~50)은 중립 — Cardwell 정설(30~40 은 추세이탈 경고
+        구간)에 따라 확인 신호 없는 눌림목을 우호로 올리지 않는다
+      · 역배열(20<60<120)은 강등: 조정권이면 주의(함정), 과열이면 위험
+      · 주봉 극단(>=70 위험 / <=30 장기바닥)은 종전대로 최우선
+    MA 인자 미전달(구 호출부·데이터 부족)이면 RSI 단독 판정으로 폴백.
+    입력 전부 None 이면 (None, None) — 호출부가 행을 생략한다."""
+    # 배열 판정 — 3선 전부 있을 때만 (표본 부족 신규상장은 혼조 취급)
+    aligned_up = aligned_down = False
+    if ma20 and ma60 and ma120:
+        aligned_up = ma20 > ma60 > ma120
+        aligned_down = ma20 < ma60 < ma120
+    support = _nearest_support(price, {20: ma20, 60: ma60, 120: ma120})
+
+    # 주봉 극단 최우선 (기존 규칙 유지, 위험/우호 배치만 5단계로)
     if rsi_w is not None:
         if rsi_w >= 70:
-            return "주의", f"장기과열·주{rsi_w:.0f}"
-        if rsi_w <= 30 and rsi_d is not None and rsi_d <= 45:
+            return "위험", f"장기과열·주{rsi_w:.0f}"
+        if rsi_w <= 30 and rsi_d is not None and rsi_d <= RSI_PULLBACK_MAX:
             return "우호", f"장기바닥·주{rsi_w:.0f}"
     if rsi_d is None:
         return None, None
-    # 주봉 숫자 병기 (2026-08-07 사용자 지적): 일봉 과매도가 '상승 추세 속
-    # 눌림'인지 '하락 추세 속 낙하 나이프'인지는 주봉이 가른다 — 판정 라벨은
-    # 일봉 축 그대로 두고 장기 배경 숫자만 덧붙여 한 줄에서 함께 읽게 한다.
-    _w = f"·주{rsi_w:.0f}" if rsi_w is not None else ""
-    if rsi_d <= 30:
-        return "우호", f"바닥권·일{rsi_d:.0f}{_w}"
-    if rsi_d <= 45:
-        return "우호", f"눌림목·일{rsi_d:.0f}{_w}"
+
+    in_pullback = rsi_d <= RSI_PULLBACK_MAX     # 조정권 (바닥권 포함)
+    rsi_tag = "바닥권" if rsi_d <= 30 else "눌림목"
+    d_tok = f"일{rsi_d:.0f}"
+
+    # 역배열 강등 — 겉보기 눌림목/과열의 함정·위험 처리
+    if aligned_down:
+        if rsi_d >= 70:
+            return "위험", f"역배열·과열·{d_tok}"
+        if in_pullback:
+            return "주의", f"역배열·{d_tok}"
+        return "중립", f"역배열·{d_tok}"
+
+    if rsi_d >= 70:
+        return "주의", f"과열·{d_tok}"
+
+    if in_pullback:
+        sup_tok = f"{support[0]}일지지" if support else None
+        if support and aligned_up:
+            return "최적", f"{sup_tok}·정배열·{d_tok}"
+        if support:
+            return "우호", f"{sup_tok}·{d_tok}"
+        if aligned_up:
+            return "우호", f"{rsi_tag}·정배열·{d_tok}"
+        if rsi_d <= 30:
+            return "우호", f"바닥권·{d_tok}"    # 과매도 단독은 강한 신호
+        return "중립", f"{rsi_tag}·{d_tok}"     # RSI 단독 눌림목 — 확인 부재
     if rsi_d < 60:
-        return "중립", f"일{rsi_d:.0f}{_w}"
-    if rsi_d < 70:
-        return "중립", f"상승중·일{rsi_d:.0f}{_w}"
-    return "주의", f"과열·일{rsi_d:.0f}{_w}"
+        if support:
+            return "중립", f"{support[0]}일지지·{d_tok}"
+        return "중립", d_tok
+    _al = "·정배열" if aligned_up else ""
+    return "중립", f"상승중{_al}·{d_tok}"
 
 
 _RANGE_MAX_PAGES = 3  # 안전판 — 정상 유동성 마켓은 1페이지(1콜)로 끝난다

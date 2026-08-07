@@ -239,6 +239,9 @@ _OUTCOME_COLUMNS = {
     # 수익률(ret_24h/72h) 검증에만 쓴다. 발송 성공 건에만 기록(표시=기록 일치).
     "touch_supply_verdict": "TEXT",
     "touch_position_verdict": "TEXT",
+    # 터치 시점 200일선 상(1)/하(0) (2026-08-08 MA 확장) — 동일한 내부 전용
+    # 로깅. 강세/약세 국면별 알림 실측 승률 검증용 원천 데이터.
+    "touch_ma200_above": "INTEGER",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -1257,9 +1260,11 @@ def set_meta(conn, key: str, value: str) -> None:
 
 
 # ── 터치 판정 로깅 + 자가검증 집계 (2026-08-07) ──────────────────────────
-def record_touch_verdicts(conn, level_ids: list, supply, position) -> None:
-    """터치 알림에 표시된 수급/자리 판정을 레벨 행에 기록. (label, reason) 튜플
-    또는 None. 최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
+def record_touch_verdicts(conn, level_ids: list, supply, position,
+                          ma200_above=None) -> None:
+    """터치 알림에 표시된 수급/자리 판정(+200일선 상하)을 레벨 행에 기록.
+    supply/position: (label, reason) 튜플 또는 None. ma200_above: 1/0/None.
+    최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
     if not level_ids:
         return
     ph = ",".join("?" * len(level_ids))
@@ -1271,6 +1276,12 @@ def record_touch_verdicts(conn, level_ids: list, supply, position) -> None:
         conn.execute(
             f"UPDATE levels SET {col}=? WHERE id IN ({ph}) AND {col} IS NULL",
             (val, *level_ids),
+        )
+    if ma200_above is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_ma200_above=? "
+            f"WHERE id IN ({ph}) AND touch_ma200_above IS NULL",
+            (1 if ma200_above else 0, *level_ids),
         )
 
 
