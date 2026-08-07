@@ -198,6 +198,18 @@ TPSALL_CASES = [
         0.0409,
         [0.04259, 0.04392],
     ),
+    (
+        # 2026-08-08 실전 재현(ICP id=254, 2026-08-06 수집분 — W4 수정 전 데이터라
+        # tps_usd=[2.185](저점) 로 저장돼 tp_usd=2.21(고점) 과 어긋나 있었다).
+        # "Target (TP):" 콜론 라벨 뒤 범위값 하나 — is_spec=True 단일그룹 케이스.
+        # W4(오늘 아침 bef75a50, v[0]→v[-1]) 이후엔 tp 선정(grp[-1]=고점)과 동일
+        # 기준으로 통일돼 tps_all 도 고점(2.21)을 담아야 한다 — 회귀 고정.
+        "tps_all - ICP 범위형 단일 Target(콜론) - tp(고점)와 tps_all[0] 일치(W4 회귀)",
+        "ICP/USDT (Long)\nEntry Zone: 2.075 – 2.085\n\n"
+        "Target (TP): 2.185 – 2.210 (POI Zone)\n\nStop Loss (SL): Below 2.000",
+        2.08,
+        [2.210],
+    ),
 ]
 for desc, text, price, exp_tpsall in TPSALL_CASES:
     r = parse_setup(text, current_price=price)
