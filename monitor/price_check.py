@@ -755,6 +755,7 @@ def run_once(now: float = None) -> dict:
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
                     _snap_funding = None
                     _snap_funding_flip = None
+                    _snap_supply = None
                     try:
                         _snap_funding = binance.fetch_funding_rate(coin, cfg_get("http_timeout_sec"))
                         # 레짐 전환 감지 (2026-08-03 스프린트08): 30일+ 지속 음수 →
@@ -766,6 +767,25 @@ def run_once(now: float = None) -> dict:
                             _hist, min_neg_days=30)
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 펀딩 조회 실패(무시): %s", coin, e)
+                    # 수급 판정 (2026-08-07 사용자 결정): 펀딩+OI 를 결론 한 줄로.
+                    # OI 24h 변화율은 자체 스냅샷(oi_history) 대비 — 기준 없으면
+                    # (배포 후 첫 24h/미상장) derive 가 펀딩 단독으로 폴백한다.
+                    try:
+                        _deriv = binance.fetch_deriv_snapshot(coin, cfg_get("http_timeout_sec"))
+                        _oi_chg = None
+                        _pchg = (_deriv or {}).get("pchg")
+                        _oi_now = (_deriv or {}).get("oi")
+                        if _oi_now:
+                            _oi_base = db.get_oi_baseline(conn, coin, now)
+                            if _oi_base:
+                                _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
+                        _snap_supply = binance.derive_supply_verdict(
+                            _snap_funding, _oi_chg, _pchg)
+                        if _snap_supply[0] is None:
+                            _snap_supply = None
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 수급 판정 실패(무시): %s", coin, e)
+                        _snap_supply = None
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
@@ -775,7 +795,8 @@ def run_once(now: float = None) -> dict:
                                                  volume_rank=_snap_volume_rank,
                                                  rep=rep,
                                                  funding_rate=_snap_funding,
-                                                 funding_regime_flip=_snap_funding_flip)
+                                                 funding_regime_flip=_snap_funding_flip,
+                                                 supply=_snap_supply)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
@@ -933,6 +954,14 @@ def run_once(now: float = None) -> dict:
                 _check_volume_spikes(conn, now, cfg_get, prices)
             except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
                 logger.warning("[체크] 거래량 급증 감시 실패(무시하고 진행): %s", e)
+
+        # OI 스냅샷 주기 적재 (2026-08-07 수급 판정) — 활성 레벨 코인만, 60분
+        # 게이트. CoinGecko 맵 1콜(모듈 캐시 공유)로 일괄 적재 + 48h 프룬.
+        # 실패해도 회차 생존 — 수급 줄은 펀딩 단독 폴백으로 계속 나간다.
+        try:
+            _snapshot_oi(conn, now)
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] OI 스냅샷 실패(무시하고 진행): %s", e)
 
         _save_last_check(conn, now)
 
@@ -1334,6 +1363,45 @@ def _b_swing_pass(lv: dict) -> bool:
         from collector.grading import SWING_MIN_TP_PCT
         min_pct = SWING_MIN_TP_PCT
     return not (0 < last_pct < min_pct)
+
+
+_META_LAST_OI_SNAP = "last_oi_snapshot_at"
+_OI_SNAP_INTERVAL_SEC = 3600.0  # 60분 — 24h 변화율 용도라 이보다 촘촘할 필요 없음
+
+
+def _snapshot_oi(conn, now: float) -> None:
+    """활성(watching/previewed/touched) 레벨 코인의 OI 를 oi_history 에 주기 적재.
+    60분 게이트 — 2분 핫패스에서 회차당 호출되지만 실제 적재는 시간당 1회."""
+    from monitor import binance
+    last = db.get_meta(conn, _META_LAST_OI_SNAP)
+    if last is not None:
+        try:
+            if now - float(last) < _OI_SNAP_INTERVAL_SEC:
+                return
+        except (ValueError, TypeError):
+            pass
+    coins = [r["coin_symbol"] for r in conn.execute(
+        "SELECT DISTINCT coin_symbol FROM levels "
+        "WHERE status IN ('watching','previewed','touched')").fetchall()]
+    if not coins:
+        db.set_meta(conn, _META_LAST_OI_SNAP, str(now))
+        conn.commit()
+        return
+    # 맵 자체 실패(None) 시 게이트를 갱신하지 않아 다음 회차(2분 뒤) 재시도 —
+    # 시간당 1회 원칙보다 적재 연속성 우선. 미상장 코인만 있는 경우(rows 빈)는
+    # 정상 처리로 보고 게이트를 갱신한다.
+    cg_map = binance._coingecko_binance_funding_map(settings.get("http_timeout_sec"))
+    if cg_map is None:
+        return
+    rows = []
+    for c in coins:
+        oi = (cg_map.get(f"{c.upper()}USDT") or {}).get("oi")
+        if oi:
+            rows.append((c, oi))
+    if rows:
+        db.record_oi_snapshots(conn, rows, now)
+    db.set_meta(conn, _META_LAST_OI_SNAP, str(now))
+    conn.commit()
 
 
 def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:

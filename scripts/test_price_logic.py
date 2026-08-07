@@ -442,16 +442,41 @@ _msg_only_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, U
 check("T14N2 레짐 배지 단독 - 세퍼레이터 이후 렌더",
       "🔥 32일 음수→양수" in _msg_only_flip
       and _msg_only_flip.find("━━━━━━━━━━━━━━━━━━━━\n🔥") >= 0)
-# T14O: 펀딩 라벨 (매수 자제/우호/중립) — 사용자 결정 매수 판단 라벨.
+# T14O (2026-08-07 개편): 종전 "💰 펀딩 수치+라벨" 줄 → "🧭 수급" 판정 한 줄.
+# supply 미전달 구 호출부는 funding_rate 단독 폴백으로 같은 줄이 나와야 한다.
 msg_hot = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                           funding_rate=0.05)
 msg_cold = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                            funding_rate=-0.05)
 msg_neutral = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                               funding_rate=0.001)
-check("T14O 펀딩 라벨: 롱과열→매수 자제 / 숏과열→매수 우호 / 그 외→중립",
-      "(매수 자제)" in msg_hot and "(매수 우호)" in msg_cold
-      and "(중립)" in msg_neutral)
+check("T14O 수급 폴백: 롱과열→주의(롱 과열) / 숏과열→우호(숏 과열) / 그 외→중립",
+      "🧭 수급: 주의 (롱 과열)" in msg_hot
+      and "🧭 수급: 우호 (숏 과열)" in msg_cold
+      and "🧭 수급: 중립" in msg_neutral and "💰 펀딩" not in msg_neutral)
+# T14O2: supply 명시 전달 시 그대로 렌더 + 원시 펀딩 수치는 미노출.
+msg_sup = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
+                          funding_rate=-0.05, supply=("우호", "숏 몰림"))
+check("T14O2 수급 명시 전달 - 합성 판정 렌더·펀딩 수치 미노출",
+      "🧭 수급: 우호 (숏 몰림)" in msg_sup and "-0.05" not in msg_sup)
+
+# ── SV1~SV5: derive_supply_verdict 판정 매트릭스 (2026-08-07) ──────────────
+from monitor.binance import derive_supply_verdict as _sv
+check("SV1 숏 과열+신규 숏 유입 → 우호(숏 몰림) / 중립 펀딩이면 중립(숏 유입)",
+      _sv(-0.02, +8.0, -3.0) == ("우호", "숏 몰림")
+      and _sv(0.0, +8.0, -3.0) == ("중립", "숏 유입"))
+check("SV2 신규 매수 유입 → 롱 과열이면 주의, 아니면 우호(자금 유입)",
+      _sv(+0.02, +8.0, +3.0) == ("주의", "롱 과열")
+      and _sv(0.0, +8.0, +3.0) == ("우호", "자금 유입"))
+check("SV3 OI 감소+가격 상승 → 주의(청산 반등) / +하락 → 중립(투매 진행)",
+      _sv(0.0, -8.0, +3.0) == ("주의", "청산 반등")
+      and _sv(-0.02, -8.0, -3.0) == ("중립", "투매 진행"))
+check("SV4 OI 보합(<3%)/미확보 → 펀딩 단독 폴백",
+      _sv(-0.02, +1.0, -3.0) == ("우호", "숏 과열")
+      and _sv(+0.02, None, None) == ("주의", "롱 과열")
+      and _sv(0.001, None, None) == ("중립", None))
+check("SV5 전부 없음 → (None, None) - 행 생략",
+      _sv(None, None, None) == (None, None))
 
 # T14c~T14f: 역신호 지표는 알림에 렌더하지 않는다 (2026-07-27 사용자 결정으로 되돌림).
 # 같은 날 오전에 "🔻 역신호 후보 — …" 줄을 넣었다가 뺐다 — 알림 한 건이 이미 폰 화면을

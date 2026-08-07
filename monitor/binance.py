@@ -92,19 +92,80 @@ def _coingecko_binance_funding_map(timeout: float) -> Optional[dict]:
             return None
         out = {}
         for t in r.json().get("tickers") or []:
-            v = t.get("funding_rate")
             sym = t.get("symbol")
-            if sym and v is not None:
-                try:
-                    out[sym] = float(v)  # 이미 % 단위 (BTC 0.006 = 0.006%)
-                except (ValueError, TypeError):
-                    continue
+            if not sym:
+                continue
+            row = {}
+            for src, dst in (("funding_rate", "fr"),          # 이미 % 단위
+                             ("open_interest_usd", "oi"),      # USD 명목
+                             ("h24_percentage_change", "pchg")):  # 가격 24h %
+                v = t.get(src)
+                if v is not None:
+                    try:
+                        row[dst] = float(v)
+                    except (ValueError, TypeError):
+                        pass
+            if row:
+                out[sym] = row
         if out:
             _cg_funding_cache.update(ts=now, map=out)
             return out
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] CoinGecko 실패: %s", e)
     return None
+
+
+def fetch_deriv_snapshot(symbol: str, timeout: float) -> Optional[dict]:
+    """CoinGecko(Binance) 파생 스냅샷 {fr, oi, pchg} — 없는 필드는 키 부재.
+    수급 판정(derive_supply_verdict)과 OI 스냅샷 적재의 단일 출처.
+    실패/미상장 시 None."""
+    m = _coingecko_binance_funding_map(timeout)
+    if not m:
+        return None
+    return m.get(f"{symbol.upper()}USDT")
+
+
+# 수급 판정 임계 (2026-08-07 사용자 결정: 펀딩+OI 를 결론 한 줄로 합성)
+SUPPLY_FUNDING_HOT = 0.01    # % — 기존 펀딩 라벨과 동일 경계
+SUPPLY_OI_MIN_PCT = 3.0      # OI 24h 변화 유의미 경계 (미만은 보합)
+SUPPLY_PRICE_MIN_PCT = 1.0   # 가격 24h 방향 판별 경계
+
+
+def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct):
+    """펀딩 쏠림 × (OI 증감 + 가격 방향) → 매수 관점 판정.
+
+    반환 (label, reason|None) — label ∈ '우호'/'주의'/'중립', reason 은 괄호
+    근거(최대 5자, 모바일 한 줄 유지). 입력 전부 None 이면 (None, None) —
+    호출부가 행을 생략한다. OI/가격이 없으면 펀딩 단독 판정으로 폴백."""
+    f_hot_long = funding_pct is not None and funding_pct > SUPPLY_FUNDING_HOT
+    f_hot_short = funding_pct is not None and funding_pct < -SUPPLY_FUNDING_HOT
+
+    oi_valid = oi_change_pct is not None and price_change_pct is not None
+    if oi_valid and abs(oi_change_pct) >= SUPPLY_OI_MIN_PCT:
+        oi_up = oi_change_pct > 0
+        px_up = price_change_pct >= SUPPLY_PRICE_MIN_PCT
+        px_down = price_change_pct <= -SUPPLY_PRICE_MIN_PCT
+        if oi_up and px_down:
+            # 신규 숏 유입 — 숏 과열까지 겹치면 스퀴즈 연료
+            return ("우호", "숏 몰림") if f_hot_short else ("중립", "숏 유입")
+        if oi_up and px_up:
+            # 신규 매수 유입 — 롱 과열이면 추격 위험
+            return ("주의", "롱 과열") if f_hot_long else ("우호", "자금 유입")
+        if (not oi_up) and px_up:
+            return ("주의", "청산 반등")   # 새 돈 없는 반등
+        if (not oi_up) and px_down:
+            return ("중립", "투매 진행")   # 롱 청산
+        # 가격 보합(±1% 미만) + OI 유의미 변화 — 방향 판단 보류
+        return ("중립", None)
+
+    # OI 미확보/보합 → 펀딩 단독 폴백 (기존 라벨 의미 유지)
+    if f_hot_short:
+        return "우호", "숏 과열"
+    if f_hot_long:
+        return "주의", "롱 과열"
+    if funding_pct is not None:
+        return "중립", None
+    return None, None
 
 
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
@@ -134,7 +195,7 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
     # CoinGecko 경유 Binance 원본 (프로덕션 주 경로 — 위 직접 호출은 미국 차단)
     _cg_map = _coingecko_binance_funding_map(timeout)
     if _cg_map is not None:
-        rate = _cg_map.get(pair)
+        rate = (_cg_map.get(pair) or {}).get("fr")
         if rate is not None:
             return rate
         # Binance 미상장 심볼 — Bybit/OKX 로 계속 폴백

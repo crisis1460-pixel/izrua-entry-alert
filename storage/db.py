@@ -166,6 +166,16 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     suppressed_timeframe INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
+
+-- OI(미결제약정) 스냅샷 (2026-08-07 수급 판정) — CoinGecko(Binance) 현재값만
+-- 제공되므로 24h 변화율은 자체 적재로 계산한다. 활성 레벨 코인만, 시간 게이트
+-- (META_LAST_OI_SNAP)로 회차당이 아니라 주기 적재. 48h 넘은 행은 프룬.
+CREATE TABLE IF NOT EXISTS oi_history (
+    coin_symbol TEXT NOT NULL,
+    oi_usd      REAL NOT NULL,
+    ts          REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oi_history ON oi_history (coin_symbol, ts);
 """
 
 
@@ -1238,6 +1248,35 @@ def set_meta(conn, key: str, value: str) -> None:
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
+
+
+# ── OI 스냅샷 (2026-08-07 수급 판정) ─────────────────────────────────────
+OI_SNAP_RETENTION_SEC = 48 * 3600   # 24h 비교 + 여유
+OI_BASELINE_WINDOW = (18 * 3600, 30 * 3600)  # '24h 전'으로 인정할 범위
+
+
+def record_oi_snapshots(conn, rows: list, now: Optional[float] = None) -> None:
+    """rows: [(coin_symbol, oi_usd), ...] 일괄 적재 + 보존기간 밖 프룬."""
+    now = now if now is not None else time.time()
+    conn.executemany(
+        "INSERT INTO oi_history (coin_symbol, oi_usd, ts) VALUES (?,?,?)",
+        [(sym, oi, now) for sym, oi in rows if oi is not None],
+    )
+    conn.execute("DELETE FROM oi_history WHERE ts < ?",
+                 (now - OI_SNAP_RETENTION_SEC,))
+
+
+def get_oi_baseline(conn, coin_symbol: str, now: Optional[float] = None):
+    """~24h 전 OI (18~30h 창에서 24h 에 가장 가까운 스냅샷). 없으면 None —
+    호출부는 OI 축 없이 펀딩 단독 판정으로 폴백한다."""
+    now = now if now is not None else time.time()
+    lo, hi = now - OI_BASELINE_WINDOW[1], now - OI_BASELINE_WINDOW[0]
+    row = conn.execute(
+        "SELECT oi_usd FROM oi_history WHERE coin_symbol=? AND ts BETWEEN ? AND ? "
+        "ORDER BY ABS(ts - ?) LIMIT 1",
+        (coin_symbol, lo, hi, now - 24 * 3600),
+    ).fetchone()
+    return row["oi_usd"] if row else None
 
 
 def stats(conn) -> dict:

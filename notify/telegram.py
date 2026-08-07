@@ -257,7 +257,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
                  kimchi_pct: float = None, volume_rank: int = None,
                  rep: dict = None, funding_rate: float = None,
-                 funding_regime_flip: dict = None) -> str:
+                 funding_regime_flip: dict = None, supply: tuple = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -364,18 +364,19 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 세 지표가 다 실패한 상태에서 레짐 배지만 있으면 세퍼레이터가 안 붙어
     # 목표가 행에 바로 이어지는 렌더 이슈가 있었다.
     if (sentiment or kimchi_pct is not None or funding_rate is not None
-            or funding_regime_flip):
+            or funding_regime_flip or supply):
         lines.append(_SEP)
-    if funding_rate is not None:
-        # 라벨 (2026-08-03 사용자 결정): 매수 판단에 직결되는 짧은 문구.
-        # 롱 과열(>0.01%) → "매수 자제", 숏 과열(<-0.01%) → "매수 우호", 그 외 "중립".
-        if funding_rate > 0.01:
-            _flabel = " (매수 자제)"
-        elif funding_rate < -0.01:
-            _flabel = " (매수 우호)"
-        else:
-            _flabel = " (중립)"
-        lines.append(f"💰 펀딩 {funding_rate:+.4f}%{_flabel}")
+    # 수급 판정 한 줄 (2026-08-07 사용자 결정): 종전 "💰 펀딩 수치+라벨" 줄을
+    # 펀딩×OI 합성 결론으로 대체 — 원시 수치 대신 매수 관점 판정만 짧게.
+    # supply 미전달(구 호출부·테스트)이면 funding_rate 단독으로 같은 형식을
+    # 만들어 렌더 경로를 하나로 유지한다. 모바일 한 줄 상한: 최장 14자.
+    _supply = supply
+    if _supply is None and funding_rate is not None:
+        from monitor.binance import derive_supply_verdict
+        _supply = derive_supply_verdict(funding_rate, None, None)
+    if _supply and _supply[0]:
+        _sv, _sr = _supply
+        lines.append(f"🧭 수급: {_sv} ({_sr})" if _sr else f"🧭 수급: {_sv}")
     # 펀딩 레짐 전환 (2026-08-03 스프린트08 사용자 결정): 30일+ 지속 음수 → 양수
     # 플립 감지 시 🔥 강조 배지. 등급 산식엔 영향 없음(배지만).
     # 표기 짧게 (사용자 결정): "🔥 N일 음수→양수" — 숫자·화살표만.
