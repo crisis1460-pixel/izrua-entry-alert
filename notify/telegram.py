@@ -907,8 +907,11 @@ def render_volume_spike_alert(coin: str, multiplier: float,
 
 def _fmt_usd_notional(v: float) -> str:
     """OI 명목가액(USD) 표기 — 억 단위(원화 전용 어휘)와 섞이지 않게
-    B(십억)/M(백만) 그대로 사용. 예: 4.83B / 210.5M."""
-    if v >= 1e9:
+    B(십억)/M(백만) 그대로 사용. 예: 4.83B / 210.5M.
+    2026-08-08 재검토: 1e9 미만이어도 반올림 결과가 M 표시로 1000.0 을
+    찍는 경계(예: 999,999,999.9 → "$1000.0M")를 B 로 승격해 값이 실제
+    자릿수와 어긋나 보이는 걸 막는다."""
+    if v >= 1e9 or round(v / 1e6, 1) >= 1000.0:
         return f"${v / 1e9:.2f}B"
     return f"${v / 1e6:.1f}M"
 

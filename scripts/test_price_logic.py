@@ -3447,6 +3447,35 @@ with db.connect(_OS_DB) as conn:
     price_check._snapshot_oi(conn, now + 100, settings.get, _os_prices)
 check("OS2 쿨다운 내 재급증 - 재발동 안 함", len(sent_messages) == 0)
 
+# OS2b (2026-08-08 재검토): 쿨다운 정확히 경계(now-last_alert == cooldown_sec)
+# — 코드는 `< cooldown_sec` 로 스킵 판정하므로 경계값 자체는 스킵 없이
+# 발동해야 한다(< 이 아니라 <= 였다면 이 케이스가 막혔을 것).
+_OS_DB3 = "cache/_test_oi_spike_boundary.db"
+if os.path.exists(_OS_DB3):
+    os.remove(_OS_DB3)
+db.init_db(_OS_DB3)
+with db.connect(_OS_DB3) as conn:
+    conn.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
+        "entry_usd, status, collected_at) VALUES "
+        "('os-b','OSB','KRW-OSB','long',1.0,'watching',?)", (now,))
+    db.record_oi_spike_alert(conn, "OSB", now)  # 마지막 발동 = now
+    conn.commit()
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory(
+    {"coingecko.com": _BnResp(200, {"tickers": [
+        {"symbol": "OSBUSDT", "funding_rate": 0.0, "open_interest_usd": 2_000_000.0}]})})
+_os_cd = settings.get("oi_spike_cooldown_hours") * 3600
+with db.connect(_OS_DB3) as conn:
+    _tb = now + _os_cd  # 정확히 경계
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_tb - 3700))
+    db.record_oi_snapshots(conn, [("OSB", 1_000_000.0)], _tb - 100)
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _tb, settings.get, {"KRW-OSB": 5000.0})
+check("OS2b 쿨다운 정확히 경계(==) - 스킵 아니고 발동", len(sent_messages) == 1)
+if os.path.exists(_OS_DB3):
+    os.remove(_OS_DB3)
+
 # OS3: 쿨다운 경과 후 재급증 → 다시 발동
 _binance._cg_funding_cache.update(ts=0.0, map=None)
 _requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(2_000_000.0))})
@@ -3519,6 +3548,16 @@ with db.connect(_OS_DB) as conn:
     price_check._snapshot_oi(conn, _t5, settings.get, None)
 check("OS7 prices 미전달 - 예외 없이 급증검사만 생략(적재는 정상)",
       len(sent_messages) == 0)
+
+# OS8 (2026-08-08 재검토): _fmt_usd_notional 직접 검증 - M/B 단위 전환 +
+# 반올림 경계(999,999,999.9 처럼 반올림하면 1000.0M 이 될 값은 B 로 승격).
+from notify.telegram import _fmt_usd_notional as _fmt_usd
+check("OS8 M 단위 (1e9 미만)", _fmt_usd(210_500_000.0) == "$210.5M")
+check("OS8b B 단위 (1e9 이상)", _fmt_usd(4_830_000_000.0) == "$4.83B")
+check("OS8c B 경계 정확히 1e9", _fmt_usd(1_000_000_000.0) == "$1.00B")
+check("OS8d 반올림 경계 - 999,999,999.9 는 M 반올림 시 1000.0M 이 아니라 B 로",
+      _fmt_usd(999_999_999.9) == "$1.00B")
+check("OS8e 경계 바로 아래(999,949,999.0)는 여전히 M", _fmt_usd(999_949_999.0) == "$999.9M")
 
 _binance._cg_funding_cache.update(ts=0.0, map=None)
 if os.path.exists(_OS_DB):

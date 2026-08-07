@@ -274,7 +274,11 @@ SETTINGS = {
     # 쿨다운 내 재발동 금지(같은 급증 구간에서 매시 반복 스팸 방지).
     "oi_spike_enabled": True,
     "oi_spike_pct": 15.0,           # 1h 전 대비 |변화율| 이 이상이면 급증 판정
-    "oi_spike_cooldown_hours": 6.0,  # 코인당 재발동 최소 간격
+    # 코인당 재발동 최소 간격. 감지 자체가 시간당 1회(_OI_SNAP_INTERVAL_SEC=
+    # 3600초, price_check.py)라 이 값이 1.0 미만이면 사실상 "쿨다운 없음"과
+    # 같다(다음 감지 시점 자체가 이미 1h 뒤라 쿨다운이 걸릴 일이 없음) —
+    # 1.0 미만으로 낮춰도 위험하진 않지만 의미가 없다는 점만 알아둘 것.
+    "oi_spike_cooldown_hours": 6.0,
 
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
