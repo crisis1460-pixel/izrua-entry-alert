@@ -1,0 +1,31 @@
+# [일회용] 구분선 16자 축소 확인 샘플 알림 1회 발송 — 2026-08-08.
+# 이 파일이 push 되면 1회 실행된다. 확인 후 scripts/send_sample_alert.py 와
+# 함께 삭제 예정. 읽기 전용(DB SELECT 만) — data/ 커밋백 없음.
+name: sample-alert
+
+on:
+  push:
+    paths:
+      - ".github/workflows/sample-alert.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 샘플 알림 발송
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/send_sample_alert.py
