@@ -47,39 +47,63 @@ def _mcap_tier(rank: int) -> tuple:
 
 
 def fetch_top_coins(top_n: int, timeout: float) -> list:
-    """CoinGecko 시총 상위 코인. 반환: [{symbol, rank, name, price_usd, tier_icon}, ...]"""
+    """CoinGecko 시총 상위 코인. 반환: [{symbol, rank, name, price_usd, tier_icon}, ...]
+
+    2026-08-08 페이지네이션: CoinGecko per_page 상한이 250이라 top_n>250 은
+    다중 페이지가 필요하다(유니버스 200→300 단계 시험, 사용자 결정). 종전
+    코드는 min(250, top_n) 1페이지만 불러 300을 요청해도 조용히 250에서
+    잘렸다. 일 1회 캐시 갱신 경로라 페이지 2~3콜 추가는 한도 부담 없음."""
     key = settings.secret("COINGECKO_API_KEY")
-    params = {
-        "vs_currency": "usd",
-        "order": "market_cap_desc",
-        "per_page": min(250, top_n),
-        "page": 1,
-        "sparkline": "false",
-    }
     headers = {}
     if key:
         # Demo 키는 헤더로 전달 (공식 권장). Pro 키와 엔드포인트가 다르지만 Demo 는 이 헤더 사용.
         headers["x-cg-demo-api-key"] = key
-    try:
-        resp = requests.get(CG_MARKETS_URL, params=params, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        logger.warning("[cg] top coins 조회 실패: %s", e)
-        raise
     coins = []
-    for c in data[:top_n]:
-        rank = c.get("market_cap_rank")
-        if rank is None:
-            continue
-        icon, _label = _mcap_tier(rank)
-        coins.append({
-            "symbol": (c.get("symbol") or "").upper(),
-            "rank": rank,
-            "name": c.get("name"),
-            "price_usd": c.get("current_price"),
-            "tier_icon": icon,
-        })
+    page = 1
+    while len(coins) < top_n:
+        if page > 1:
+            time.sleep(1.2)  # keyless 레이트리밋 방어 — 페이지 사이에만, 일 1회 경로라 무부담
+        params = {
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            # per_page 는 페이지 간 반드시 고정 — 가변이면 오프셋(page×per_page)이
+            # 어긋나 2페이지가 51~100위를 중복 반환한다(2026-08-08 라이브 검증서
+            # 실측된 버그: min(250, 잔여) 로 줄였더니 마지막 코인 rank=101).
+            # 초과 수신분은 아래 len(coins)>=top_n 가드가 자른다.
+            "per_page": 250,
+            "page": page,
+            "sparkline": "false",
+        }
+        try:
+            resp = requests.get(CG_MARKETS_URL, params=params, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as e:
+            logger.warning("[cg] top coins 조회 실패(page %d): %s", page, e)
+            if coins:
+                # 부분 성공 — 이미 받은 앞 페이지는 살린다(빈 유니버스보다 낫다).
+                # 캐시가 다음날 갱신을 재시도한다.
+                break
+            raise
+        if not data:
+            break  # 빈 응답 = 마지막 페이지 도달
+        for c in data:
+            if len(coins) >= top_n:
+                break
+            rank = c.get("market_cap_rank")
+            if rank is None:
+                continue
+            icon, _label = _mcap_tier(rank)
+            coins.append({
+                "symbol": (c.get("symbol") or "").upper(),
+                "rank": rank,
+                "name": c.get("name"),
+                "price_usd": c.get("current_price"),
+                "tier_icon": icon,
+            })
+        if len(data) < 250:
+            break  # per_page 미만 응답 = 데이터 소진(마지막 페이지) — 다음 페이지 무의미
+        page += 1
     return coins
 
 
