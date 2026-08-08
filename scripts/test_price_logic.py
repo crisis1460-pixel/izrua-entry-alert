@@ -371,7 +371,10 @@ msg_a = tg.render_alert("touch", "LINK", [dict(
     post_age_minutes=60, collected_at=now, author_self_wins=8, author_self_losses=3,
     author_self_neff_r=11.0, author_rank_min_neff=5.0)],
     8.35 * USDT_KRW, USDT_KRW)
-check("T14 워쳐+자체 병기 (별도줄)", "📊 평균 적중률: 72% (워쳐 25건)" in msg_a
+# 2026-08-08 2차: 행별 자동 절삭 예산 안에서만 원문과 비교(절삭 자체는 TR
+# 섹션에서 별도 검증 - 여기선 절삭 후에도 올바른 수치가 담기는지만 본다).
+check("T14 워쳐+자체 병기 (별도줄)",
+      tg._truncate_line("📊 평균 적중률: 72% (워쳐 25건)") in msg_a
       and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ 작성자:" in msg_a)
 msg_b = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
@@ -2827,7 +2830,8 @@ check("VS4 밴드 내 + 6.0x 급증 - 알림 발송·발송표식",
       len(sent_messages) == sent_before_vs + 1 and _vs_row("KRW-VSA")["alerted"] == 1
       and "거래량 급증" in _vs_msg and "VSA" in _vs_msg)
 check("VS4b 새 지표 렌더 - 최근 1시간/20시간 평균 라벨",
-      "최근 1시간:  6.0억  (6.0x 급증)" in _vs_msg and "20시간 평균:  1.0억" in _vs_msg
+      tg._truncate_line("    최근 1시간:  6.0억  (6.0x 급증)") in _vs_msg
+      and "20시간 평균:  1.0억" in _vs_msg
       and "24h" not in _vs_msg and "7일" not in _vs_msg)
 check("VS4c TP 스냅샷 없는 행(NULL) - TP 행 생략", "TP:" not in _vs_msg)
 
