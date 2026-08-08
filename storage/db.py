@@ -434,7 +434,7 @@ def upsert_level(conn, level: dict) -> bool:
         """UPDATE levels SET
              grade=?, score=?, rr=?, grade_ver=COALESCE(?, grade_ver),
              sl_usd=?, tp_usd=?,
-             tp_ladder_count=?,
+             tp_ladder_count=COALESCE(?, tp_ladder_count),
              tps_usd=COALESCE(?, tps_usd),
              author_followers=COALESCE(?, author_followers),
              author_hit_rate=COALESCE(?, author_hit_rate),
@@ -449,7 +449,13 @@ def upsert_level(conn, level: dict) -> bool:
             # None(구 호출부)은 COALESCE 로 기존 값 보존 — 소급 재라벨 아님.
             level.get("grade_ver"),
             level.get("sl_usd"), level.get("tp_usd"),
-            level.get("tp_ladder_count") or 0,
+            # 2026-08-08 재검토: 다른 선택필드들과 같은 COALESCE 보호로 통일 —
+            # 종전 `or 0` 은 키 부재(None)까지 0 으로 강제해 tps_usd 와 짝이
+            # 맞는 필드인데도 재수집이 매번 단계 수를 0 으로 덮어쓸 수 있었다
+            # (현재 유일 호출부는 항상 정수를 채워 보내 트리거는 안 됐음).
+            # 실제 0 값(사다리 아님)은 그대로 바인딩되어 COALESCE 를 통과한다
+            # — NULL 이 아니므로 "기존 값 보존" 경로를 타지 않는다.
+            level.get("tp_ladder_count"),
             # None → COALESCE 가 기존 값을 보존 (backfill 값 보호).
             # "[]" → 명시적 클리어(유효 TP 없는 재수집 결과)라 그대로 덮어씀.
             level.get("tps_usd"),

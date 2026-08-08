@@ -2226,6 +2226,25 @@ with db.connect(_UPS_DB) as conn:
 check("UPS3 whitelist 3상: None(미로드) 재수집은 1 보존, False(확정)는 0 덮어쓰기",
       _wl1 == 1 and _wl2 == 0)
 
+# UPS4 (2026-08-08 재검토): tp_ladder_count 도 다른 선택필드처럼 COALESCE 보호
+# — 종전엔 `or 0` 바인딩이라 키 부재(None)까지 0 으로 강제 덮어썼다(tps_usd
+# 는 COALESCE 인데 짝인 단계수만 예외였음). 키 부재는 보존, 명시적 0(사다리
+# 아님으로 치유)은 확정 덮어써야 한다.
+with db.connect(_UPS_DB) as conn:
+    _lvlad = dict(_lvups, coin_symbol="ZLADX", author="AuthLad",
+                 tp_ladder_count=3, tps_usd="[11,12,13]")
+    _lvlad["signal_key"] = db.make_signal_key("ZLADX", 50.0, "AuthLad", "lad")
+    db.upsert_level(conn, _lvlad)
+    _lvlad_missing = {k: v for k, v in _lvlad.items() if k != "tp_ladder_count"}
+    db.upsert_level(conn, _lvlad_missing)
+    _lad1 = conn.execute("SELECT tp_ladder_count FROM levels WHERE signal_key=?",
+                         (_lvlad["signal_key"],)).fetchone()["tp_ladder_count"]
+    db.upsert_level(conn, dict(_lvlad, tp_ladder_count=0))
+    _lad2 = conn.execute("SELECT tp_ladder_count FROM levels WHERE signal_key=?",
+                         (_lvlad["signal_key"],)).fetchone()["tp_ladder_count"]
+check("UPS4 tp_ladder_count 3상: 키 부재는 3 보존, 명시적 0 은 확정 덮어쓰기",
+      _lad1 == 3 and _lad2 == 0)
+
 if os.path.exists(_UPS_DB):
     os.remove(_UPS_DB)
 
