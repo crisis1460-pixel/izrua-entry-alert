@@ -243,6 +243,92 @@ os.remove(_cache_path_m5)
 
 
 # ══════════════════════════════════════════════════════════════════
+# 즉시수리(2026-08-08, 재검토 커버리지 공백 메우기): fetch_top_coins 다중
+# 페이지 경로가 실제로는 어떤 테스트도 top_n>250 을 준 적이 없어 무테스트로
+# 배포됐었다(top_n=10 짜리 m5 테스트는 1페이지 안에서 끝남). page/per_page
+# 파라미터를 실제로 인식하는 목 서버로 경계·중복·부분실패를 직접 검증.
+# ══════════════════════════════════════════════════════════════════
+def _cg_page_coin(rank):
+    return {"symbol": f"c{rank}", "market_cap_rank": rank, "name": f"Coin{rank}",
+            "current_price": 1.0}
+
+
+def _cg_markets_paged(total_ranks, fail_on_page=None):
+    """page 파라미터를 실제로 반영하는 목 — 실제 CoinGecko 계약(1-idx, per_page 고정)."""
+    calls = {"pages": []}
+
+    def _get(url, params=None, headers=None, timeout=None):
+        if "market/all" in url:
+            return _FakeResp(200, [{"market": "KRW-BTC"}])
+        if "coins/markets" not in url:
+            return _FakeResp(404)
+        page = params["page"]
+        per_page = params["per_page"]
+        calls["pages"].append((page, per_page))
+        if fail_on_page and page == fail_on_page:
+            return _FakeResp(500, text="fail")
+        lo = (page - 1) * per_page + 1
+        hi = min(lo + per_page - 1, total_ranks)
+        if lo > total_ranks:
+            return _FakeResp(200, [])
+        return _FakeResp(200, [_cg_page_coin(r) for r in range(lo, hi + 1)])
+    _get.calls = calls
+    return _get
+
+
+# PG1: top_n=300(=2페이지, per_page 250 고정) — 경계에 랭크 250/251 걸침,
+# 중복·누락 없이 정확히 300개, 페이지 간 per_page 가 고정인지 확인.
+_pg_mock1 = _cg_markets_paged(total_ranks=1000)
+requests.get = _pg_mock1
+_coins_300 = coingecko.fetch_top_coins(300, 5.0)
+_ranks_300 = [c["rank"] for c in _coins_300]
+check("PG1 300 요청 - 정확히 300개, 중복 없음",
+      len(_coins_300) == 300 and len(set(_ranks_300)) == 300)
+check("PG1b 랭크 250/251 경계 연속(페이지 넘어가도 끊김 없음)",
+      250 in _ranks_300 and 251 in _ranks_300)
+check("PG1c 페이지 간 per_page 고정(250) - 가변이면 오프셋 어긋나 중복 발생 재현 버그",
+      all(pp == 250 for _, pp in _pg_mock1.calls["pages"]))
+check("PG1d 정확히 2페이지만 호출(전체 재고 1000개 중 필요한 2페이지만)",
+      len(_pg_mock1.calls["pages"]) == 2)
+
+# PG2: 실제 재고(500)가 요청량(1000)보다 적고 딱 250 배수로 떨어지는 경계 -
+# 2페이지째도 len(data)==250(가득 참)이라 "더 있을 수도" 판단으로 3페이지째를
+# 찔러보고, 거기서 빈 응답을 받아야 정상 종료된다(len(data)<250 조건만으로는
+# 못 잡는 case - not data 조건이 최종 안전판 역할을 하는지 확인).
+_pg_mock2 = _cg_markets_paged(total_ranks=500)
+requests.get = _pg_mock2
+_coins_over = coingecko.fetch_top_coins(1000, 5.0)
+check("PG2 재고(500, 250배수)보다 많이 요청 - 3페이지째 빈 응답으로 정상 종료(무한루프 아님)",
+      len(_coins_over) == 500 and len(_pg_mock2.calls["pages"]) == 3)
+
+# PG3: 1페이지 성공 + 2페이지 실패 → 예외 전파 없이 1페이지 결과(250개) 보존
+# (빈 유니버스보다 낫다는 설계 의도 그대로 동작하는지).
+_pg_mock3 = _cg_markets_paged(total_ranks=1000, fail_on_page=2)
+requests.get = _pg_mock3
+_coins_partial = coingecko.fetch_top_coins(300, 5.0)
+check("PG3 2페이지 실패 - 예외 없이 1페이지(250개) 부분결과 보존",
+      len(_coins_partial) == 250)
+
+# PG4: 1페이지째부터 실패 → 부분결과가 없으므로 예외가 그대로 전파돼야 한다
+# (호출부 build_universe 가 이번 회차를 스킵 판단할 신호).
+_pg_mock4 = _cg_markets_paged(total_ranks=1000, fail_on_page=1)
+requests.get = _pg_mock4
+_raised_pg4 = False
+try:
+    coingecko.fetch_top_coins(300, 5.0)
+except requests.RequestException:
+    _raised_pg4 = True
+check("PG4 1페이지부터 실패 - 부분결과 없어 예외 그대로 전파", _raised_pg4)
+
+# PG5: top_n <= 250 은 종전대로 1페이지만 호출(하위호환 - 불필요한 콜 없음).
+_pg_mock5 = _cg_markets_paged(total_ranks=1000)
+requests.get = _pg_mock5
+_coins_200 = coingecko.fetch_top_coins(200, 5.0)
+check("PG5 top_n<=250 은 1페이지만 호출(하위호환)",
+      len(_coins_200) == 200 and len(_pg_mock5.calls["pages"]) == 1)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 수리2(하류) + 수리3 + 수리4: scripts/run_collect.py
 # ══════════════════════════════════════════════════════════════════
 from scripts import run_collect

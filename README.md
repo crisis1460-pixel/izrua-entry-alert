@@ -23,7 +23,7 @@ TradingView 차티스트 아이디어에서 **엔트리 가격**을 수집하고
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | 알림 발송 (기존 @izrua 봇) | ✅ |
 | `TELEGRAM_CHAT_ID` | 알림 수신 대상 | ✅ |
-| `COINGECKO_API_KEY` | 시총 top-200 조회 (무료 Demo) | ✅ |
+| `COINGECKO_API_KEY` | 시총 top-N 조회 (무료 Demo) | ✅ |
 | `WATCHER_GITHUB_TOKEN` | 워쳐 DB 읽기(작성자 적중률) | 선택 |
 
 > **업비트 API 키는 쓰지 않는다.** 시세 API 는 인증 불필요라, 가장 위험한 거래 키를
@@ -39,7 +39,7 @@ python scripts/check_secrets.py   # 통과 확인
 ## 구조
 ```
 config/settings.py     운영 파라미터 + 비밀값 로더(env 전용)
-collector/coingecko.py 시총 top-200 ∩ 업비트 KRW 유니버스
+collector/coingecko.py 시총 top-N(config.universe_top_n) ∩ 업비트 KRW 유니버스
 collector/tradingview.py + extractor.py  아이디어 수집 + entry/SL/TP 추출
 storage/db.py          레벨 상태 DB (watching/previewed/touched/expired)
 monitor/price_check.py Upbit 시세로 접근/터치 판정

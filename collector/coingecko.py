@@ -1,7 +1,8 @@
 """
 유니버스 = CoinGecko 시총 top-N ∩ 업비트 KRW 마켓.
 
-- CoinGecko /coins/markets 1콜로 top-200 + 순위 + 심볼 확보 (per_page=250).
+- CoinGecko /coins/markets 로 top-N + 순위 + 심볼 확보 (2026-08-08 top_n=300부터
+  다중 페이지 — per_page 상한 250이라 1콜로는 250까지만, 그 이상은 자동 페이징).
 - 업비트 KRW 마켓 목록(pyupbit 없이 공개 REST) 과 교집합.
 - 시총 순위 → 등급 아이콘(💎🥇🥈🥉) 매핑.
 - 일 1회 캐시(cache/universe.json) — 재실행 시 24h 이내면 API 안 부름.
@@ -39,11 +40,15 @@ STABLECOINS = {
 
 
 def _mcap_tier(rank: int) -> tuple:
-    """순위 → (아이콘, 라벨). 경계는 settings.mcap_tiers."""
+    """순위 → (아이콘, 라벨). 경계는 settings.mcap_tiers.
+    2026-08-08: mcap_tiers 최상단(현재 200)을 넘는 순위는 유니버스
+    universe_top_n(현재 300) 안이어도 아이콘 없이 여기로 온다 — "순위밖"은
+    "아이콘표 밖"이라는 뜻이지 "유니버스 밖"이 아니다(현재 아무 코드도 이
+    라벨 텍스트를 읽지 않지만, 혼동 방지를 위해 명시)."""
     for upper, icon, label in settings.get("mcap_tiers"):
         if rank <= upper:
             return icon, label
-    return "·", "순위밖"
+    return "·", "아이콘표밖(유니버스 안)"
 
 
 def fetch_top_coins(top_n: int, timeout: float) -> list:
