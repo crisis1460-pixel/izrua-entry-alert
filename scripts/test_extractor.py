@@ -464,6 +464,12 @@ LADDER_N_CASES = [
     ("산문 반복 목표는 사다리 아님 → 0단계",
      "SOLUSDT short, originally set with an entry at 100, take-profit at 92, "
      "and stop-loss at 104. The optimized take-profit is 94 instead.", 100.0, 0),
+    # 2026-08-08 재검토: 한 줄 나열형(하이픈) 사다리도 tps_all 과 같은 크기
+    # sanity(엔트리 0.25~4배)를 걸러야 한다 — 안 그러면 마지막 rung 이 4배
+    # 초과로 tps_all 에서 탈락하는데 tp_ladder_count 는 원시 개수를 그대로
+    # 써 "3/3단계"인데 실제 감시 목록은 2개뿐인 불일치가 생긴다.
+    ("하이픈 사다리 중 마지막 rung 이 4배 초과(sanity 탈락) → 3 아닌 2단계",
+     "$ETC/USDT LONG\nENTRY: 10\nTARGETS: 12 - 15 - 50\nSTOP LOSS: 8", 10.0, 2),
 ]
 for desc, text, price, exp_n in LADDER_N_CASES:
     r = parse_setup(text, current_price=price)

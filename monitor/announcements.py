@@ -343,6 +343,9 @@ def check_announcements(conn, now: float, cfg_get) -> dict:
     # 이어지는 동안 2분마다 재시도하게 되어 비문서화 API 를 두드리는 꼴이 된다 —
     # 실패해도 다음 주기까지 쉬는 쪽이 무료/무인증 운영 원칙에 맞다.
     db.set_meta(conn, _POLL_META, str(now))
+    conn.commit()  # 2026-08-08 재검토: 다른 세 워쳐독과 같은 meta→commit 패턴
+    # 승계 — 이 회차 뒤쪽(예: 터치 처리 블록)에서 예외가 나면 전체 with 블록의
+    # 암묵 커밋이 안 돌아 이 "시도했다" 마킹까지 함께 롤백되던 경로 차단.
     result["polled"] = True
 
     notices = _fetch(cfg_get("http_timeout_sec"), cfg_get("announcement_page_size"))

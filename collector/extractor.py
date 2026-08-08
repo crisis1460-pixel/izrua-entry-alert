@@ -462,7 +462,24 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     if tps and tp is not None:
         _n = getattr(tps[0], "ladder_n", 0)
         if _n > 1:
-            tp_ladder_count = _n  # 한 줄 나열형("a - b - c", "a → b")
+            # 한 줄 나열형("a - b - c", "a → b") — 2026-08-08 재검토 수정: 원래는
+            # rung 개수(_n)를 그대로 썼는데, tps_all(아래)은 같은 rung 목록에
+            # entry 0.25~4배 크기+방향 sanity 를 걸러 세므로 크기 이상값이 섞인
+            # 원문("TP: $12 - $15 - $50", entry=$10 이면 $50 은 4배 초과로
+            # tps_all 에서 탈락)에서 "3/3단계"라 표시되는데 실제 감시 목록은
+            # 2개뿐인 불일치가 있었다. 줄바꿈 스펙형(아래 elif 분기, 2026-08-01
+            # 수정)과 동일 기준(entry 방향+크기)으로 통일한다.
+            _ivals = getattr(tps[0], "ladder_values", None) or list(tps[0])
+            _ilo, _ihi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
+                         else (float("-inf"), float("inf")))
+            _ivalid = {v for v in _ivals if v is not None and _ilo <= v <= _ihi
+                      and (entry is None
+                           or (v > entry if direction == "long" else v < entry))}
+            # 스펙형 자매 분기와 동일 게이트: 유효 rung 이 2개 미만이거나 상한
+            # 초과면 tp_ladder_count 는 초기값(0)에 남는다(=렌더러가 단계
+            # 표시를 생략) — 필터 안 거친 원시값으로 되돌아가지 않는다.
+            if 1 < len(_ivalid) <= _LADDER_MAX_STEPS:
+                tp_ladder_count = len(_ivalid)
         else:
             # 줄바꿈 나열형("Target 1: …" 세 줄, "• TP1: …" 네 줄). 실측상 원문의
             # 절반가량이 이 형태다. 값이 서로 다른 것만 세는 이유는 "Take-Profit

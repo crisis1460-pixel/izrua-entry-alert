@@ -1468,6 +1468,12 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
             text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw)
             if telegram.send(text, urgency="low"):
                 db.record_oi_spike_alert(conn, c, now)
+                # 즉시 커밋 (2026-08-08 재검토): 이 함수의 유일한 커밋은 루프
+                # 끝(record_oi_snapshots 이후)이라, 발송 성공 뒤 다음 코인
+                # 처리 중 또는 record_oi_snapshots/set_meta 에서 예외가 나면
+                # 이미 보낸 알림의 쿨다운 기록이 롤백돼 다음 회차에 같은 급증을
+                # 중복 발송할 수 있었다. 발송=기록의 사실 자체는 즉시 확정.
+                conn.commit()
         except Exception as e:  # noqa: BLE001 - 급증 알림 실패가 스냅샷 적재를 막으면 안 됨
             logger.warning("[체크] %s OI 급증 판정 실패(무시): %s", c, e)
     if rows:
