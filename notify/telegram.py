@@ -26,7 +26,9 @@
 
 import html
 import logging
+import re
 import time
+import unicodedata
 
 import requests
 
@@ -37,13 +39,93 @@ logger = logging.getLogger("alert.telegram")
 
 _API = "https://api.telegram.org/bot{token}/sendMessage"
 # 2026-08-08 사용자 결정: 그룹 채팅 전환 후 폭이 좁아져 20자 구분선이
-# 자동 줄바꿈되던 것을 줄바꿈 안 생기는 최대치로 축소.
-# 실측 역산: 스크린샷상 "    목표:  18,265원  (+15.6%)  1/2단" 까지 표시되고
-# "계" 만 다음 줄로 넘어감 — East Asian Width 기준 그 문자열의 표시폭은 36칼럼.
-# ━(U+2501) 는 유니코드 공식 분류(Ambiguous=1칸)와 달리 이 폰트에서 실제로는
-# 와이드(2칸)로 렌더링됨(20개=40칼럼>36 이라 줄바꿈된 것과 부합) — 이론상
-# 안전선 18개에서 여백 확보로 16개.
-_SEP = "━━━━━━━━━━━━━━━━"
+# 자동 줄바꿈되던 것을 축소. 실측 역산(스크린샷상 "    목표:  18,265원
+# (+15.6%)  1/2단" 까지 표시되고 "계" 만 다음 줄로 넘어감 — East Asian
+# Width 기준 그 문자열 표시폭 36칼럼, ━ 는 유니코드 공식 분류(1칸)와 달리
+# 이 폰트에서 와이드(2칸)로 렌더링) 로 이론상 안전선은 18개. 17개로 설정
+# (사용자 재조정 — 16에서 여유 있음을 확인 후 1개 상향).
+_SEP = "━━━━━━━━━━━━━━━━━"
+
+# 그룹 채팅 폭 기준 한 줄 최대 표시폭(칼럼) — 위 _SEP 산정과 동일 실측
+# 기준(36칼럼)을 모든 행에 적용. 2026-08-08 사용자 결정: 이 폭을 넘는 행은
+# 줄바꿈하지 말고 넘는 지점 "직전까지"만 표시하고 나머지는 표기 없이 자른다
+# (말줄임표 "…" 도 안 붙임 — 사용자가 명시적으로 표기하지 말라고 확정).
+_MAX_LINE_COLS = 36
+
+
+def _display_width(ch: str) -> int:
+    """문자 1개의 표시폭(칼럼). East Asian Width 'W'/'F' 는 2칸, 나머지 1칸.
+    ━(U+2501) 는 공식 분류가 Ambiguous(1칸)지만 실측상 이 폰트에서 와이드로
+    렌더링돼(_SEP 주석 참고) 예외 처리한다."""
+    if ch == "━":
+        return 2
+    w = unicodedata.east_asian_width(ch)
+    return 2 if w in ("W", "F") else 1
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_NAME_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)")
+
+
+def _truncate_line(line: str, max_cols: int = _MAX_LINE_COLS) -> str:
+    """HTML(parse_mode) 태그를 보존하면서 표시폭 max_cols 를 넘는 지점에서
+    잘라낸다(말줄임표 없음 — 사용자 결정). 태그 자체는 폭 계산에서 제외하고
+    항상 통째로 통과시키며, 절단 시점에 열려 있던 태그는 닫아 HTML 이 깨지지
+    않게 한다. 2026-08-08 사용자 결정: 모든 알림 행에 공통 적용."""
+    total = 0
+    out = []
+    open_tags: list = []
+    pos = 0
+    for m in _TAG_RE.finditer(line):
+        for ch in line[pos:m.start()]:
+            cw = _display_width(ch)
+            if total + cw > max_cols:
+                out.extend(f"</{t}>" for t in reversed(open_tags))
+                return "".join(out)
+            out.append(ch)
+            total += cw
+        tag = m.group(0)
+        out.append(tag)
+        nm = _TAG_NAME_RE.match(tag)
+        if nm:
+            name = nm.group(1)
+            if tag.startswith("</"):
+                if open_tags and open_tags[-1] == name:
+                    open_tags.pop()
+            elif not tag.endswith("/>"):
+                open_tags.append(name)
+        pos = m.end()
+    for ch in line[pos:]:
+        cw = _display_width(ch)
+        if total + cw > max_cols:
+            out.extend(f"</{t}>" for t in reversed(open_tags))
+            return "".join(out)
+        out.append(ch)
+        total += cw
+    out.extend(f"</{t}>" for t in reversed(open_tags))
+    return "".join(out)
+
+
+def _finalize(lines: list) -> str:
+    """모든 렌더러의 최종 join 지점 — 각 행을 _truncate_line 으로 다듬은 뒤
+    개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용)."""
+    return "\n".join(_truncate_line(ln) for ln in lines)
+
+
+def _source_line(post_urls) -> str:
+    """출처 라인 (URL 노출 없이 하이퍼링크, 최대 5, 원 render_alert 로직을
+    2026-08-08 재사용화 — TP 적중·거래량 급증 알림에도 같은 방식으로 적용).
+    post_urls: URL 문자열(또는 None) 이터러블. None/빈 값은 링크 없이
+    "출처N" 텍스트만 표시(전체 URL 결측이어도 행 자체는 항상 나온다)."""
+    urls = list(post_urls)
+    links = []
+    for i, url in enumerate(urls[:5], 1):
+        u = html.escape(url or "", quote=True)
+        links.append(f'<a href="{u}">출처{i}</a>' if u else f"출처{i}")
+    line = "🔗 " + " · ".join(links)
+    if len(urls) > 5:
+        line += f" · 외 {len(urls) - 5}건"
+    return line
 
 # ── 재시도 정책 상수 (2026-07-26 수리) ──────────────────────────────
 _RETRY_MAX = 2                  # 총 재시도 최대 횟수(최초 시도 제외)
@@ -335,10 +417,12 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         # 있다는 사실을 알린다(정확한 상단은 출처 링크의 원문에 있다).
         # 단계가 1개뿐이거나 미상이면 종전과 완전히 동일한 한 줄이 나간다.
         n_tp = rep.get("tp_ladder_count") or 0
-        step = f"  1/{n_tp}단계" if n_tp > 1 else ""
+        # 2026-08-08 사용자 결정: "단계" 글자 삭제(그룹 채팅 폭 절약).
+        step = f"  1/{n_tp}" if n_tp > 1 else ""
         _tp_krw = _krw(tp)
         if _tp_krw:
-            lines.append(f"    목표:  {_tp_krw}원  ({pct:+.1f}%){step}")
+            # 2026-08-08 사용자 결정: 원 이후 띄어쓰기 삭제(그룹 채팅 폭 절약).
+            lines.append(f"    목표:  {_tp_krw}원({pct:+.1f}%){step}")
         else:
             lines.append(f"    목표:  ({pct:+.1f}%){step}")
     else:
@@ -428,16 +512,9 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)
     srcs = sorted(cluster, key=lambda l: x if (x := _fresh_age_min(l)) is not None else 1e12)
-    links = []
-    for i, lv in enumerate(srcs[:5], 1):
-        url = html.escape(lv.get("post_url") or "", quote=True)
-        links.append(f'<a href="{url}">출처{i}</a>' if url else f"출처{i}")
-    source_line = "🔗 " + " · ".join(links)
-    if len(srcs) > 5:
-        source_line += f" · 외 {len(srcs) - 5}건"
-    lines.append(source_line)
+    lines.append(_source_line([lv.get("post_url") for lv in srcs]))
 
-    return "\n".join(lines)
+    return _finalize(lines)
 
 
 # ── 수집 급감(조용한 고장) 경고 (2026-07-26) ──────────────────────────
@@ -866,11 +943,14 @@ def render_outcome_chain_alert(mismatch: dict) -> str:
 
 
 def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
-                            tp_krw: float, entry_krw: float) -> str:
+                            tp_krw: float, entry_krw: float,
+                            post_url: str = None) -> str:
     """다단계 TP 중간·최종 도달 알림.
 
     tp_n: 방금 도달한 TP 번호(1-indexed). tp_total: 전체 TP 수.
-    tp_krw: 도달가(KRW). entry_krw: 진입가(KRW, 대비 % 계산용)."""
+    tp_krw: 도달가(KRW). entry_krw: 진입가(KRW, 대비 % 계산용).
+    post_url (2026-08-08 사용자 결정): 해당 레벨의 원문 글 — 있으면 본알림과
+    같은 형식의 출처 링크를 마지막 구분선 아래에 추가."""
     is_last = (tp_n >= tp_total)
     pct = (tp_krw - entry_krw) / entry_krw * 100 if entry_krw and entry_krw > 0 else 0
     step_label = "🏁 최종목표 달성" if is_last else f"({tp_n}/{tp_total}단계)"
@@ -882,13 +962,15 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
     if not is_last:
         lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
     lines.append(_SEP)
-    return "\n".join(lines)
+    if post_url:
+        lines.append(_source_line([post_url]))
+    return _finalize(lines)
 
 
 def render_volume_spike_alert(coin: str, multiplier: float,
                                current_bil: float, avg_bil: float,
                                next_tp_krw=None, tp_idx=None,
-                               tp_count=None) -> str:
+                               tp_count=None, post_urls=None) -> str:
     """거래량 급증 알림 (Feature 4 — 진입가 터치 후 2단계 알림).
     2026-07-31 지표 교체: "현재 24h vs 7일 평균" → "최근 1시간 vs 직전 20시간
     (완결 60분봉) 평균"(RVOL 관례). 숫자만 갈면 오독하므로 라벨을 함께 교체.
@@ -896,7 +978,10 @@ def render_volume_spike_alert(coin: str, multiplier: float,
     next_tp_krw/tp_idx/tp_count (2026-07-31 사용자 요청, 2차에서 동적 선정):
     현재가 바로 위의 TP 원화가와 그 단계 (k/N) — "지금 급증 중인데 다음 목표까지
     얼마 남았나"를 알림 안에서 바로 보게. 유효 TP 가 없던 셋업(+10% 폴백 등록)
-    이나 이미 전 TP 위면 None 으로 들어와 행 자체를 생략한다."""
+    이나 이미 전 TP 위면 None 으로 들어와 행 자체를 생략한다.
+    post_urls (2026-08-08 사용자 결정): 이 감시를 등록시킨 원문 글들 — 있으면
+    본알림과 같은 형식의 출처 링크를 마지막 구분선 아래에 추가(재터치로 여러
+    글이 밴드에 합쳐졌으면 여러 개일 수 있음)."""
     lines = [
         _SEP,
         f"🔥 <b>[거래량 급증]</b> <b>{html.escape(coin)}</b>",
@@ -909,7 +994,10 @@ def render_volume_spike_alert(coin: str, multiplier: float,
         _n = f" ({tp_idx}/{tp_count}단계)" if tp_idx and tp_count else ""
         lines.append(f"    다음 TP:  {_p}원{_n}")
     lines.append(_SEP)
-    return "\n".join(lines)
+    _urls = [u for u in (post_urls or []) if u]
+    if _urls:
+        lines.append(_source_line(_urls))
+    return _finalize(lines)
 
 
 def _fmt_usd_notional(v: float) -> str:
@@ -939,7 +1027,7 @@ def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
     if current_krw:
         lines.append(f"    현재가:       {current_krw:,.0f}원")
     lines.append(_SEP)
-    return "\n".join(lines)
+    return _finalize(lines)
 
 
 # ── 역신호 확정/해제 경보 (S9, 2026-08-01 사용자 결정 Q1=B안/Q2=해제 있음) ──────

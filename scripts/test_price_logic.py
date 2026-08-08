@@ -654,11 +654,14 @@ check("T14k TradingView 미추적 작성자도 '워쳐 미추적' 대신 출처�
 msg_k2 = tg.render_alert("touch", "LINK", [dict(_src, source=None)],
                          8.35 * USDT_KRW, USDT_KRW)
 check("T14k2 source 가 빈 초기 수집분만 종전 문구로 남는다",
-      "👥 적중률 기록없음 (워쳐 미추적 작성자)" in msg_k2)
+      # 2026-08-08: 좁아진 그룹채팅 폭에 맞춰 행별 자동 절삭이 적용되어
+      # "...작성자)" 꼬리가 잘려나간다 — 잘리기 전 접두부만 확인.
+      "👥 적중률 기록없음 (워쳐 미추적" in msg_k2)
 msg_l = tg.render_alert("touch", "LINK",
                         [dict(_src, source="telegram", tp_ladder_count=8)],
                         8.35 * USDT_KRW, USDT_KRW)
-check("T14l 다단계 목표는 '1/8단계' 병기", "1/8단계" in msg_l)
+check("T14l 다단계 목표는 '1/8' 병기 (2026-08-08: '단계' 글씨 제거)",
+      "1/8" in msg_l)
 check("T14m 단계 표기로 줄 수가 늘지 않는다",
       msg_l.count("\n") == msg_j.count("\n"))
 msg_n = tg.render_alert("touch", "LINK",
@@ -3605,6 +3608,75 @@ check("OS8e 경계 바로 아래(999,949,999.0)는 여전히 M", _fmt_usd(999_94
 _binance._cg_funding_cache.update(ts=0.0, map=None)
 if os.path.exists(_OS_DB):
     os.remove(_OS_DB)
+
+# ── TR: 행별 자동 절삭 / 구분선 폭 (2026-08-08 그룹채팅 폭 축소 대응) ────────
+# _display_width 는 East Asian Width 기반 표시폭 추정 - ━ 는 유니코드 공식
+# 분류(Ambiguous=1)와 달리 텔레그램 실사용 폰트에서 2칸으로 렌더돼 특례 처리.
+check("TR1 ━ 는 표시폭 2 (유니코드 Ambiguous 분류와 다른 실측 특례)",
+      telegram._display_width("━") == 2)
+check("TR2 한글은 표시폭 2 (East Asian Width W)", telegram._display_width("가") == 2)
+check("TR3 영숫자는 표시폭 1", telegram._display_width("a") == 1)
+check("TR4 _SEP 는 17자", len(telegram._SEP) == 17)
+
+check("TR5 예산 이내 행은 그대로 통과",
+      telegram._truncate_line("짧은 한 줄") == "짧은 한 줄")
+_long_plain = "가" * 30  # 표시폭 60 > 예산 36
+_cut_plain = telegram._truncate_line(_long_plain)
+check("TR6 예산 초과 행은 절삭되고 원문 접두부와 일치",
+      _long_plain.startswith(_cut_plain) and len(_cut_plain) < len(_long_plain))
+check("TR7 절삭 시 말줄임표 등 표시 없음 - 접두부만 남고 덧붙는 문자 없음",
+      "…" not in _cut_plain and "..." not in _cut_plain)
+
+_long_html = "<b>" + "가" * 30 + "</b>"
+_cut_html = telegram._truncate_line(_long_html)
+check("TR8 여는 태그 중간에서 잘려도 HTML 이 열린 채로 남지 않는다",
+      _cut_html.count("<b>") == _cut_html.count("</b>"))
+
+# ── SL: 별도알림 출처 링크 렌더러 (2026-08-08 사용자 결정) ──────────────────
+_sl2 = telegram._source_line(["https://x.example/1", "https://x.example/2"])
+check("SL1 두 출처는 · 로 이어 붙인다",
+      '<a href="https://x.example/1">출처1</a>' in _sl2
+      and '<a href="https://x.example/2">출처2</a>' in _sl2
+      and " · " in _sl2)
+_sl6 = telegram._source_line([f"https://x.example/{i}" for i in range(6)])
+check("SL2 6건 이상이면 '외 N건' 을 덧붙이고 6번째부터는 생략",
+      "외 1건" in _sl6 and "출처6" not in _sl6)
+
+# ── TG: 타점/목표 행 포맷 (2026-08-08: 원-괄호 사이 공백 제거) ──────────────
+check("TG1 목표 행 '원' 바로 뒤에 괄호 - 이중 공백 없음",
+      "원(" in touch_msg and "원  (" not in touch_msg)
+
+# ── PU: volume_watch.post_urls 합집합 병합 + 급증/부분익절 알림 출처 표기 ───
+import json as _json_pu  # noqa: E402
+_PU_DB = "cache/_test_post_urls.db"
+if os.path.exists(_PU_DB):
+    os.remove(_PU_DB)
+db.init_db(_PU_DB)
+with db.connect(_PU_DB) as conn:
+    _pu_now = now
+    db.add_volume_watch(conn, "KRW-PUC", "PUC", _pu_now,
+                         post_urls=_json_pu.dumps(["https://a.example/1"]))
+    db.add_volume_watch(conn, "KRW-PUC", "PUC", _pu_now + 30,
+                         post_urls=_json_pu.dumps(["https://a.example/2"]))
+    _pu_row = db.get_volume_watch_active(conn, _pu_now + 60, 3600)[0]
+    check("PU1 재터치 시 post_urls 는 합집합으로 병합",
+          sorted(db._json_str_list(_pu_row["post_urls"]))
+          == ["https://a.example/1", "https://a.example/2"])
+os.remove(_PU_DB)
+
+check("PU2 급증 알림 - post_urls 없으면 출처 줄 생략",
+      "🔗" not in telegram.render_volume_spike_alert("PUD", 5.0, 10.0, 2.0))
+_pu_spike = telegram.render_volume_spike_alert("PUD", 5.0, 10.0, 2.0,
+                                                post_urls=["https://a.example/3"])
+check("PU3 급증 알림 - post_urls 있으면 마지막 구분선 아래 출처 표기",
+      _pu_spike.rstrip().endswith(telegram._source_line(["https://a.example/3"])))
+
+check("PU4 부분익절 알림 - post_url 없으면 출처 줄 생략",
+      "🔗" not in telegram.render_tp_partial_alert("PUE", 1, 3, 100.0, 90.0))
+_pu_tp = telegram.render_tp_partial_alert("PUE", 1, 3, 100.0, 90.0,
+                                          post_url="https://a.example/4")
+check("PU5 부분익절 알림 - post_url 있으면 마지막 구분선 아래 출처 표기",
+      _pu_tp.rstrip().endswith(telegram._source_line(["https://a.example/4"])))
 
 print()
 print("── 본알림 실제 렌더링 ──")

@@ -888,12 +888,20 @@ def run_once(now: float = None) -> dict:
                                 _tp1_krw = _tp_count = _tps_krw = None
                                 logger.warning("[체크] %s 감시 밴드 계산 실패(밴드 없이 등록): %s",
                                                ticker, e)
+                            # 2026-08-08 사용자 결정: 급증 알림에도 출처 링크 —
+                            # 이 감시를 등록시킨 클러스터의 원문 글들(중복 제거).
+                            # json.dumps("[]")는 truthy 라 `or None` 으로는 빈
+                            # 집합을 못 거르므로 집합 자체를 먼저 검사한다.
+                            _watch_url_set = {
+                                u for lv in cluster if (u := lv.get("post_url"))}
+                            _watch_urls = (json.dumps(sorted(_watch_url_set))
+                                          if _watch_url_set else None)
                             db.add_volume_watch(
                                 conn, ticker, coin, now,
                                 band_low_krw=band_low_krw,
                                 band_high_krw=band_high_krw,
                                 tp1_krw=_tp1_krw, tp_count=_tp_count,
-                                tps_krw=_tps_krw,
+                                tps_krw=_tps_krw, post_urls=_watch_urls,
                                 # B-1: 감시창 넘긴 미발송 행은 전면 리셋 —
                                 # 같은 회차 prune 이 새 감시를 지우는 race 봉쇄
                                 max_age_sec=cfg_get("volume_spike_watch_hours") * 3600)
@@ -1268,7 +1276,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     _tp_day = _day_kst(now)
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                        resolve_price, entry_krw)
+                        resolve_price, entry_krw, post_url=lv.get("post_url"))
                     if telegram.send(text, urgency="high"):
                         db.record_alert(conn, lv["coin_symbol"],
                                         _kind_inter, [lv["id"]], _tp_day, now)
@@ -1308,7 +1316,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         _tp_day = _day_kst(now)
                         text = telegram.render_tp_partial_alert(
                             lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                            resolve_price, entry_krw)
+                            resolve_price, entry_krw, post_url=lv.get("post_url"))
                         if telegram.send(text, urgency="high"):
                             db.record_alert(conn, lv["coin_symbol"],
                                             _kind, [lv["id"]], _tp_day, now)
@@ -1572,7 +1580,8 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
         text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil,
                                                   next_tp_krw=_next_tp,
                                                   tp_idx=_next_idx,
-                                                  tp_count=_n_total)
+                                                  tp_count=_n_total,
+                                                  post_urls=db._json_str_list(row.get("post_urls")))
         if telegram.send(text, urgency="high"):
             logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",
                         ticker, ratio, current_bil, avg_bil)

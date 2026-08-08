@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS volume_watch (
     band_high_krw REAL,
     tp1_krw      REAL,
     tp_count     INTEGER,
-    tps_krw      TEXT
+    tps_krw      TEXT,
+    post_urls    TEXT  -- 2026-08-08: 급증 알림 출처 링크용, JSON 문자열 리스트
 );
 
 -- 관찰 집계 (스프린트5 "알림량 관찰기" — 조용히 누적만, 발송 없음).
@@ -345,6 +346,8 @@ def _migrate(conn) -> None:
             conn.execute("ALTER TABLE volume_watch ADD COLUMN tp_count INTEGER")
         if "tps_krw" not in vw_cols:
             conn.execute("ALTER TABLE volume_watch ADD COLUMN tps_krw TEXT")
+        if "post_urls" not in vw_cols:
+            conn.execute("ALTER TABLE volume_watch ADD COLUMN post_urls TEXT")
 
     # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
@@ -1512,12 +1515,24 @@ def _json_list(raw) -> list:
         return []
 
 
+def _json_str_list(raw) -> list:
+    """JSON 문자열 → 문자열 리스트 (post_urls 등). 파싱 실패·None → 빈 리스트.
+    2026-08-08 출처 링크 병합용 — _json_list 와 원소 타입만 다르다."""
+    if not raw:
+        return []
+    try:
+        return [x for x in json.loads(raw) if isinstance(x, str)]
+    except (ValueError, TypeError):
+        return []
+
+
 def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
                      band_low_krw: Optional[float] = None,
                      band_high_krw: Optional[float] = None,
                      tp1_krw: Optional[float] = None,
                      tp_count: Optional[int] = None,
                      tps_krw: Optional[str] = None,
+                     post_urls: Optional[str] = None,
                      max_age_sec: Optional[float] = None) -> None:
     """터치 알림 발송 후 거래량 급증 감시 목록에 추가.
 
@@ -1539,9 +1554,14 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
     max_age_sec(2026-07-31 2인검토 B-1): alerted=0 이지만 이미 감시창(72h)을 넘긴
     (아직 prune 전인) 행이 "활성" 분기로 빠지면 타이머가 안 갱신돼, 같은 회차
     말미의 prune 이 방금 재터치로 유효해진 감시를 삭제한다(무성 소실 잔존 변종,
-    경합창 ~1회차). 창을 넘긴 행은 alerted=1 과 동일하게 전면 리셋한다."""
+    경합창 ~1회차). 창을 넘긴 행은 alerted=1 과 동일하게 전면 리셋한다.
+
+    post_urls(2026-08-08 사용자 결정, JSON 문자열 리스트): 급증 알림에도 본알림과
+    같은 출처 링크를 붙이기 위한 스냅샷. tps_krw 와 동일하게 활성 재터치는
+    합집합 병합(여러 글이 같은 밴드에 겹치면 전부 보존)."""
     row = conn.execute(
-        "SELECT alerted, added_at, band_low_krw, band_high_krw, tp1_krw, tp_count, tps_krw "
+        "SELECT alerted, added_at, band_low_krw, band_high_krw, tp1_krw, tp_count, "
+        "tps_krw, post_urls "
         "FROM volume_watch WHERE ticker=?", (ticker,)).fetchone()
     stale = (row is not None and max_age_sec is not None
              and now - row["added_at"] > max_age_sec)
@@ -1549,22 +1569,22 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
         conn.execute(
             """INSERT INTO volume_watch (ticker, coin_symbol, added_at,
                                          band_low_krw, band_high_krw, tp1_krw,
-                                         tp_count, tps_krw)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                                         tp_count, tps_krw, post_urls)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (ticker, coin_symbol, now, band_low_krw, band_high_krw, tp1_krw,
-             tp_count, tps_krw))
+             tp_count, tps_krw, post_urls))
     elif row["alerted"] or stale:
         # 발송 완료 후(또는 감시창을 넘긴 행에) 새 터치 — 새 감시로 전면 리셋
-        # (타이머·밴드·TP 모두)
+        # (타이머·밴드·TP·출처 모두)
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, added_at=?, alerted=0,
                    alerted_at=NULL, band_low_krw=?, band_high_krw=?,
-                   tp1_krw=?, tp_count=?, tps_krw=?
+                   tp1_krw=?, tp_count=?, tps_krw=?, post_urls=?
                WHERE ticker=?""",
             (coin_symbol, now, band_low_krw, band_high_krw, tp1_krw, tp_count,
-             tps_krw, ticker))
+             tps_krw, post_urls, ticker))
     else:
-        # 활성 감시 중 재터치 — 타이머 유지("72h 내 한 번" 창 보존), 밴드+TP 합집합
+        # 활성 감시 중 재터치 — 타이머 유지("72h 내 한 번" 창 보존), 밴드+TP+출처 합집합
         lo = (None if row["band_low_krw"] is None or band_low_krw is None
               else min(row["band_low_krw"], band_low_krw))
         hi = (None if row["band_high_krw"] is None or band_high_krw is None
@@ -1582,11 +1602,14 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
             m_tps_krw = tps_krw if row["tps_krw"] is None else row["tps_krw"]
             m_tp1 = tp1_krw if row["tp1_krw"] is None else row["tp1_krw"]
             m_count = tp_count if row["tp_count"] is None else row["tp_count"]
+        merged_urls = sorted(set(_json_str_list(row["post_urls"])
+                                 + _json_str_list(post_urls)))
+        m_urls = json.dumps(merged_urls) if merged_urls else row["post_urls"]
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, band_low_krw=?, band_high_krw=?,
-                   tp1_krw=?, tp_count=?, tps_krw=?
+                   tp1_krw=?, tp_count=?, tps_krw=?, post_urls=?
                WHERE ticker=?""",
-            (coin_symbol, lo, hi, m_tp1, m_count, m_tps_krw, ticker))
+            (coin_symbol, lo, hi, m_tp1, m_count, m_tps_krw, m_urls, ticker))
 
 
 def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
@@ -1594,6 +1617,7 @@ def get_volume_watch_active(conn, now: float, max_age_sec: float) -> list:
     cutoff = now - max_age_sec
     return [dict(r) for r in conn.execute(
         "SELECT ticker, coin_symbol, added_at, band_low_krw, band_high_krw, "
+        "post_urls, "
         "tp1_krw, tp_count, tps_krw "
         "FROM volume_watch WHERE alerted=0 AND added_at >= ?", (cutoff,)
     ).fetchall()]
