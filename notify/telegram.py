@@ -293,9 +293,14 @@ def _author_block(rep: dict) -> list:
     (2026-07-27 판정 비대칭 대응 — 아래 게이트 주석 참고)."""
     author = html.escape(rep.get("author") or "?")
     # ✍️ 로 아래 📊/🏹/📎 행들과 시작 칸 정렬 (2026-07-24 사용자 확정)
-    # 2026-08-08 사용자 결정: "작성자:" 라벨 삭제, 화이트리스트 ⭐⭐ 표시 자체도
-    # 원복(별도 줄 포함 완전 제거) — 이모지가 뜻을 이미 전달한다.
+    # 2026-08-08 사용자 결정: "작성자:" 라벨 삭제. 화이트리스트 ⭐⭐ 는 원래
+    # 기준(author_whitelisted — 워쳐 author_stats artifact 의 whitelisted
+    # 필드, 적중률 유무와 무관한 별개 신호) 그대로 유지하되, 작성자 줄 끝에
+    # 붙이면 사용자명 길이에 따라 줄내림 위험이 있어(실측 확인) 별도 줄로
+    # 분리 — 라벨 문구는 붙이지 않는다(사용자 결정).
     lines = [f"✍️ @{author}"]
+    if rep.get("author_whitelisted"):
+        lines.append("⭐⭐")
 
     wins = rep.get("author_self_wins") or 0
     losses = rep.get("author_self_losses") or 0

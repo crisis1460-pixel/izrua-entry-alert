@@ -254,8 +254,7 @@ check("T4b 터치 본알림은 유음", sent_urgency[-1] == "high")
 check("T4 터치 헤더+진입가 표기", "진입가 터치" in touch_msg and "진입:" in touch_msg)
 check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and touch_msg.count("출처2") == 1
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
-# 2026-08-08 사용자 결정: 화이트리스트 ⭐⭐ 표시 원복(완전 제거)
-check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" not in touch_msg)
+check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" in touch_msg)
 check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
       and "F&G: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
@@ -3639,15 +3638,15 @@ check("TR8 여는 태그 중간에서 잘려도 HTML 이 열린 채로 남지 �
 check("TR9 _SEP 자체는 절삭 대상에서 제외(길이 그대로)",
       telegram._truncate_line(telegram._SEP) == telegram._SEP)
 
-# TR10 (2026-08-08 최종 결정): 화이트리스트 ⭐⭐ 표시 완전 원복(별도 줄
-# 포함 제거) + "작성자:" 라벨도 삭제 - 실사고 2회 끝에 아예 없애기로 확정.
+# TR10 (2026-08-08 최종 결정): "작성자:" 라벨 삭제. 화이트리스트 ⭐⭐ 는
+# 원래 기준(author_whitelisted) 그대로 유지 - 작성자 줄과는 분리된 별도
+# 줄(사용자명 길이와 무관하게 절대 줄내림 안 됨)이며, 라벨 문구는 없다.
 _ab_star = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=True))
-check("TR10 화이트리스트여도 ⭐ 표시 자체가 없다",
-      not any("⭐" in ln for ln in _ab_star))
-check("TR10b 작성자 줄에 '작성자:' 라벨 없이 @만 표시",
-      _ab_star[0] == "✍️ @mastercrypto2020")
+check("TR10 화이트리스트면 ⭐⭐ 가 작성자 줄과 분리된 별도 줄로 나온다",
+      _ab_star[0] == "✍️ @mastercrypto2020" and "⭐" not in _ab_star[0]
+      and "⭐⭐" in _ab_star[1:])
 _ab_nostar = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=False))
-check("TR11 비화이트리스트도 동일하게 ⭐ 없음",
+check("TR11 비화이트리스트는 ⭐ 줄 자체가 없다",
       not any("⭐" in ln for ln in _ab_nostar))
 
 # ── SL: 별도알림 출처 링크 렌더러 (2026-08-08 사용자 결정) ──────────────────
