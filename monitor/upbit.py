@@ -183,16 +183,20 @@ def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:
         )
         resp.raise_for_status()
         data = resp.json()
+        time.sleep(_ORDERBOOK_PACE_SEC)
         if not data:
             return None
         book = data[0]
         bid = float(book.get("total_bid_size") or 0)
         ask = float(book.get("total_ask_size") or 0)
-        time.sleep(_ORDERBOOK_PACE_SEC)
         if ask <= 0 or bid <= 0:
             return None     # 한쪽 잔량이 0 이면 비율이 무의미(또는 0 나눗셈)
         return bid / ask
     except Exception as e:  # noqa: BLE001 - 관찰 기록 실패가 터치 처리를 막으면 안 됨
+        # 2026-08-08 재검토: 예외 경로도 페이싱 지킴(fetch_rvol_1h 관례와 통일) —
+        # 터치 몰림 구간(API 장애와 겹치는 바로 그 상황)에서 무페이싱 연사로
+        # 스로틀을 스스로 연장시키지 않기 위함.
+        time.sleep(_ORDERBOOK_PACE_SEC)
         logger.warning("[upbit] %s 호가 조회 실패: %s", market, e)
         return None
 
@@ -208,13 +212,15 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
         )
         resp.raise_for_status()
         candles = resp.json()
+        time.sleep(_CANDLE_PACE_SEC)
         if not candles:
             return None
         high = max(float(c["high_price"]) for c in candles)
         low = min(float(c["low_price"]) for c in candles)
-        time.sleep(_CANDLE_PACE_SEC)
         return (high, low)
     except Exception as e:  # noqa: BLE001
+        # 2026-08-08 재검토: 예외 경로도 페이싱(fetch_rvol_1h 관례 통일).
+        time.sleep(_CANDLE_PACE_SEC)
         logger.warning("[upbit] %s 52주 조회 실패: %s", market, e)
         return None
 
@@ -260,12 +266,16 @@ def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optiona
         )
         resp.raise_for_status()
         candles = resp.json()
+        time.sleep(_CANDLE_PACE_SEC)
         if not candles:
             return None
-        time.sleep(_CANDLE_PACE_SEC)
         # 업비트 응답은 최신→과거 순 → 뒤집어 시간순으로
         return [float(c["trade_price"]) for c in reversed(candles)]
     except Exception as e:  # noqa: BLE001
+        # 2026-08-08 재검토: 예외 경로도 페이싱(fetch_rvol_1h 관례 통일) — RSI/MA
+        # 4콜(일·주·4h·MA)이 이 함수를 공유해 실패 연쇄 시 무페이싱 연사 위험이
+        # 특히 컸던 지점.
+        time.sleep(_CANDLE_PACE_SEC)
         logger.warning("[upbit] %s %s 캔들 조회 실패: %s", market, unit, e)
         return None
 

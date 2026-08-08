@@ -99,6 +99,7 @@ fake_trades = {"list": None}
 upbit.fetch_trades_window = lambda m, s, e, t, max_pages=4: fake_trades["list"]
 _real_fetch_orderbook = upbit.fetch_orderbook_ratio  # OB2~OB4 에서 실물 로직 검증용
 upbit.fetch_orderbook_ratio = lambda m, t: None  # 호가 스냅샷 기본 스텁 (OB* 에서 교체)
+_real_fetch_week52 = upbit.fetch_week52  # WK1 에서 실물 로직(페이싱) 검증용
 upbit.fetch_week52 = lambda m, t: (16000.0, 9000.0)  # 52주 고가/저가 (KRW)
 upbit.fetch_volume_ranks = lambda t: {"KRW-LINK": 5}
 # 거래량 급증 감시(Feature 4) — 2026-07-31 스텁 추가. 구 fetch_volume_data 시절엔
@@ -1762,6 +1763,29 @@ _requests_mod.get = _orig_requests_get
 check("OB2 잔량비 = total_bid_size / total_ask_size", _ob2 == 2.0)
 check("OB3 한쪽 잔량 0 이면 None(무의미·0나눗셈 방지)", _ob3 is None)
 check("OB4 조회 실패는 예외 없이 None", _ob4 is None)
+
+# OB4b (2026-08-08 재검토): 예외 경로도 페이싱을 지키는지 — fetch_rvol_1h 관례
+# (두 except 경로 모두 슬립)와 통일. time.sleep 을 스텁으로 바꿔 호출 여부만 확인.
+_slept_ob = []
+_orig_sleep_ob = time.sleep
+upbit.time.sleep = lambda s: _slept_ob.append(s)
+_requests_mod.get = _an_boom
+_real_fetch_orderbook("KRW-T", 5.0)
+upbit.time.sleep = _orig_sleep_ob
+_requests_mod.get = _orig_requests_get
+check("OB4b 조회 실패(예외) 경로도 페이싱 슬립을 지킨다", len(_slept_ob) == 1)
+
+# WK/FC (2026-08-08 재검토): fetch_week52·_fetch_closes 도 같은 비대칭 수리 —
+# 예외 경로에서 페이싱을 건너뛰던 것을 fetch_rvol_1h 관례로 통일.
+_slept_wk = []
+upbit.time.sleep = lambda s: _slept_wk.append(s)
+_requests_mod.get = _an_boom
+_real_fetch_week52("KRW-T", 5.0)
+upbit._fetch_closes("KRW-T", "days", 200, 5.0)
+upbit.time.sleep = _orig_sleep_ob
+_requests_mod.get = _orig_requests_get
+check("WK1/FC1 fetch_week52·_fetch_closes 예외 경로도 페이싱 슬립을 지킨다(2회)",
+      len(_slept_wk) == 2)
 
 # OB5: 터치 확정 시 레벨 행에 기록된다 (예고 단계에서는 호출조차 없다)
 with db.connect(TEST_DB) as conn:
