@@ -254,7 +254,8 @@ check("T4b 터치 본알림은 유음", sent_urgency[-1] == "high")
 check("T4 터치 헤더+진입가 표기", "진입가 터치" in touch_msg and "진입:" in touch_msg)
 check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and touch_msg.count("출처2") == 1
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
-check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" in touch_msg)
+# 2026-08-08 사용자 결정: 화이트리스트 ⭐⭐ 표시 원복(완전 제거)
+check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" not in touch_msg)
 check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
       and "F&G: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
@@ -375,7 +376,7 @@ msg_a = tg.render_alert("touch", "LINK", [dict(
 # 섹션에서 별도 검증 - 여기선 절삭 후에도 올바른 수치가 담기는지만 본다).
 check("T14 워쳐+자체 병기 (별도줄)",
       tg._truncate_line("📊 평균 적중률: 72% (워쳐 25건)") in msg_a
-      and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ 작성자:" in msg_a)
+      and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ @" in msg_a)
 msg_b = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
     author="NewComer", author_followers=2300, author_hit_rate=None, author_hit_count=None,
@@ -402,7 +403,7 @@ msg_g = tg.render_alert("touch", "LINK",
                         8.35 * USDT_KRW, USDT_KRW)
 check("T14g SL 미기재 작성자(neff_r=0)는 승률 미표시 - 12승0패가 새어나가지 않는다",
       "승률" not in msg_g and "12승0패" not in msg_g)
-check("T14g2 승률만 빠지고 작성자 줄은 정상 렌더", "✍️ 작성자: @NoStopAuthor" in msg_g)
+check("T14g2 승률만 빠지고 작성자 줄은 정상 렌더", "✍️ @NoStopAuthor" in msg_g)
 msg_h = tg.render_alert("touch", "LINK",
                         [dict(_asym, author_self_neff=12.0, author_self_neff_r=5.0)],
                         8.35 * USDT_KRW, USDT_KRW)
@@ -3638,16 +3639,15 @@ check("TR8 여는 태그 중간에서 잘려도 HTML 이 열린 채로 남지 �
 check("TR9 _SEP 자체는 절삭 대상에서 제외(길이 그대로)",
       telegram._truncate_line(telegram._SEP) == telegram._SEP)
 
-# TR10 (2026-08-08 재검토, 실사고 2회): 화이트리스트 ⭐⭐ 를 작성자 줄 끝에
-# 붙이면 사용자명 길이에 따라 줄내림 위험이 있어(실측 확인) 별도 줄로
-# 분리했다 - 작성자 줄에는 별이 섞이지 않고, 별도 줄이 항상 뒤따른다.
+# TR10 (2026-08-08 최종 결정): 화이트리스트 ⭐⭐ 표시 완전 원복(별도 줄
+# 포함 제거) + "작성자:" 라벨도 삭제 - 실사고 2회 끝에 아예 없애기로 확정.
 _ab_star = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=True))
-check("TR10 화이트리스트 표시는 작성자 줄과 분리된 별도 줄",
-      _ab_star[0] == "✍️ 작성자: @mastercrypto2020"
-      and "⭐" not in _ab_star[0]
-      and any("⭐⭐" in ln for ln in _ab_star[1:]))
+check("TR10 화이트리스트여도 ⭐ 표시 자체가 없다",
+      not any("⭐" in ln for ln in _ab_star))
+check("TR10b 작성자 줄에 '작성자:' 라벨 없이 @만 표시",
+      _ab_star[0] == "✍️ @mastercrypto2020")
 _ab_nostar = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=False))
-check("TR11 화이트리스트 아니면 별 줄 자체가 없음",
+check("TR11 비화이트리스트도 동일하게 ⭐ 없음",
       not any("⭐" in ln for ln in _ab_nostar))
 
 # ── SL: 별도알림 출처 링크 렌더러 (2026-08-08 사용자 결정) ──────────────────
