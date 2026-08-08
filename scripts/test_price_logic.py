@@ -3635,6 +3635,20 @@ _long_html = "<b>" + "가" * 30 + "</b>"
 _cut_html = telegram._truncate_line(_long_html)
 check("TR8 여는 태그 중간에서 잘려도 HTML 이 열린 채로 남지 않는다",
       _cut_html.count("<b>") == _cut_html.count("</b>"))
+check("TR9 _SEP 자체는 절삭 대상에서 제외(길이 그대로)",
+      telegram._truncate_line(telegram._SEP) == telegram._SEP)
+
+# TR10 (2026-08-08 재검토, 실사고 2회): 화이트리스트 ⭐⭐ 를 작성자 줄 끝에
+# 붙이면 사용자명 길이에 따라 줄내림 위험이 있어(실측 확인) 별도 줄로
+# 분리했다 - 작성자 줄에는 별이 섞이지 않고, 별도 줄이 항상 뒤따른다.
+_ab_star = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=True))
+check("TR10 화이트리스트 표시는 작성자 줄과 분리된 별도 줄",
+      _ab_star[0] == "✍️ 작성자: @mastercrypto2020"
+      and "⭐" not in _ab_star[0]
+      and any("⭐⭐" in ln for ln in _ab_star[1:]))
+_ab_nostar = telegram._author_block(dict(author="mastercrypto2020", author_whitelisted=False))
+check("TR11 화이트리스트 아니면 별 줄 자체가 없음",
+      not any("⭐" in ln for ln in _ab_nostar))
 
 # ── SL: 별도알림 출처 링크 렌더러 (2026-08-08 사용자 결정) ──────────────────
 _sl2 = telegram._source_line(["https://x.example/1", "https://x.example/2"])

@@ -292,9 +292,13 @@ def _author_block(rep: dict) -> list:
     달라 섞지 않고 병기. 자체 표본은 R 트랙 유효표본(neff_r) 5건 이상일 때만 표시
     (2026-07-27 판정 비대칭 대응 — 아래 게이트 주석 참고)."""
     author = html.escape(rep.get("author") or "?")
-    star = " ⭐⭐" if rep.get("author_whitelisted") else ""
     # ✍️ 로 아래 📊/🏹/📎 행들과 시작 칸 정렬 (2026-07-24 사용자 확정)
-    lines = [f"✍️ 작성자: @{author}{star}"]
+    lines = [f"✍️ 작성자: @{author}"]
+    # 2026-08-08 재보정(실사고 2회): ⭐⭐ 를 작성자 줄 끝에 붙이면 사용자명
+    # 길이에 따라 줄내림 위험(실측 확인)이 있어 별도 줄로 분리 — 어떤 사용자명
+    # 길이에서도 절삭·줄내림 걱정 없이 안전하다.
+    if rep.get("author_whitelisted"):
+        lines.append("⭐⭐ 화이트리스트 작성자")
 
     wins = rep.get("author_self_wins") or 0
     losses = rep.get("author_self_losses") or 0
