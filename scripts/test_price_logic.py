@@ -442,7 +442,7 @@ _msg_only_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, U
                                  funding_rate=None, funding_regime_flip=_flip)
 check("T14N2 레짐 배지 단독 - 세퍼레이터 이후 렌더",
       "🔥 32일 음수→양수" in _msg_only_flip
-      and _msg_only_flip.find("━━━━━━━━━━━━━━━━━━━━\n🔥") >= 0)
+      and _msg_only_flip.find(tg._SEP + "\n🔥") >= 0)
 # T14O (2026-08-07 개편): 종전 "💰 펀딩 수치+라벨" 줄 → "🧭 수급" 판정 한 줄.
 # supply 미전달 구 호출부는 funding_rate 단독 폴백으로 같은 줄이 나와야 한다.
 msg_hot = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
