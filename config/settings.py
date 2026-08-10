@@ -21,6 +21,13 @@ SETTINGS = {
     "universe_top_n": 300,               # CoinGecko 시총 상위 N
     "universe_refresh_hours": 24,        # 시총 목록 갱신 주기
 
+    # ── 유니버스 품질 필터 (2026-08-11) ─────────────────────────────────────
+    "universe_exclude_new_listing_days": 90,      # 업비트 최초 감지 후 N일 미만 제외 (0=비활성화)
+    "universe_exclude_non_binance": True,         # Binance USDT 미상장 제외
+    "universe_exclude_upbit_warning": True,       # 업비트 투자경고(warning) 코인 제외
+    "universe_rank_drop_threshold": 80,           # N일 최고순위 대비 현재 하락폭 초과 시 제외 (0=비활성화)
+    "universe_rank_drop_min_history": 7,          # 순위 급락 판정에 필요한 최소 기록 일수
+
     # 시총 등급 경계 (심볼 옆 아이콘)
     "mcap_tiers": [                      # (상한 순위, 아이콘, 라벨)
         (10, "💎", "초대형"),
@@ -291,6 +298,8 @@ SETTINGS = {
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
     "universe_cache_path": "data/universe.json",
+    "universe_first_seen_cache_path": "data/universe_first_seen.json",
+    "universe_rank_history_cache_path": "data/universe_rank_history.json",
 }
 
 

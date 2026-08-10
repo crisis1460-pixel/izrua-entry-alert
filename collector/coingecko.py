@@ -27,6 +27,8 @@ import requests
 
 from config import settings
 
+BINANCE_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo"
+
 logger = logging.getLogger("alert.coingecko")
 
 CG_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
@@ -129,6 +131,152 @@ def fetch_upbit_krw_symbols(timeout: float) -> set:
     return symbols
 
 
+def fetch_upbit_warning_symbols(timeout: float) -> set:
+    """업비트 투자경고(market_event.warning=True) 심볼 집합. isDetails=true 필요."""
+    try:
+        resp = requests.get(UPBIT_MARKET_URL, params={"isDetails": "true"}, timeout=timeout)
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as e:
+        logger.warning("[cg] 업비트 마켓 상세 조회 실패 (유의종목 건너뜀): %s", e)
+        return set()
+    warned = set()
+    for m in payload:
+        market = m.get("market", "")
+        if not market.startswith("KRW-"):
+            continue
+        if m.get("market_event", {}).get("warning"):
+            warned.add(market.split("-", 1)[1])
+    return warned
+
+
+def fetch_binance_usdt_symbols(timeout: float) -> set:
+    """Binance USDT 마켓에 TRADING 상태로 상장된 코인 심볼 집합."""
+    try:
+        resp = requests.get(BINANCE_EXCHANGE_INFO_URL, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.warning("[cg] Binance exchangeInfo 조회 실패 (Binance 필터 건너뜀): %s", e)
+        return set()
+    return {
+        s["baseAsset"].upper()
+        for s in data.get("symbols", [])
+        if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING"
+    }
+
+
+def _load_json_cache(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_json_cache(path: str, data: dict) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
+    """유니버스 품질 필터 4종 적용. 각 필터 실패는 해당 필터만 건너뜀(회차 안전).
+
+    1. 신규 상장 N일 미만 제외 (최초 감지 기준)
+    2. Binance USDT 미상장 제외
+    3. 업비트 투자경고(warning) 제외
+    4. 시총 순위 급락 코인 제외
+    """
+    exclude_new_days = settings.get("universe_exclude_new_listing_days")
+    exclude_binance = settings.get("universe_exclude_non_binance")
+    exclude_warning = settings.get("universe_exclude_upbit_warning")
+    rank_drop_threshold = settings.get("universe_rank_drop_threshold")
+    rank_drop_min_hist = settings.get("universe_rank_drop_min_history")
+
+    # ── 필터 1: 신규 상장 ─────────────────────────────────────────────────
+    first_seen: dict = {}
+    first_seen_path = settings.get("universe_first_seen_cache_path")
+    if exclude_new_days:
+        first_seen = _load_json_cache(first_seen_path)
+        for coin in universe:
+            sym = coin["symbol"]
+            if sym not in first_seen:
+                first_seen[sym] = now  # 최초 감지 시각 기록
+        _save_json_cache(first_seen_path, first_seen)
+
+    # ── 필터 2: Binance 상장 여부 ──────────────────────────────────────────
+    binance_syms: set = set()
+    if exclude_binance:
+        binance_syms = fetch_binance_usdt_symbols(timeout)
+
+    # ── 필터 3: 업비트 투자경고 ────────────────────────────────────────────
+    warning_syms: set = set()
+    if exclude_warning:
+        warning_syms = fetch_upbit_warning_symbols(timeout)
+
+    # ── 필터 4: 순위 급락 ─────────────────────────────────────────────────
+    rank_hist: dict = {}
+    rank_hist_path = settings.get("universe_rank_history_cache_path")
+    if rank_drop_threshold:
+        rank_hist = _load_json_cache(rank_hist_path)
+        for coin in universe:
+            sym = coin["symbol"]
+            entries = rank_hist.setdefault(sym, [])
+            entries.append({"ts": now, "rank": coin["rank"]})
+            if len(entries) > 30:
+                rank_hist[sym] = entries[-30:]
+        _save_json_cache(rank_hist_path, rank_hist)
+
+    # ── 적용 ───────────────────────────────────────────────────────────────
+    filtered = []
+    excluded = {"new_listing": [], "binance": [], "warning": [], "rank_drop": []}
+    new_cutoff = now - exclude_new_days * 86400 if exclude_new_days else 0
+
+    for coin in universe:
+        sym = coin["symbol"]
+
+        if exclude_new_days and new_cutoff > 0:
+            seen_at = first_seen.get(sym, now)
+            if seen_at > new_cutoff:
+                excluded["new_listing"].append(sym)
+                continue
+
+        if exclude_binance and binance_syms and sym not in binance_syms:
+            excluded["binance"].append(sym)
+            continue
+
+        if exclude_warning and sym in warning_syms:
+            excluded["warning"].append(sym)
+            continue
+
+        if rank_drop_threshold:
+            entries = rank_hist.get(sym, [])
+            if len(entries) >= rank_drop_min_hist:
+                best_rank = min(e["rank"] for e in entries[:-1])  # 현재 제외한 과거 최고
+                if coin["rank"] - best_rank >= rank_drop_threshold:
+                    excluded["rank_drop"].append(sym)
+                    continue
+
+        filtered.append(coin)
+
+    total_excluded = sum(len(v) for v in excluded.values())
+    if total_excluded:
+        logger.info(
+            "[cg] 품질 필터 제외 %d개: 신규=%s 바이낸스미상장=%s 투자경고=%s 순위급락=%s",
+            total_excluded,
+            excluded["new_listing"] or "없음",
+            excluded["binance"] or "없음",
+            excluded["warning"] or "없음",
+            excluded["rank_drop"] or "없음",
+        )
+    return filtered
+
+
 def build_universe(force: bool = False) -> list:
     """top-N ∩ 업비트 KRW. 캐시가 신선하면 그대로 반환.
     반환 항목: {symbol, ticker, rank, name, price_usd, tier_icon}"""
@@ -171,6 +319,8 @@ def build_universe(force: bool = False) -> list:
                 "price_usd": c["price_usd"],
                 "tier_icon": c["tier_icon"],
             })
+
+    universe = _apply_quality_filters(universe, now=time.time(), timeout=timeout)
     _save_cache(cache_path, universe)
     return universe
 
