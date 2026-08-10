@@ -241,7 +241,8 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         if not setup or not setup.get("entry"):
             return False, False
         stats_row = author_stats.get(idea.get("author") or "", {})
-        followers = stats_row.get("followers") or idea.get("author_followers")
+        _db_followers = stats_row.get("followers")
+        followers = _db_followers if _db_followers is not None else idea.get("author_followers")
         if followers is None and lookup_followers and idea.get("author"):
             followers = tradingview.fetch_author_followers(idea["author"], timeout)
         # 작성자 실적 가점 (2026-08-01 S10 v3 안2) — 자기 DB 종결 실적을 채점 직전

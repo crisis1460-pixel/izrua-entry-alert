@@ -524,15 +524,15 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     tps_all: list = []
     if tps and tp is not None and entry and entry > 0:
         _lo, _hi = entry * 0.25, entry * 4
-        _n = getattr(tps[0], "ladder_n", 0)
+        _n = getattr(_tp_grp, "ladder_n", 0)
         if _n > 1:
             # ladder_values: _grab_after 에서 저장한 인라인 사다리 전체 값 목록.
-            # list(tps[0])=[first] 은 tp 계산용 하나뿐이라 tps_all 에는 불충분.
-            _cands = getattr(tps[0], "ladder_values", None) or list(tps[0])
+            # list(_tp_grp)=[first] 은 tp 계산용 하나뿐이라 tps_all 에는 불충분.
+            _cands = getattr(_tp_grp, "ladder_values", None) or list(_tp_grp)
         elif tps.is_spec:
             _cands = [v[-1] for v in tps if v]  # 줄바꿈 스펙형: tp 선정(grp[-1])과 동일 기준
         else:
-            _cands = [tps[0][-1]] if tps[0] else []  # 단순 TP 단일 값
+            _cands = [_tp_grp[-1]] if _tp_grp else []  # 단순 TP 단일 값
         # 방향·크기 sanity 적용 (tp 에 적용한 것과 동일 기준)
         _valid = []
         for _c in _cands:
