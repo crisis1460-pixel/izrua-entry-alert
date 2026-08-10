@@ -187,7 +187,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     # 원문 정리는 "이번 덤프가 실제로 원문을 담아 성공했을 때"만. 덤프가 0건이거나
     # 원문 제외 모드면 아카이브가 없는 것이므로 지우지 않는다(복구 불가 손실 방지).
     raw_pruned = 0
-    if files and include_raw:
+    if any("levels_" in f for f in files) and include_raw:
         raw_pruned = db.prune_raw_text(conn, now=now,
                                        keep_days=_cfg("audit_raw_text_keep_days"))
 
