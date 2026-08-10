@@ -981,7 +981,7 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
     lines = [
         _SEP,
         f"✅ <b>[TP{tp_n} 적중]</b> <b>{html.escape(coin)}</b>  {step_label}",
-        f"    달성가:  {tp_krw:,.0f}원  ({pct:+.1f}%)",
+        f"    달성가:  {_fmt_krw(tp_krw)}원  ({pct:+.1f}%)",
     ]
     if not is_last:
         lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
@@ -1024,6 +1024,11 @@ def render_volume_spike_alert(coin: str, multiplier: float,
     return _finalize(lines)
 
 
+def _fmt_krw(v: float) -> str:
+    """1원 미만(SHIB 등)은 소수 표기, 이상은 정수 콤마."""
+    return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+
+
 def _fmt_usd_notional(v: float) -> str:
     """OI 명목가액(USD) 표기 — 억 단위(원화 전용 어휘)와 섞이지 않게
     B(십억)/M(백만) 그대로 사용. 예: 4.83B / 210.5M.
@@ -1052,7 +1057,7 @@ def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
         f"    현재 OI:      {_fmt_usd_notional(cur_oi_usd)}  ({pct:+.1f}%)",
     ]
     if current_krw:
-        lines.append(f"    현재가:       {current_krw:,.0f}원")
+        lines.append(f"    현재가:       {_fmt_krw(current_krw)}원")
     lines.append(_SEP)
     _urls = [u for u in (post_urls or []) if u]
     if _urls:

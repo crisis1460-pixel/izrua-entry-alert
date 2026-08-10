@@ -241,7 +241,10 @@ def maybe_weekly_audit(conn, db_path, now: float = None, force: bool = False,
             pass
         return "failed"
 
-    db.set_meta(conn, META_LAST_DUMP, str(now))
+    try:
+        db.set_meta(conn, META_LAST_DUMP, str(now))
+    except BaseException:  # noqa: BLE001
+        pass
     logger.info("감사 덤프 완료: %s (%s) / 원문정리 %d행 / 만료덤프 %d개 삭제",
                 res["week"], ", ".join(res["files"]) or "없음",
                 res["raw_text_pruned"], len(res["removed"]))

@@ -428,7 +428,13 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     # 이제 후보를 순서대로 검증해 처음 통과하는 값을 쓴다. 한 줄 사다리(tps[0]
     # 하나뿐인 경우)는 동작 변화 없음 — 줄바꿈 나열형(여러 줄 Target N:)에서만
     # 실질적으로 달라진다.
-    tp = next((c for grp in (tps or []) if grp for c in [grp[-1]] if _tp_valid(c)), None)
+    tp = None
+    _tp_grp = None
+    for _g in (tps or []):
+        if _g and _tp_valid(_g[-1]):
+            tp = _g[-1]
+            _tp_grp = _g
+            break
 
     # SL 방향·크기 sanity(2026-07-23, ALGO/ARB 실전 사고 후 추가) — 라벨 매칭이
     # 정상이어도 파싱이 미묘하게 틀리면(신규 소스 포맷 등) SL이 방향과 모순되거나
@@ -459,8 +465,8 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     # 사다리 단계 수 — 표시 전용(알림의 "1/8단계"). tp 가 sanity 로 폐기됐으면
     # 같이 버린다(값 없는데 단계만 남으면 표시가 거짓말을 한다).
     tp_ladder_count = 0
-    if tps and tp is not None:
-        _n = getattr(tps[0], "ladder_n", 0)
+    if _tp_grp and tp is not None:
+        _n = getattr(_tp_grp, "ladder_n", 0)
         if _n > 1:
             # 한 줄 나열형("a - b - c", "a → b") — 2026-08-08 재검토 수정: 원래는
             # rung 개수(_n)를 그대로 썼는데, tps_all(아래)은 같은 rung 목록에
@@ -469,7 +475,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             # tps_all 에서 탈락)에서 "3/3단계"라 표시되는데 실제 감시 목록은
             # 2개뿐인 불일치가 있었다. 줄바꿈 스펙형(아래 elif 분기, 2026-08-01
             # 수정)과 동일 기준(entry 방향+크기)으로 통일한다.
-            _ivals = getattr(tps[0], "ladder_values", None) or list(tps[0])
+            _ivals = getattr(_tp_grp, "ladder_values", None) or list(_tp_grp)
             _ilo, _ihi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
                          else (float("-inf"), float("inf")))
             _ivalid = {v for v in _ivals if v is not None and _ilo <= v <= _ihi

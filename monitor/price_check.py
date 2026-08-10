@@ -108,7 +108,7 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
         "SELECT COUNT(*) FROM levels WHERE collected_at >= ? AND collected_at < ?",
         (baseline_start, now - window_sec),
     ).fetchone()[0]
-    baseline_avg = prior / baseline_days
+    baseline_avg = prior / baseline_days if baseline_days else 0
     if baseline_avg < cfg_get("collect_silence_min_baseline_avg"):
         return False  # 원래도 조용했던 기간(신규 프로젝트 등) - 오탐 방지
 
@@ -1475,7 +1475,7 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
             cur_krw = prices.get(f"KRW-{c}")
             _oi_urls = [r["post_url"] for r in conn.execute(
                 "SELECT DISTINCT post_url FROM levels "
-                "WHERE coin_symbol=? AND post_url IS NOT NULL AND direction='long'",
+                "WHERE coin_symbol=? AND post_url IS NOT NULL",
                 (c,)).fetchall()]
             text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw,
                                                   post_urls=sorted(_oi_urls))
