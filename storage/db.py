@@ -353,6 +353,7 @@ def _migrate(conn) -> None:
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
     # 이미 체인이 있는 행은 WHERE 절이 걸러내 매 init_db 호출마다 사실상 공짜(no-op).
     _backfill_outcome_chain(conn)
+    _backfill_volume_watch_urls(conn)
 
     # grade_v3_since (2026-08-01 S10 §6-3 감사 추적): v3 산식 배포 이후 첫 회차가
     # 여기(모든 엔트리포인트가 지나는 init_db 마이그레이션)서 1회 기록한다 —
@@ -889,6 +890,32 @@ def _get_chain_tip(conn) -> str:
 
 def _set_chain_tip(conn, chain_hash: str) -> None:
     set_meta(conn, _OUTCOME_CHAIN_TIP_META_KEY, chain_hash)
+
+
+def _backfill_volume_watch_urls(conn) -> int:
+    """post_urls 배선(c33fbcac) 이전에 등록된 volume_watch 행을 levels 에서 역추적해 채운다.
+    매 init_db 호출 시 실행되나 UPDATE 대상이 0건이면 공짜(SELECT 1건)."""
+    rows = conn.execute(
+        "SELECT ticker, coin_symbol FROM volume_watch WHERE post_urls IS NULL"
+    ).fetchall()
+    if not rows:
+        return 0
+    filled = 0
+    for r in rows:
+        urls = conn.execute(
+            "SELECT DISTINCT post_url FROM levels "
+            "WHERE coin_symbol=? AND post_url IS NOT NULL AND direction='long'",
+            (r["coin_symbol"],),
+        ).fetchall()
+        url_list = sorted(u["post_url"] for u in urls)
+        if url_list:
+            conn.execute(
+                "UPDATE volume_watch SET post_urls=? WHERE ticker=?",
+                (json.dumps(url_list), r["ticker"]))
+            filled += 1
+    if filled:
+        logger.info("[마이그레이션] volume_watch post_urls 소급 %d건", filled)
+    return filled
 
 
 def _backfill_outcome_chain(conn) -> int:
