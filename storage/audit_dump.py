@@ -184,6 +184,26 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
         if p is not None:
             files.append(p.name)
 
+    # 등급별 적중률 + 작성자별 고급 통계 JSON 덤프 (내부 통계용, 알림 미출력)
+    try:
+        grade_stats = db.get_grade_stats(conn)
+        authors = [r["author"] for r in conn.execute(
+            """SELECT DISTINCT author FROM levels
+               WHERE r_multiple IS NOT NULL AND touched_at IS NOT NULL
+                 AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')"""
+        ).fetchall()]
+        author_advanced = {a: db.get_author_advanced_stats(conn, a) for a in authors}
+        stats_path = out_dir / f"grade_stats_{week}.json"
+        with open(stats_path, "w", encoding="utf-8") as fp:
+            json.dump({
+                "_week": week, "_generated_at": now,
+                "grade_hit_rates": grade_stats,
+                "author_advanced": author_advanced,
+            }, fp, ensure_ascii=False, indent=2)
+        files.append(stats_path.name)
+    except BaseException as _e:  # noqa: BLE001 - 통계 덤프 실패가 전체를 중단시키면 안 됨
+        logger.warning("등급 통계 덤프 실패: %s", _e)
+
     # 원문 정리는 "이번 덤프가 실제로 원문을 담아 성공했을 때"만. 덤프가 0건이거나
     # 원문 제외 모드면 아카이브가 없는 것이므로 지우지 않는다(복구 불가 손실 방지).
     raw_pruned = 0

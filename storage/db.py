@@ -1114,6 +1114,108 @@ def get_author_avg_holding_days(conn, author: str) -> Optional[float]:
     return row["avg_days"]
 
 
+# ── 내부 통계 집계 (2026-08-11, 알림 미출력) ─────────────────────────────
+
+
+def get_grade_stats(conn) -> dict:
+    """등급별 적중률 집계. 반환: {grade: {wins, losses, total, hit_rate}}"""
+    rows = conn.execute(
+        """SELECT grade,
+                  SUM(CASE WHEN outcome IN ('hit','timeboxed_win')  THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS losses,
+                  COUNT(*) AS total
+             FROM levels
+            WHERE outcome IS NOT NULL AND grade IS NOT NULL
+            GROUP BY grade""",
+    ).fetchall()
+    result = {}
+    for row in rows:
+        w, l = row["wins"] or 0, row["losses"] or 0
+        tot = w + l
+        result[row["grade"]] = {
+            "wins": w, "losses": l, "total": tot,
+            "hit_rate": round(w / tot, 3) if tot else None,
+        }
+    return result
+
+
+_MIN_R_TRACK = 5  # Profit Factor / R-Expectancy 최소 R 트랙 표본 수
+
+
+def get_author_advanced_stats(conn, author: str) -> dict:
+    """Profit Factor / R-Expectancy / Consistency Score (내부 통계용, 알림 미출력).
+
+    profit_factor  : 총수익R ÷ 총손실R  (>1.5 양호, None = 데이터 부족)
+    r_expectancy   : (승률×평균수익R) − (패율×평균손실R)  (>0.3 양호)
+    max_consec_loss: 최대 연속 손실 횟수
+    monthly_consistency: 월별 승률 표준편차 (낮을수록 일관, 월 2개 이상부터 계산)
+    r_track_n      : 계산 기반 표본 수
+    """
+    if not author:
+        return {}
+    rows = conn.execute(
+        """SELECT outcome, r_multiple, resolved_at
+             FROM levels
+            WHERE author=? AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
+              AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')
+            ORDER BY resolved_at""",
+        (author,),
+    ).fetchall()
+    n = len(rows)
+    if n < _MIN_R_TRACK:
+        return {"profit_factor": None, "r_expectancy": None,
+                "max_consec_loss": None, "monthly_consistency": None, "r_track_n": n}
+
+    wins_r = [r["r_multiple"] for r in rows if r["outcome"] in ("hit", "timeboxed_win")]
+    loss_r = [abs(r["r_multiple"]) for r in rows if r["outcome"] in ("miss", "timeboxed_loss")]
+
+    sum_w = sum(wins_r) if wins_r else 0.0
+    sum_l = sum(loss_r) if loss_r else 0.0
+    pf = round(sum_w / sum_l, 3) if sum_l > 0 else None
+
+    win_rate = len(wins_r) / n
+    loss_rate = len(loss_r) / n
+    avg_wr = sum_w / len(wins_r) if wins_r else 0.0
+    avg_lr = sum_l / len(loss_r) if loss_r else 0.0
+    r_exp = round(win_rate * avg_wr - loss_rate * avg_lr, 3)
+
+    max_cl = cur_cl = 0
+    for r in rows:
+        if r["outcome"] in ("miss", "timeboxed_loss"):
+            cur_cl += 1
+            if cur_cl > max_cl:
+                max_cl = cur_cl
+        else:
+            cur_cl = 0
+
+    from datetime import datetime, timezone as _tz
+    monthly: dict = {}
+    for r in rows:
+        if r["resolved_at"]:
+            dt = datetime.fromtimestamp(r["resolved_at"], tz=_tz.utc)
+            key = f"{dt.year}-{dt.month:02d}"
+            bucket = monthly.setdefault(key, [0, 0])
+            if r["outcome"] in ("hit", "timeboxed_win"):
+                bucket[0] += 1
+            else:
+                bucket[1] += 1
+
+    monthly_cons = None
+    if len(monthly) >= 2:
+        rates = [w / (w + l) for w, l in monthly.values() if (w + l) > 0]
+        if len(rates) >= 2:
+            mean = sum(rates) / len(rates)
+            monthly_cons = round((sum((x - mean) ** 2 for x in rates) / len(rates)) ** 0.5, 3)
+
+    return {
+        "profit_factor": pf,
+        "r_expectancy": r_exp,
+        "max_consec_loss": max_cl,
+        "monthly_consistency": monthly_cons,
+        "r_track_n": n,
+    }
+
+
 # ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
 # 비용 방어 원칙: 레벨 수십~수백 개를 매번 전수 확인하면 TradingView 부담·차단
 # 위험이 커진다 - 호출부(scripts/run_collect.py)가 하루 상한(deletion_check_daily_limit)
