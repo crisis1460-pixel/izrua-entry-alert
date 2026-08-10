@@ -1473,7 +1473,12 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
             if last_alert is not None and now - last_alert < cooldown_sec:
                 continue
             cur_krw = prices.get(f"KRW-{c}")
-            text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw)
+            _oi_urls = [r["post_url"] for r in conn.execute(
+                "SELECT DISTINCT post_url FROM levels "
+                "WHERE coin_symbol=? AND post_url IS NOT NULL AND direction='long'",
+                (c,)).fetchall()]
+            text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw,
+                                                  post_urls=sorted(_oi_urls))
             if telegram.send(text, urgency="low"):
                 db.record_oi_spike_alert(conn, c, now)
                 # 즉시 커밋 (2026-08-08 재검토): 이 함수의 유일한 커밋은 루프

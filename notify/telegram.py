@@ -1036,12 +1036,15 @@ def _fmt_usd_notional(v: float) -> str:
 
 
 def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
-                          pct: float, current_krw: float = None) -> str:
+                          pct: float, current_krw: float = None,
+                          post_urls=None) -> str:
     """OI(미결제약정) 급증 알림 (2026-08-08 사용자 결정) — 진입가 터치와
     무관한 별도 이벤트. 거래량 급증 알림(render_volume_spike_alert)과 같은
     격식의 독립 카드. OI 는 CoinGecko 가 이미 USD 로 주는 값이라 원화 환산
     없이 그대로 표시(B/M 단위 — "억"은 원화 전용 어휘라 혼동 방지).
-    current_krw 는 참고용 현재가 한 줄, 없으면 생략."""
+    current_krw 는 참고용 현재가 한 줄, 없으면 생략.
+    post_urls (2026-08-10): 이 코인의 활성 레벨 원문 글들 — 거래량급증과
+    동일한 형식의 출처 링크를 마지막 구분선 아래에 추가."""
     lines = [
         _SEP,
         f"📈 <b>[OI 급증]</b> <b>{html.escape(coin)}</b>",
@@ -1051,6 +1054,9 @@ def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
     if current_krw:
         lines.append(f"    현재가:       {current_krw:,.0f}원")
     lines.append(_SEP)
+    _urls = [u for u in (post_urls or []) if u]
+    if _urls:
+        lines.append(_source_line(_urls))
     return _finalize(lines)
 
 

@@ -3695,6 +3695,13 @@ _pu_tp = telegram.render_tp_partial_alert("PUE", 1, 3, 100.0, 90.0,
 check("PU5 부분익절 알림 - post_url 있으면 마지막 구분선 아래 출처 표기",
       _pu_tp.rstrip().endswith(telegram._source_line(["https://a.example/4"])))
 
+check("PU6 OI 급증 알림 - post_urls 없으면 출처 줄 생략",
+      "🔗" not in telegram.render_oi_spike_alert("PUF", 1e9, 1.2e9, 20.0))
+_pu_oi = telegram.render_oi_spike_alert("PUF", 1e9, 1.2e9, 20.0,
+                                         post_urls=["https://a.example/5"])
+check("PU7 OI 급증 알림 - post_urls 있으면 마지막 구분선 아래 출처 표기",
+      _pu_oi.rstrip().endswith(telegram._source_line(["https://a.example/5"])))
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)
