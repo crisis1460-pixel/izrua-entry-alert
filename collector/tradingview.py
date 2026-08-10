@@ -52,7 +52,7 @@ from typing import List, Optional, Tuple
 # 미설치 환경에서는 requests + 수동 브라우저 헤더로 강등.
 try:
     from curl_cffi import requests as _http
-    _IMPERSONATE = "chrome120"
+    _IMPERSONATE = "chrome131"
 except ImportError:  # pragma: no cover
     import requests as _http
     _IMPERSONATE = None

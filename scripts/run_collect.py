@@ -425,6 +425,8 @@ def main() -> int:
     # 랜덤 지터 상한 (2026-08-02) — 고정 간격 봇 패턴 희석. min>max 설정 실수는
     # 지터 없는 고정 간격으로 강등(방어적). 테스트는 양쪽 다 0 으로 덮어쓴다.
     sleep_max = max(sleep_sec, settings.get("tv_fetch_sleep_max_sec") or 0.0)
+    night_sleep_sec = settings.get("tv_night_sleep_sec") or sleep_sec
+    night_sleep_max = max(night_sleep_sec, settings.get("tv_night_sleep_max_sec") or 0.0)
     max_age_h = settings.get("max_post_age_hours")
 
     with db.connect(db_path) as conn:
@@ -537,7 +539,11 @@ def main() -> int:
                 conn.commit()
 
             if i < len(universe) - 1:
-                time.sleep(random.uniform(sleep_sec, sleep_max))
+                _kst_hour = (datetime.now(timezone.utc) + timedelta(hours=9)).hour
+                if 0 <= _kst_hour < 6:
+                    time.sleep(random.uniform(night_sleep_sec, night_sleep_max))
+                else:
+                    time.sleep(random.uniform(sleep_sec, sleep_max))
 
         # 순환 지점 저장 — 완주면 0(평상시 대형주 우선 복원), 차단 이탈이면 그 지점.
         # (offset + stopped_at) 은 회전 전 원본 목록 기준 절대 위치로 환산한 값.
