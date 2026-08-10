@@ -1131,6 +1131,16 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
              and entry_usd > 0 and entry_usd < t <= entry_usd * 4]
             if lv.get("direction") == "long" else []
         )
+        # _volume_band_tps 와 동일 union 보정: tp_usd 가 tps_usd 에 누락되는
+        # 실데이터 케이스(ETH tp=2000/tps=[1975]) 에서 판정 단계가 건너뛰어지는
+        # 문제를 막는다.
+        _tp_usd_rep = lv.get("tp_usd")
+        if (isinstance(_tp_usd_rep, (int, float))
+                and entry_usd > 0
+                and entry_usd < _tp_usd_rep <= entry_usd * 4
+                and _tp_usd_rep not in _tps_valid):
+            _tps_valid.append(_tp_usd_rep)
+            _tps_valid.sort()
         _is_multi_tp = len(_tps_valid) > 1
         if _is_multi_tp and _tp_alert_idx < len(_tps_valid):
             tp_krw = _tps_valid[_tp_alert_idx] * usdt_krw
@@ -1477,7 +1487,7 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
             cur_krw = prices.get(f"KRW-{c}")
             _oi_urls = [r["post_url"] for r in conn.execute(
                 "SELECT DISTINCT post_url FROM levels "
-                "WHERE coin_symbol=? AND post_url IS NOT NULL",
+                "WHERE coin_symbol=? AND post_url IS NOT NULL AND status='watching'",
                 (c,)).fetchall()]
             text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw,
                                                   post_urls=sorted(_oi_urls))

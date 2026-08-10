@@ -411,7 +411,8 @@ def upsert_level(conn, level: dict) -> bool:
                 level.get("rr"), level.get("grade"), level.get("score"),
                 level.get("author"), level.get("author_followers"),
                 level.get("author_hit_rate"), level.get("author_hit_count"),
-                1 if level.get("author_whitelisted") else 0,
+                (None if level.get("author_whitelisted") is None
+                 else (1 if level.get("author_whitelisted") else 0)),
                 level.get("mcap_rank"), level.get("mcap_tier_icon"),
                 level.get("post_url"), level.get("post_age_minutes"),
                 "watching", level.get("collected_at", time.time()),
