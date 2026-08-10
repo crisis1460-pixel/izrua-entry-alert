@@ -486,7 +486,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 세 지표가 다 실패한 상태에서 레짐 배지만 있으면 세퍼레이터가 안 붙어
     # 목표가 행에 바로 이어지는 렌더 이슈가 있었다.
     if (sentiment or kimchi_pct is not None or funding_rate is not None
-            or funding_regime_flip or supply):
+            or (funding_regime_flip and funding_regime_flip.get("flipped"))
+            or supply):
         lines.append(_SEP)
     # 수급 판정 한 줄 (2026-08-07 사용자 결정): 종전 "💰 펀딩 수치+라벨" 줄을
     # 펀딩×OI 합성 결론으로 대체 — 원시 수치 대신 매수 관점 판정만 짧게.

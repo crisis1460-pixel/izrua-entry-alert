@@ -190,7 +190,7 @@ def calculate_grade(
         diff_pct = (current_usd_price - entry) / entry * 100
         if abs(diff_pct) <= 2:
             score += 20
-        elif -10 <= diff_pct < -2:
+        elif -10 < diff_pct < -2:
             score += 17
         elif 2 <= diff_pct < 5:
             score += 12
