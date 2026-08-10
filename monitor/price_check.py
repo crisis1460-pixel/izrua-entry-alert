@@ -1336,6 +1336,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                                     lv["coin_symbol"], _kind)
                     if not _touch_sent:
                         obs["suppressed_tp_gate"] += 1
+                if _pending_tp:
+                    db.clear_pending_tp(conn, lv["id"])
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
                 resolved += 1

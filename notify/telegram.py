@@ -462,8 +462,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
             from_low = (current_krw - low52) / low52 * 100
             lines.append("")
             lines.append("52주")
-            lines.append(f"    고가  {from_high:+.1f}% ({high52:,.0f}원)")
-            lines.append(f"    저가  {from_low:+.1f}% ({low52:,.0f}원)")
+            lines.append(f"    고가  {from_high:+.1f}% ({_fmt_krw(high52)}원)")
+            lines.append(f"    저가  {from_low:+.1f}% ({_fmt_krw(low52)}원)")
             if high52 > low52:
                 pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
                 filled = max(0, min(10, round(pos / 10)))
