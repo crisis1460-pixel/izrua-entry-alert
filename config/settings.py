@@ -43,8 +43,8 @@ SETTINGS = {
                                           # 경계라 간헐 차단이 설명된다. 6~9s 지터(평균
                                           # 7.5s=8건/분)로 여유 33% 확보 (2026-08-02).
     "tv_fetch_sleep_max_sec": 9.0,       # 심볼당 요청 최대 간격 — uniform(min,max) 랜덤
-    "tv_night_sleep_sec": 12.0,           # KST 0~6시 새벽 최소 간격 (야간 403 완화)
-    "tv_night_sleep_max_sec": 18.0,       # KST 0~6시 새벽 최대 간격 (평균 15s=4건/분)
+    "tv_night_sleep_sec": 12.0,           # KST 0~7시 새벽 최소 간격 (야간 403 완화)
+    "tv_night_sleep_max_sec": 18.0,       # KST 0~7시 새벽 최대 간격 (평균 15s=4건/분)
                                           # 지터. 고정 간격은 그 자체가 봇 패턴(관례:
                                           # Scrapy RANDOMIZE_DOWNLOAD_DELAY). 낮 예산: 80회
                                           # ×평균7.5s+요청~1s×81≈11.1분 < 타임아웃 12분.

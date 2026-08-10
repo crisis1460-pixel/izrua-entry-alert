@@ -541,7 +541,7 @@ def main() -> int:
 
             if i < len(universe) - 1:
                 _kst_hour = (datetime.now(timezone.utc) + timedelta(hours=9)).hour
-                if 0 <= _kst_hour < 6:
+                if 0 <= _kst_hour < 7:
                     time.sleep(random.uniform(night_sleep_sec, night_sleep_max))
                 else:
                     time.sleep(random.uniform(sleep_sec, sleep_max))
