@@ -137,7 +137,7 @@ def fetch_upbit_warning_symbols(timeout: float) -> set:
         resp = requests.get(UPBIT_MARKET_URL, params={"isDetails": "true"}, timeout=timeout)
         resp.raise_for_status()
         payload = resp.json()
-    except requests.RequestException as e:
+    except Exception as e:  # noqa: BLE001 - 필터 실패는 해당 필터만 건너뜀(JSON 디코드 오류 포함)
         logger.warning("[cg] 업비트 마켓 상세 조회 실패 (유의종목 건너뜀): %s", e)
         return set()
     warned = set()
@@ -156,7 +156,7 @@ def fetch_binance_usdt_symbols(timeout: float) -> set:
         resp = requests.get(BINANCE_EXCHANGE_INFO_URL, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as e:
+    except Exception as e:  # noqa: BLE001 - 필터 실패는 해당 필터만 건너뜀(JSON 디코드 오류 포함)
         logger.warning("[cg] Binance exchangeInfo 조회 실패 (Binance 필터 건너뜀): %s", e)
         return set()
     return {
@@ -178,10 +178,15 @@ def _load_json_cache(path: str) -> dict:
 
 
 def _save_json_cache(path: str, data: dict) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        # 이력 저장 실패가 유니버스 빌드를 죽이면 안 된다 — 이력은 다음 회차에
+        # 다시 쌓이지만 유니버스 실패는 수집 전체 정지다(2026-08-11 검토 BUG3).
+        logger.warning("[cg] 필터 캐시 저장 실패(무시): %s: %s", path, e)
 
 
 def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
@@ -203,10 +208,15 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
     first_seen_path = settings.get("universe_first_seen_cache_path")
     if exclude_new_days:
         first_seen = _load_json_cache(first_seen_path)
+        # 첫 실행(파일 없음/빈 파일) 조부조항: 현재 유니버스 전원을 "이미 오래된
+        # 코인"으로 소급 등재한다. 안 하면 전원이 first_seen=now 로 찍혀 90일간
+        # 유니버스가 통째로 비는 치명 버그(2026-08-11 검토 BUG1). 이 필터는
+        # "가동 시작 이후에 새로 나타난 코인"만 잡는 것이 설계 의도다.
+        _grandfather = not first_seen
         for coin in universe:
             sym = coin["symbol"]
             if sym not in first_seen:
-                first_seen[sym] = now  # 최초 감지 시각 기록
+                first_seen[sym] = 0.0 if _grandfather else now
         _save_json_cache(first_seen_path, first_seen)
 
     # ── 필터 2: Binance 상장 여부 ──────────────────────────────────────────
@@ -227,7 +237,14 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
         for coin in universe:
             sym = coin["symbol"]
             entries = rank_hist.setdefault(sym, [])
-            entries.append({"ts": now, "rank": coin["rank"]})
+            # 하루 1엔트리 강제(2026-08-11 검토 BUG2): 캐시 미스·force 재호출로
+            # 같은 날 여러 번 실행돼도 len(entries) 가 "일수"로 유지되게 20h
+            # 이내 재기록은 마지막 엔트리를 갱신만 한다. min_history=7 이
+            # 실제 7일을 뜻하려면 엔트리=일 단위여야 한다.
+            if entries and now - entries[-1]["ts"] < 20 * 3600:
+                entries[-1] = {"ts": now, "rank": coin["rank"]}
+            else:
+                entries.append({"ts": now, "rank": coin["rank"]})
             if len(entries) > 30:
                 rank_hist[sym] = entries[-30:]
         _save_json_cache(rank_hist_path, rank_hist)
@@ -320,7 +337,20 @@ def build_universe(force: bool = False) -> list:
                 "tier_icon": c["tier_icon"],
             })
 
-    universe = _apply_quality_filters(universe, now=time.time(), timeout=timeout)
+    # 품질 필터는 fail-open(2026-08-11 검토 BUG3): 필터 내부의 예상 밖 예외가
+    # 유니버스 빌드 자체를 죽이면 수집 전체가 정지한다 — 필터 없는 유니버스가
+    # 빈 유니버스보다 항상 낫다.
+    try:
+        filtered = _apply_quality_filters(universe, now=time.time(), timeout=timeout)
+        # 안전망: 필터가 전량 제외하면 필터 자체가 오작동한 것 — 미필터 원본 사용
+        if not filtered and universe:
+            logger.error("[cg] 품질 필터가 유니버스 전체(%d개)를 제외 — 필터 무시하고 원본 사용",
+                         len(universe))
+        else:
+            universe = filtered
+    except Exception as e:  # noqa: BLE001
+        logger.error("[cg] 품질 필터 예외(무시하고 미필터 유니버스 사용): %s", e)
+
     _save_cache(cache_path, universe)
     return universe
 

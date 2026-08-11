@@ -201,7 +201,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                 "author_advanced": author_advanced,
             }, fp, ensure_ascii=False, indent=2)
         files.append(stats_path.name)
-    except BaseException as _e:  # noqa: BLE001 - 통계 덤프 실패가 전체를 중단시키면 안 됨
+    except Exception as _e:  # noqa: BLE001 - 통계 덤프 실패가 전체를 중단시키면 안 됨
         logger.warning("등급 통계 덤프 실패: %s", _e)
 
     # 원문 정리는 "이번 덤프가 실제로 원문을 담아 성공했을 때"만. 덤프가 0건이거나

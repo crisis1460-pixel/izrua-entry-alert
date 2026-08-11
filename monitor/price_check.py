@@ -820,13 +820,15 @@ def run_once(now: float = None) -> dict:
                         logger.warning("[체크] %s 수급 판정 실패(무시): %s", coin, e)
                         _snap_supply = None
                     # CVD 비율 (2026-08-11) — 내부 축적 전용(알림 무노출),
-                    # touch_ma200_above 와 동일 성격. 터치 확정건에만 1콜.
+                    # touch_ma200_above 와 동일 성격. 터치 확정건에만 1콜
+                    # (예고 경로는 기록 자체가 없어 조회도 생략 — 콜 낭비 방지).
                     _snap_cvd = None
-                    try:
-                        _snap_cvd = binance.fetch_cvd_ratio(
-                            coin, cfg_get("http_timeout_sec"), hours=4)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("[체크] %s CVD 조회 실패(무시): %s", coin, e)
+                    if touched:
+                        try:
+                            _snap_cvd = binance.fetch_cvd_ratio(
+                                coin, cfg_get("http_timeout_sec"), hours=4)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s CVD 조회 실패(무시): %s", coin, e)
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
