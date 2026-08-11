@@ -273,7 +273,8 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
 
         if rank_drop_threshold:
             entries = rank_hist.get(sym, [])
-            if len(entries) >= rank_drop_min_hist:
+            # entries[:-1] 이 비지 않으려면 최소 2엔트리 필요 — min_hist 가 1 이하여도 안전
+            if len(entries) >= max(rank_drop_min_hist, 2):
                 best_rank = min(e["rank"] for e in entries[:-1])  # 현재 제외한 과거 최고
                 if coin["rank"] - best_rank >= rank_drop_threshold:
                     excluded["rank_drop"].append(sym)
