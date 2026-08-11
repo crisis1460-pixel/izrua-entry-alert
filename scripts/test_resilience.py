@@ -2019,10 +2019,273 @@ check("M1-9b: 근거(deleted_checked_at)와 하루 게이트가 같은 커밋에
       _m1_del_gate is not None)
 
 
+# ══════════════════════════════════════════════════════════════════
+# 2026-08-11 신규기능 회귀 테스트
+# 1) get_grade_stats / get_author_advanced_stats (내부 통계)
+# 2) _apply_quality_filters: BUG1 조부조항, BUG2 하루1엔트리, BUG3 fail-open
+# 3) fetch_cvd_ratio (모의 klines)
+# ══════════════════════════════════════════════════════════════════
+
+# ── 1. 내부 통계 함수 ────────────────────────────────────────────
+TEST_DB_STATS = "cache/_test_resilience_stats.db"
+if os.path.exists(TEST_DB_STATS):
+    os.remove(TEST_DB_STATS)
+db.init_db(TEST_DB_STATS)
+
+
+_STATS_T0 = time.time() - 86400  # 기준 시각 (now-1일 → resolved 순서 명확)
+
+
+def _insert_outcome(conn, key, grade, outcome, r_multiple, author="Author1", t_offset=0):
+    ts = _STATS_T0 + t_offset
+    conn.execute(
+        """INSERT INTO levels
+             (signal_key, coin_symbol, ticker, direction, entry_usd,
+              author, post_url, status, collected_at, grade,
+              outcome, resolved_at, r_multiple, touched_at, touch_price_krw, touch_usdt_krw)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (key, "TST", "KRW-TST", "long", 100.0, author,
+         f"https://tv.example/{key}", "touched", ts, grade,
+         outcome, ts, r_multiple, ts, 100000.0, 1300.0),
+    )
+
+
+with db.connect(TEST_DB_STATS) as conn:
+    _insert_outcome(conn, "gs1", "B", "hit",           2.0,  "AuthA", t_offset=0)
+    _insert_outcome(conn, "gs2", "B", "hit",           1.5,  "AuthA", t_offset=1)
+    _insert_outcome(conn, "gs3", "B", "miss",         -1.0,  "AuthA", t_offset=2)
+    _insert_outcome(conn, "gs4", "C", "miss",         -1.0,  "AuthA", t_offset=3)
+    _insert_outcome(conn, "gs5", "C", "timeboxed_win", 0.5,  "AuthB", t_offset=0)
+    _insert_outcome(conn, "gs6", "D", "miss",         -1.0,  "AuthB", t_offset=1)
+
+with db.connect(TEST_DB_STATS) as conn:
+    _gs = db.get_grade_stats(conn)
+
+check("내부통계-GS1: get_grade_stats 반환 키에 B/C/D 포함",
+      "B" in _gs and "C" in _gs and "D" in _gs)
+check("내부통계-GS2: B등급 wins=2 losses=1",
+      _gs["B"]["wins"] == 2 and _gs["B"]["losses"] == 1)
+check("내부통계-GS3: B등급 hit_rate=0.667(2/3, 소수점3자리)",
+      abs((_gs["B"]["hit_rate"] or 0) - round(2 / 3, 3)) < 1e-9)
+check("내부통계-GS4: C등급 wins=1(timeboxed_win 포함) losses=1",
+      _gs["C"]["wins"] == 1 and _gs["C"]["losses"] == 1)
+check("내부통계-GS5: D등급 hit_rate=None 이 아닌 0.0(0승 1패)",
+      _gs["D"]["hit_rate"] == 0.0)
+
+with db.connect(TEST_DB_STATS) as conn:
+    _as_a = db.get_author_advanced_stats(conn, "AuthA")
+    _as_b = db.get_author_advanced_stats(conn, "AuthB")
+    _as_none = db.get_author_advanced_stats(conn, "NoAuthor")
+
+# AuthA: B-hit(2.0), B-hit(1.5), B-miss(-1.0), C-miss(-1.0) = 4건, r_track=4(<5)
+check("내부통계-AS1: r_track<5 이면 None 반환(빈 dict 아님, r_track_n은 포함)",
+      _as_a.get("profit_factor") is None and _as_a.get("r_track_n") == 4)
+
+# AuthB: C-timeboxed_win(0.5), D-miss(-1.0) = 2건 → r_track=2 < 5
+check("내부통계-AS2: AuthB r_track_n=2(<5) → 지표 None",
+      _as_b.get("profit_factor") is None and _as_b.get("r_track_n") == 2)
+check("내부통계-AS3: 없는 작성자 → 0건이므로 r_track_n=0, profit_factor=None",
+      _as_none.get("r_track_n") == 0 and _as_none.get("profit_factor") is None)
+
+# AuthA에 1건 더 추가해 r_track=5 충족
+with db.connect(TEST_DB_STATS) as conn:
+    _insert_outcome(conn, "gs7", "A", "hit", 3.0, "AuthA", t_offset=4)
+
+with db.connect(TEST_DB_STATS) as conn:
+    _as_a5 = db.get_author_advanced_stats(conn, "AuthA")
+
+# wins_r=[2.0,1.5,3.0], loss_r=[1.0,1.0]
+# pf = (2.0+1.5+3.0)/(1.0+1.0) = 6.5/2 = 3.25
+# win_rate=3/5, loss_rate=2/5, avg_wr=6.5/3≈2.167, avg_lr=1.0
+# r_exp = 0.6*2.167 - 0.4*1.0 = 1.3 - 0.4 = 0.9
+check("내부통계-AS4: r_track=5 충족 시 profit_factor 계산됨(≈3.25)",
+      _as_a5.get("profit_factor") is not None and abs(_as_a5["profit_factor"] - 3.25) < 0.01)
+check("내부통계-AS5: r_expectancy ≈ 0.9(승률×평균수익R − 패율×평균손실R)",
+      _as_a5.get("r_expectancy") is not None and abs(_as_a5["r_expectancy"] - 0.9) < 0.01)
+check("내부통계-AS6: max_consec_loss=2(miss→miss 연속, 중간 hit 로 리셋)",
+      _as_a5.get("max_consec_loss") == 2)
+
+
+# ── 2. 유니버스 품질 필터 ─────────────────────────────────────────
+_filter_cache_dir = "cache/_test_qfilter"
+os.makedirs(_filter_cache_dir, exist_ok=True)
+_fs_path = os.path.join(_filter_cache_dir, "first_seen.json")
+_rh_path = os.path.join(_filter_cache_dir, "rank_hist.json")
+
+# BUG1: 조부조항 — first_seen.json 없을 때 전원 0.0으로 소급 등재
+for _p in (_fs_path, _rh_path):
+    if os.path.exists(_p): os.remove(_p)
+
+settings.SETTINGS["universe_exclude_new_listing_days"] = 90
+settings.SETTINGS["universe_exclude_non_binance"] = False
+settings.SETTINGS["universe_exclude_upbit_warning"] = False
+settings.SETTINGS["universe_rank_drop_threshold"] = 0
+settings.SETTINGS["universe_rank_drop_min_history"] = 7
+settings.SETTINGS["universe_first_seen_cache_path"] = _fs_path
+settings.SETTINGS["universe_rank_history_cache_path"] = _rh_path
+
+_test_uni = [
+    {"symbol": "AAVE", "rank": 50, "name": "Aave"},
+    {"symbol": "LINK", "rank": 80, "name": "Chainlink"},
+]
+
+from collector.coingecko import _apply_quality_filters
+
+_result_bf = _apply_quality_filters(_test_uni, now=time.time(), timeout=5.0)
+check("BUG1-조부조항: first_seen 없는 첫 실행에서 전원 통과(exclusion=0)",
+      len(_result_bf) == 2)
+
+with open(_fs_path, "r", encoding="utf-8") as _f:
+    _fs_saved = json.load(_f)
+check("BUG1-조부조항: 저장된 first_seen 값이 0.0(신규 아닌 오래된 코인으로 소급)",
+      _fs_saved.get("AAVE") == 0.0 and _fs_saved.get("LINK") == 0.0)
+
+# BUG1 계속: 두 번째 실행에 NEW_COIN 이 나타나면 now 로 등록돼 90일 제외
+_test_uni_with_new = _test_uni + [{"symbol": "NEWCOIN", "rank": 100, "name": "New"}]
+_now2 = time.time()
+_result_2nd = _apply_quality_filters(_test_uni_with_new, now=_now2, timeout=5.0)
+check("BUG1-2차: 기존코인(0.0)은 통과, 신규코인(now≈_now2)은 90일 미만으로 제외",
+      len(_result_2nd) == 2 and all(c["symbol"] != "NEWCOIN" for c in _result_2nd))
+
+
+# BUG2: 하루 1엔트리 강제 — 20h 이내 재호출은 기존 엔트리 update
+settings.SETTINGS["universe_exclude_new_listing_days"] = 0   # new_listing 필터 OFF
+settings.SETTINGS["universe_rank_drop_threshold"] = 80
+settings.SETTINGS["universe_rank_drop_min_history"] = 3
+
+if os.path.exists(_rh_path): os.remove(_rh_path)
+
+_t0 = time.time()
+_uni_rank = [{"symbol": "AAVE", "rank": 50, "name": "Aave"}]
+
+# 1차 기록
+_apply_quality_filters(_uni_rank, now=_t0, timeout=5.0)
+
+# 2차: 1시간 뒤 (< 20h) — 동일 날 재호출, 엔트리를 추가하지 말고 갱신해야
+_apply_quality_filters(_uni_rank, now=_t0 + 3600, timeout=5.0)
+
+# 3차: 또 1시간 뒤 (여전히 < 20h)
+_apply_quality_filters(_uni_rank, now=_t0 + 7200, timeout=5.0)
+
+with open(_rh_path, "r", encoding="utf-8") as _f:
+    _rh_saved = json.load(_f)
+check("BUG2-하루1엔트리: 20h 이내 3번 호출해도 AAVE 이력 엔트리는 1개",
+      len(_rh_saved.get("AAVE", [])) == 1)
+check("BUG2-하루1엔트리: 마지막 갱신 ts가 가장 최근 now(_t0+7200)",
+      abs(_rh_saved["AAVE"][0]["ts"] - (_t0 + 7200)) < 1.0)
+
+# 4차: 25h 뒤(_t0+7200 기준 +23h) — 20h 초과, 새 엔트리 append돼야 함
+_apply_quality_filters(_uni_rank, now=_t0 + 25 * 3600, timeout=5.0)
+with open(_rh_path, "r", encoding="utf-8") as _f:
+    _rh_saved2 = json.load(_f)
+check("BUG2-하루1엔트리: 20h 초과 후 호출은 새 엔트리 추가(총 2개)",
+      len(_rh_saved2.get("AAVE", [])) == 2)
+
+
+# BUG3: fail-open — 모든 코인이 필터로 제외될 때 원본 유니버스 사용
+settings.SETTINGS["universe_exclude_new_listing_days"] = 0
+settings.SETTINGS["universe_rank_drop_threshold"] = 0
+settings.SETTINGS["universe_exclude_non_binance"] = True
+settings.SETTINGS["universe_exclude_upbit_warning"] = False
+
+# Binance API가 빈 set 반환(실패) → binance_syms가 비어 → 필터 건너뜀(fail-open)
+def _cg_binance_empty(url, params=None, headers=None, timeout=None):
+    if "exchangeInfo" in url:
+        return _FakeResp(500, text="server error")  # Binance 실패
+    return _FakeResp(404)
+
+requests.get = _cg_binance_empty
+_uni_test_fo = [{"symbol": "AAVE", "rank": 50, "name": "Aave"},
+                {"symbol": "LINK", "rank": 80, "name": "Chainlink"}]
+_result_fo = _apply_quality_filters(_uni_test_fo, now=time.time(), timeout=5.0)
+check("BUG3-fail-open: Binance API 실패시 빈 set → 필터 건너뜀, 전원 통과",
+      len(_result_fo) == 2)
+
+# build_universe fail-open: _apply_quality_filters 예외 시 원본 반환
+# 이전 테스트들이 coingecko.build_universe를 lambda로 교체했으므로 reload로 실함수 복원
+import importlib as _importlib
+_importlib.reload(coingecko)
+_orig_apply = coingecko._apply_quality_filters
+
+
+def _boom_filter(universe, now, timeout):
+    raise RuntimeError("의도적 필터 예외")
+
+
+coingecko._apply_quality_filters = _boom_filter
+
+settings.SETTINGS["universe_cache_path"] = "cache/_test_fo_uni.json"
+settings.SETTINGS["universe_top_n"] = 2
+settings.SETTINGS["universe_refresh_hours"] = 0  # 항상 재조회
+
+def _cg_get_fo(url, params=None, headers=None, timeout=None):
+    if "coins/markets" in url:
+        return _FakeResp(200, [
+            {"symbol": "eth", "market_cap_rank": 2, "name": "Ethereum", "current_price": 3000.0},
+            {"symbol": "bnb", "market_cap_rank": 3, "name": "BNB", "current_price": 400.0},
+        ])
+    if "market/all" in url:
+        return _FakeResp(200, [{"market": "KRW-ETH"}, {"market": "KRW-BNB"}])
+    return _FakeResp(404)
+
+requests.get = _cg_get_fo
+_uni_fo = coingecko.build_universe(force=True)
+coingecko._apply_quality_filters = _orig_apply
+check("BUG3-fail-open: 필터 예외 시 build_universe가 원본 유니버스(필터 없음) 반환",
+      len(_uni_fo) == 2 and any(c["symbol"] == "ETH" for c in _uni_fo))
+
+# build_universe fail-open: 필터가 전량 제외 시 원본 반환
+def _exclude_all_filter(universe, now, timeout):
+    return []   # 전량 제외
+
+coingecko._apply_quality_filters = _exclude_all_filter
+_uni_fo2 = coingecko.build_universe(force=True)
+coingecko._apply_quality_filters = _orig_apply
+check("BUG3-fail-open: 필터 전량제외 시 build_universe가 원본 유니버스(전원) 반환",
+      len(_uni_fo2) == 2)
+
+# ── 3. fetch_cvd_ratio ───────────────────────────────────────────
+from monitor import binance as binance_mod
+
+def _cg_klines_ok(url, params=None, headers=None, timeout=None):
+    """klines: 2캔들 — taker_buy 합계가 total의 75% → CVD=(2×0.75-1)=0.5."""
+    if "klines" in url:
+        # [open_time, o, h, l, c, volume, c_time, qvol, ntrades, taker_buy_base, taker_buy_quote, ignore]
+        candle = [0, "1", "1", "1", "1", "100", 0, "0", 1, "75", "0", "0"]
+        return _FakeResp(200, [candle, candle])  # 2캔들, total=200, taker_buy=150
+    return _FakeResp(404)
+
+requests.get = _cg_klines_ok
+_cvd = binance_mod.fetch_cvd_ratio("LINK", timeout=5.0, hours=1)
+check("CVD-1: 정상 klines 응답에서 CVD 계산 올바름(0.5)",
+      _cvd is not None and abs(_cvd - 0.5) < 1e-9)
+
+def _cg_klines_400(url, params=None, headers=None, timeout=None):
+    if "klines" in url:
+        return _FakeResp(400)  # 미상장
+    return _FakeResp(404)
+
+requests.get = _cg_klines_400
+_cvd_none = binance_mod.fetch_cvd_ratio("FAKECOIN", timeout=5.0)
+check("CVD-2: 400(미상장) 응답 시 None 반환",
+      _cvd_none is None)
+
+def _cg_klines_empty(url, params=None, headers=None, timeout=None):
+    if "klines" in url:
+        candle_zero = [0, "1", "1", "1", "1", "0", 0, "0", 0, "0", "0", "0"]
+        return _FakeResp(200, [candle_zero])
+    return _FakeResp(404)
+
+requests.get = _cg_klines_empty
+_cvd_zero = binance_mod.fetch_cvd_ratio("LINK", timeout=5.0)
+check("CVD-3: 거래량 0 캔들 시 None 반환(division by zero 방지)",
+      _cvd_zero is None)
+
+
 # ── 정리 ──────────────────────────────────────────────────────────
 for _p in (TEST_DB_RC, TEST_DB_DEL, TEST_DB_EMPTY, TEST_DB_CHAIN, TEST_DB_LEGACY,
            TEST_DB_CHAIN_CYCLE, TEST_DB_GAP, TEST_DB_DELORDER, TEST_DB_DELORDER2,
-           TEST_DB_TG, TEST_DB_TGMIG, TEST_DB_M1, TEST_DB_M1DEL):
+           TEST_DB_TG, TEST_DB_TGMIG, TEST_DB_M1, TEST_DB_M1DEL, TEST_DB_STATS):
     try:
         if os.path.exists(_p):
             os.remove(_p)
