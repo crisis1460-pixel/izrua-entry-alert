@@ -194,12 +194,14 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
         ).fetchall()]
         author_advanced = {a: db.get_author_advanced_stats(conn, a) for a in authors}
         stats_path = out_dir / f"grade_stats_{week}.json"
-        with open(stats_path, "w", encoding="utf-8") as fp:
+        stats_tmp = out_dir / f".grade_stats_{week}.json.tmp"
+        with open(stats_tmp, "w", encoding="utf-8", newline="\n") as fp:
             json.dump({
                 "_week": week, "_generated_at": now,
                 "grade_hit_rates": grade_stats,
                 "author_advanced": author_advanced,
             }, fp, ensure_ascii=False, indent=2)
+        os.replace(stats_tmp, stats_path)
         files.append(stats_path.name)
     except Exception as _e:  # noqa: BLE001 - 통계 덤프 실패가 전체를 중단시키면 안 됨
         logger.warning("등급 통계 덤프 실패: %s", _e)
@@ -251,19 +253,17 @@ def maybe_weekly_audit(conn, db_path, now: float = None, force: bool = False,
 
     try:
         res = run_weekly_audit(conn, db_path, now=now, out_dir=out_dir)
-    except BaseException as e:  # noqa: BLE001 - 감사 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
-            raise
+    except Exception as e:  # noqa: BLE001 - 감사 실패가 회차를 죽이면 안 된다
         logger.error("감사 덤프 실패: %s: %s", type(e).__name__, e)
         try:
             db.set_meta(conn, META_LAST_DUMP_FAIL, str(now))
-        except BaseException:  # noqa: BLE001 - 백오프 기록 실패까지 전파시키지 않는다
+        except Exception:  # noqa: BLE001 - 백오프 기록 실패까지 전파시키지 않는다
             pass
         return "failed"
 
     try:
         db.set_meta(conn, META_LAST_DUMP, str(now))
-    except BaseException:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         pass
     logger.info("감사 덤프 완료: %s (%s) / 원문정리 %d행 / 만료덤프 %d개 삭제",
                 res["week"], ", ".join(res["files"]) or "없음",

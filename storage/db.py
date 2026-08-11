@@ -382,9 +382,7 @@ def _maybe_audit_dump(conn, db_path: str) -> None:
     try:
         from storage import audit_dump
         audit_dump.maybe_weekly_audit(conn, db_path)
-    except BaseException as e:  # noqa: BLE001 - 감사 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
-            raise
+    except Exception as e:  # noqa: BLE001 - 감사 실패가 회차를 죽이면 안 된다
         logger.warning("감사 덤프 훅 실패(무시하고 진행): %s: %s", type(e).__name__, e)
 
 
@@ -1126,8 +1124,7 @@ def get_grade_stats(conn) -> dict:
     rows = conn.execute(
         """SELECT grade,
                   SUM(CASE WHEN outcome IN ('hit','timeboxed_win')  THEN 1 ELSE 0 END) AS wins,
-                  SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS losses,
-                  COUNT(*) AS total
+                  SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS losses
              FROM levels
             WHERE outcome IS NOT NULL AND grade IS NOT NULL
             GROUP BY grade""",
