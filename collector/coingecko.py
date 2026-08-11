@@ -181,8 +181,10 @@ def _save_json_cache(path: str, data: dict) -> None:
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(p)  # atomic overwrite (pathlib.Path.replace ≡ os.replace)
     except OSError as e:
         # 이력 저장 실패가 유니버스 빌드를 죽이면 안 된다 — 이력은 다음 회차에
         # 다시 쌓이지만 유니버스 실패는 수집 전체 정지다(2026-08-11 검토 BUG3).
