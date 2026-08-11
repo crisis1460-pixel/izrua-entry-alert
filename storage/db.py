@@ -254,6 +254,10 @@ _OUTCOME_COLUMNS = {
     # 터치 시점 200일선 상(1)/하(0) (2026-08-08 MA 확장) — 동일한 내부 전용
     # 로깅. 강세/약세 국면별 알림 실측 승률 검증용 원천 데이터.
     "touch_ma200_above": "INTEGER",
+    # 터치 시점 CVD 비율 (2026-08-11) — 최근 4h Binance taker 매수-매도 불균형,
+    # [-1, +1] 정규화. 동일한 내부 전용 로깅 — 알림·필터·등급 무관, 공격 매수/
+    # 매도 우위 국면별 outcome 상관 사후 분석용 원천 데이터.
+    "touch_cvd_ratio": "REAL",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -1411,9 +1415,10 @@ def set_meta(conn, key: str, value: str) -> None:
 
 # ── 터치 판정 로깅 + 자가검증 집계 (2026-08-07) ──────────────────────────
 def record_touch_verdicts(conn, level_ids: list, supply, position,
-                          ma200_above=None) -> None:
-    """터치 알림에 표시된 수급/자리 판정(+200일선 상하)을 레벨 행에 기록.
+                          ma200_above=None, cvd_ratio=None) -> None:
+    """터치 알림에 표시된 수급/자리 판정(+200일선 상하, +CVD 비율)을 레벨 행에 기록.
     supply/position: (label, reason) 튜플 또는 None. ma200_above: 1/0/None.
+    cvd_ratio: [-1,+1] float 또는 None (내부 전용, 알림 무노출).
     최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
     if not level_ids:
         return
@@ -1436,6 +1441,12 @@ def record_touch_verdicts(conn, level_ids: list, supply, position,
             f"UPDATE levels SET touch_ma200_above=? "
             f"WHERE id IN ({ph}) AND touch_ma200_above IS NULL",
             (1 if ma200_above else 0, *level_ids),
+        )
+    if cvd_ratio is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_cvd_ratio=? "
+            f"WHERE id IN ({ph}) AND touch_cvd_ratio IS NULL",
+            (float(cvd_ratio), *level_ids),
         )
 
 

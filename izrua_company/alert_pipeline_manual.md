@@ -187,6 +187,10 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | Profit Factor | `db.get_author_advanced_stats()` | 조회형 (DB 직접 쿼리) |
 | R-Expectancy | 동일 | 동일 |
 | Consistency Score | 동일 | 동일 |
+| CVD 비율 (2026-08-11) | `binance.fetch_cvd_ratio()` — 터치 시점 4h taker 매수-매도 불균형 [-1,+1] | `levels.touch_cvd_ratio` (터치 확정건만) |
+| 호가 매수/매도 압력 | 터치 시점 스냅샷 | `levels.touch_bid_ask_ratio` |
+| 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
+| 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |
 
 ---
 

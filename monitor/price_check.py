@@ -819,6 +819,14 @@ def run_once(now: float = None) -> dict:
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 수급 판정 실패(무시): %s", coin, e)
                         _snap_supply = None
+                    # CVD 비율 (2026-08-11) — 내부 축적 전용(알림 무노출),
+                    # touch_ma200_above 와 동일 성격. 터치 확정건에만 1콜.
+                    _snap_cvd = None
+                    try:
+                        _snap_cvd = binance.fetch_cvd_ratio(
+                            coin, cfg_get("http_timeout_sec"), hours=4)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s CVD 조회 실패(무시): %s", coin, e)
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
@@ -847,7 +855,8 @@ def run_once(now: float = None) -> dict:
                         if touched:
                             db.record_touch_verdicts(conn, ids, _snap_supply,
                                                      _snap_position,
-                                                     ma200_above=_snap_ma200_above)
+                                                     ma200_above=_snap_ma200_above,
+                                                     cvd_ratio=_snap_cvd)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1

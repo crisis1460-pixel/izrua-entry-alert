@@ -359,6 +359,43 @@ def detect_funding_regime_flip(history: Optional[list],
     return {"flipped": True, "neg_days": neg_count / 3.0, "latest": latest}
 
 
+def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[float]:
+    """CVD(누적 거래량 델타) 비율 — 최근 N시간 taker 매수-매도 불균형 (2026-08-11).
+
+    **내부 축적 전용** (touch_cvd_ratio 컬럼) — 알림·필터·등급 어디에도 안 쓴다.
+    나중에 outcome 과의 상관을 사후 분석하기 위한 원천 데이터(touch_bid_ask_ratio·
+    touch_ma200_above 와 동일 성격).
+
+    계산: aggTrades 페이징 대신 klines 1콜 — 캔들의 takerBuyBaseVolume(인덱스 9)과
+    총 volume(인덱스 5)으로 캔들별 delta = 2×takerBuy − total 을 합산, 총량으로
+    정규화해 [-1, +1] 비율로 돌려준다. +1 = 전량 taker 매수(공격 매수 우위),
+    -1 = 전량 taker 매도. 미상장(400)·전 경로 실패·거래량 0 → None(행만 미기록).
+    """
+    pair = f"{symbol.upper()}USDT"
+    limit = hours * 4  # 15분봉 × 4/h
+    for base in _BINANCE_ENDPOINTS:
+        try:
+            r = requests.get(
+                f"{base}/api/v3/klines",
+                params={"symbol": pair, "interval": "15m", "limit": limit},
+                timeout=timeout,
+            )
+            if r.status_code == 400:
+                return None  # 미상장
+            if r.status_code != 200:
+                logger.warning("[binance] cvd %s %s HTTP %s", base, pair, r.status_code)
+                continue
+            candles = r.json()
+            total = sum(float(c[5]) for c in candles)
+            if total <= 0:
+                return None
+            taker_buy = sum(float(c[9]) for c in candles)
+            return (2 * taker_buy - total) / total
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[binance] cvd %s %s 실패: %s", base, pair, e)
+    return None
+
+
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:
     """코인의 USDT 페어 현재가. 전 경로 실패 시 None
     (김프 줄만 생략됨 — 알림 발송은 계속된다)."""
