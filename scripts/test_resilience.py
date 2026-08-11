@@ -2182,6 +2182,25 @@ check("BUG2-하루1엔트리: 20h 초과 후 호출은 새 엔트리 추가(총 
       len(_rh_saved2.get("AAVE", [])) == 2)
 
 
+# BUG2.5: rank_drop min_hist=1 방어 — entries[:-1]가 빈 리스트일 때
+# max(min_hist, 2) 가드로 ValueError 방지(기본값 7이라 운영 영향 없음)
+_rh_min1_path = os.path.join(_filter_cache_dir, "rank_hist_min1.json")
+if os.path.exists(_rh_min1_path): os.remove(_rh_min1_path)
+
+settings.SETTINGS["universe_rank_drop_threshold"] = 50   # 활성화
+settings.SETTINGS["universe_rank_drop_min_history"] = 1  # 취약한 설정
+settings.SETTINGS["universe_exclude_new_listing_days"] = 0
+settings.SETTINGS["universe_exclude_non_binance"] = False
+settings.SETTINGS["universe_exclude_upbit_warning"] = False
+settings.SETTINGS["universe_rank_history_cache_path"] = _rh_min1_path
+
+# 첫 호출: 1개 엔트리 생성(entries[-1] 만 존재 → entries[:-1] = [])
+_result_min1 = _apply_quality_filters(
+    [{"symbol": "AAVE", "rank": 50, "name": "Aave"}], now=time.time(), timeout=5.0)
+check("BUG2.5-min_hist=1: 엔트리 1개로 rank_drop 판정해도 ValueError 없이 통과",
+      len(_result_min1) == 1)
+
+
 # BUG3: fail-open — 모든 코인이 필터로 제외될 때 원본 유니버스 사용
 settings.SETTINGS["universe_exclude_new_listing_days"] = 0
 settings.SETTINGS["universe_rank_drop_threshold"] = 0
