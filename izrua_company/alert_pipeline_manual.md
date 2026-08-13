@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-13 (롱숏·탑트레이더·테이커비율·스테이블코인시총 축적, touch_funding_rate·touch_oi_pct 저장, 유니버스 거래대금·시총 하한 필터, 터치 소요시간 분석)  
+> 마지막 업데이트: 2026-08-13 (채점 요소 분해 저장, 점수 구간별 적중률, 등급별 수익률 분포, 터치시간×등급 교차분석, short 판정 가드, 대표 선정 tiebreaker)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -186,6 +186,9 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 항목 | 함수 | 저장 위치 |
 |------|------|----------|
 | 등급별 적중률 | `db.get_grade_stats()` | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+| 점수 구간별 적중률 (2026-08-13) | `db.get_score_bucket_stats()` — 5점 단위 버킷별 적중률 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+| 등급별 수익률 분포 (2026-08-13) | `db.get_grade_ret_stats()` — 24h/72h 평균·중앙값·표준편차 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+| 채점 요소 분해 (2026-08-13) | `grading.score_breakdown()` — 5요소별 점수 JSON | `levels.score_breakdown` (수집·재수집 시) |
 | Profit Factor | `db.get_author_advanced_stats()` | 조회형 (DB 직접 쿼리) |
 | R-Expectancy | 동일 | 동일 |
 | Consistency Score | 동일 | 동일 |
@@ -199,7 +202,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 호가 매수/매도 압력 | 터치 시점 스냅샷 | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
 | 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |
-| 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 수집→터치 구간별 적중률 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+| 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
 
 ---
 

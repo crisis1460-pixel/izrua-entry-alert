@@ -141,6 +141,74 @@ def tp_distance_points(direction: str, entry: Optional[float], target: Optional[
     return 0.0
 
 
+def score_breakdown(
+    followers: Optional[float],
+    direction: str,
+    entry: Optional[float],
+    stop_loss: Optional[float],
+    target: Optional[float],
+    current_usd_price: Optional[float],
+    author_closed_n: Optional[int] = None,
+    author_closed_hits: Optional[int] = None,
+) -> dict:
+    """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
+
+    calculate_grade()가 내부적으로 사용하며, 수집 시 분해 저장에도 직접 호출된다.
+    키: follower, proximity, tp_dist, data, author.  sum(values()) == 총점."""
+    bd: dict = {}
+
+    f = followers or 0
+    if f >= 100_000:
+        bd["follower"] = 25
+    elif f >= 50_000:
+        bd["follower"] = 22
+    elif f >= 10_000:
+        bd["follower"] = 17
+    elif f >= 5_000:
+        bd["follower"] = 12
+    elif f >= 1_000:
+        bd["follower"] = 8
+    elif f >= 100:
+        bd["follower"] = 3
+    else:
+        bd["follower"] = 1
+
+    bd["proximity"] = 0
+    if entry and current_usd_price and current_usd_price > 0:
+        diff_pct = (current_usd_price - entry) / entry * 100
+        if abs(diff_pct) <= 2:
+            bd["proximity"] = 20
+        elif -10 < diff_pct < -2:
+            bd["proximity"] = 17
+        elif 2 <= diff_pct < 5:
+            bd["proximity"] = 12
+        elif 5 <= diff_pct < 10:
+            bd["proximity"] = 8
+        elif diff_pct <= -10:
+            bd["proximity"] = 15
+        # diff_pct >= 10: 0점 유지 (현재가가 entry 대비 10%+ 위 = 이미 지나간 자리)
+
+    bd["tp_dist"] = tp_distance_points(direction, entry, target)
+
+    has_entry = entry is not None and entry > 0
+    has_stop = stop_loss is not None and stop_loss > 0
+    has_target = target is not None and target > 0
+    if has_entry and has_target:
+        bd["data"] = 20 + (3 if has_stop else 0)
+    elif has_entry or has_target:
+        bd["data"] = 8
+    else:
+        bd["data"] = 2
+
+    bd["author"] = 0.0
+    if author_closed_n:
+        from config import settings
+        if settings.get("grade_author_points_enabled"):
+            bd["author"] = author_track_points(author_closed_n, author_closed_hits)
+
+    return bd
+
+
 def calculate_grade(
     followers: Optional[float],
     direction: str,
@@ -157,27 +225,11 @@ def calculate_grade(
     (storage.db.author_closed_stats). 기본 None = 가점 0 — 기존 호출부는 무수정
     으로 종전과 동일한 점수가 나온다. settings.grade_author_points_enabled=False
     면 인자를 넘겨도 가점 0 고정(롤백 스위치 — calculate/regrade 경로 공통)."""
-    score = 0.0
+    bd = score_breakdown(followers, direction, entry, stop_loss, target,
+                         current_usd_price, author_closed_n, author_closed_hits)
+    score = float(sum(bd.values()))
+
     rr = None
-
-    # v4(2026-08-03): 상단 강화 — 콜드스타트 대리지표(사용자 결정). 하단(1천 미만)은
-    # v3 그대로 — 소형 작성자 점수 인플레로 초근접 TP 글이 C 컷을 새로 넘는 일 없음.
-    f = followers or 0
-    if f >= 100_000:
-        score += 25
-    elif f >= 50_000:
-        score += 22
-    elif f >= 10_000:
-        score += 17
-    elif f >= 5_000:
-        score += 12
-    elif f >= 1_000:
-        score += 8
-    elif f >= 100:
-        score += 3
-    else:
-        score += 1
-
     if entry and stop_loss and target:
         if direction == "long":
             risk, reward = entry - stop_loss, target - entry
@@ -185,44 +237,6 @@ def calculate_grade(
             risk, reward = stop_loss - entry, entry - target
         if risk > 0 and reward > 0:
             rr = reward / risk
-
-    if entry and current_usd_price and current_usd_price > 0:
-        diff_pct = (current_usd_price - entry) / entry * 100
-        if abs(diff_pct) <= 2:
-            score += 20
-        elif -10 < diff_pct < -2:
-            score += 17
-        elif 2 <= diff_pct < 5:
-            score += 12
-        elif 5 <= diff_pct < 10:
-            score += 8
-        elif diff_pct <= -10:
-            score += 15
-
-    # 목표 거리 배점 (2026-07-29 R:R 제거로 전 신호 공통 적용).
-    # 감점(0~5%): 초근접 목표 — 왕복 수수료 0.1%+슬리피지 빼면 스윙 실익 없음.
-    # 보상(5%+): SL 유무 무관하게 모든 신호에 적용. 배제가 아닌 감점만.
-    score += tp_distance_points(direction, entry, target)
-
-    has_entry = entry is not None and entry > 0
-    has_stop = stop_loss is not None and stop_loss > 0
-    has_target = target is not None and target > 0
-    if has_entry and has_target:
-        score += 20
-        if has_stop:
-            score += 3  # v4: +10→+3 — SL 존재는 소폭 가산만(형식≠실력, timeboxed 판정이 조작 차단)
-    elif has_entry or has_target:
-        score += 8
-    else:
-        score += 2
-
-    # 작성자 실적 가점 (2026-08-01 v3 안2). 스위치는 호출 시점에 읽는다 —
-    # 롤백(False)이 재시작 없이 다음 채점부터 즉시 반영되고, 테스트가 SETTINGS
-    # 를 바꿔 양쪽 경로를 검증할 수 있다.
-    if author_closed_n:
-        from config import settings  # 지연 로드 — grading 단독 사용처의 의존 최소화
-        if settings.get("grade_author_points_enabled"):
-            score += author_track_points(author_closed_n, author_closed_hits)
 
     return grade_from_score(score), score, rr
 

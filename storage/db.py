@@ -331,6 +331,10 @@ _EXTRA_COLUMNS = {
     # NULL = 미명시(필터 통과). judgment_window_hours 는 이 값에서 파생되지만 역산
     # 불가(동일 창에 여러 tf 가 매핑)라 원본을 따로 저장한다.
     "timeframe_hours": "REAL",
+    # 채점 요소 분해 JSON (2026-08-13). {"follower": N, "proximity": N, "tp_dist": N,
+    # "data": N, "author": N}. 사후 요소별 적중률 기여도 분석의 원천 — 총점에서는
+    # 역산이 불가능하다(동일 총점에 여러 조합이 매핑). 수집·재수집 시 갱신.
+    "score_breakdown": "TEXT",
 }
 
 
@@ -423,8 +427,9 @@ def upsert_level(conn, level: dict) -> bool:
                 rr, grade, score, author, author_followers, author_hit_rate,
                 author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                 post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours,
+                score_breakdown)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, level["coin_symbol"], level["ticker"], level["direction"],
                 level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -444,6 +449,7 @@ def upsert_level(conn, level: dict) -> bool:
                 # 산식 버전 태그 (2026-08-01 v3). 미지정(None)=구 호출부/테스트 호환
                 level.get("grade_ver"),
                 level.get("timeframe_hours"),
+                level.get("score_breakdown"),
             ),
         )
         return True
@@ -457,7 +463,7 @@ def upsert_level(conn, level: dict) -> bool:
     # 으로 사후 변경되면 '판정 기준 골대 이동'이라 안티게이밍 원칙 위반.
     conn.execute(
         """UPDATE levels SET
-             grade=?, score=?, rr=?, grade_ver=COALESCE(?, grade_ver),
+             grade=?, score=?, rr=?, score_breakdown=?, grade_ver=COALESCE(?, grade_ver),
              sl_usd=?, tp_usd=?,
              tp_ladder_count=COALESCE(?, tp_ladder_count),
              tps_usd=COALESCE(?, tps_usd),
@@ -470,8 +476,7 @@ def upsert_level(conn, level: dict) -> bool:
            WHERE signal_key=? AND status IN ('watching','previewed')""",
         (
             level.get("grade"), level.get("score"), level.get("rr"),
-            # 재수집 재채점은 현재 산식으로 이뤄지므로 버전도 함께 갱신.
-            # None(구 호출부)은 COALESCE 로 기존 값 보존 — 소급 재라벨 아님.
+            level.get("score_breakdown"),
             level.get("grade_ver"),
             level.get("sl_usd"), level.get("tp_usd"),
             # 2026-08-08 재검토: 다른 선택필드들과 같은 COALESCE 보호로 통일 —
@@ -1155,6 +1160,64 @@ def get_grade_stats(conn) -> dict:
             "wins": w, "losses": l, "total": tot,
             "hit_rate": round(w / tot, 3) if tot else None,
         }
+    return result
+
+
+def get_score_bucket_stats(conn) -> dict:
+    """점수 5점 구간별 적중률. 등급 경계 최적화 근거용."""
+    rows = conn.execute(
+        """SELECT CAST(score / 5 AS INTEGER) * 5 AS bucket,
+                  SUM(CASE WHEN outcome IN ('hit','timeboxed_win')  THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS losses
+             FROM levels
+            WHERE outcome IS NOT NULL AND score IS NOT NULL
+            GROUP BY bucket
+            ORDER BY bucket""",
+    ).fetchall()
+    result = {}
+    for row in rows:
+        w, l = row["wins"] or 0, row["losses"] or 0
+        tot = w + l
+        b = int(row["bucket"])
+        result[f"{b}-{b+4}"] = {
+            "wins": w, "losses": l, "total": tot,
+            "hit_rate": round(w / tot, 3) if tot else None,
+        }
+    return result
+
+
+def get_grade_ret_stats(conn) -> dict:
+    """등급별 24h/72h 수익률 분포 (평균·중앙값·표준편차). 등급 실효성 검증용."""
+    rows = conn.execute(
+        """SELECT grade, ret_24h, ret_72h
+             FROM levels
+            WHERE grade IS NOT NULL
+              AND (ret_24h IS NOT NULL OR ret_72h IS NOT NULL)"""
+    ).fetchall()
+    from collections import defaultdict
+    import statistics
+    by_grade: dict = defaultdict(lambda: {"ret_24h": [], "ret_72h": []})
+    for r in rows:
+        g = r["grade"]
+        if r["ret_24h"] is not None:
+            by_grade[g]["ret_24h"].append(r["ret_24h"])
+        if r["ret_72h"] is not None:
+            by_grade[g]["ret_72h"].append(r["ret_72h"])
+    result = {}
+    for g, data in by_grade.items():
+        entry = {}
+        for period in ("ret_24h", "ret_72h"):
+            vals = data[period]
+            if vals:
+                entry[period] = {
+                    "n": len(vals),
+                    "mean": round(sum(vals) / len(vals), 3),
+                    "median": round(statistics.median(vals), 3),
+                    "stdev": round(statistics.stdev(vals), 3) if len(vals) >= 2 else None,
+                }
+            else:
+                entry[period] = None
+        result[g] = entry
     return result
 
 

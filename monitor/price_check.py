@@ -260,12 +260,11 @@ def _rep(cluster: list, current_usd: float = 0.0) -> dict:
     current_usd 가 주어지면 모든 멤버를 재채점해 비교 — 수집 시점 score 를 그대로
     쓰면 수집 후 가격 변동으로 근접도 점수가 달라진 멤버를 잘못 선택할 수 있다.
     단일 멤버 클러스터 또는 current_usd=0 이면 수집 시점 score 로 폴백(경량 경로).
-    동점 시 진입가 최고 우선(i-13) — build_clusters 내림차순과 일치하면서 명시적.
-    진입가도 동일하면 id 로 완전 결정(list 순서 의존 제거)."""
+    동점 시 진입가 최고 → 최신 수집 → id 순 (완전 결정, list 순서 의존 제거)."""
     if not current_usd or len(cluster) == 1:
-        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("entry_usd") or 0, l.get("id") or 0))
+        return max(cluster, key=lambda l: (l.get("score") or 0, l.get("entry_usd") or 0, l.get("collected_at") or 0, l.get("id") or 0))
     from collector.grading import regrade_current  # 순환 import 방지 지연 로드
-    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("entry_usd") or 0, l.get("id") or 0))
+    return max(cluster, key=lambda l: (regrade_current(l, current_usd)[1], l.get("entry_usd") or 0, l.get("collected_at") or 0, l.get("id") or 0))
 
 
 def _tp_distance_penalty(direction: str, entry, target) -> float:
@@ -1111,6 +1110,17 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
     for lv in sorted(_tp_loop_levels, key=_urgency):
         if lv["touched_at"] > now:
             continue  # 터치 캔들이 아직 진행 중 — 완성 후(다음 회차) 판정
+        # short 방향 판정 미지원 — TP/SL 판정 로직(c_high>=tp, c_low<=sl)과 r_multiple
+        # 산식이 long 전용이라 short 레벨을 long 로직으로 돌리면 오판정이 난다.
+        # 창 만료 시 expired_no_data 로 안전하게 종결(통계 오염 방지).
+        if lv.get("direction") != "long":
+            window_sec_s = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
+            elapsed_s = now - lv["touched_at"]
+            if elapsed_s >= window_sec_s:
+                db.resolve_outcome(conn, lv["id"], "expired_no_data", 0.0,
+                                   "timeboxed", now=now)
+                resolved += 1
+            continue
         window_sec = (lv.get("judgment_window_hours") or 0) * 3600 or default_window_sec
         elapsed = now - lv["touched_at"]
         ticker = lv["ticker"]

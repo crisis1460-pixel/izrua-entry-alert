@@ -29,7 +29,7 @@ except Exception:
 
 from collector import coingecko, telegram_source, tradingview, watcher_stats
 from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
-from collector.grading import calculate_grade
+from collector.grading import calculate_grade, score_breakdown
 from config import settings
 from notify import telegram
 from storage import db
@@ -253,6 +253,11 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
             author_closed_n=closed_n, author_closed_hits=closed_hits,
         )
+        bd = score_breakdown(
+            followers, setup["direction"], setup["entry"],
+            setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
+            author_closed_n=closed_n, author_closed_hits=closed_hits,
+        )
         tf_hours = parse_timeframe_hours(text)
         level = {
             "signal_key": db.make_signal_key(
@@ -273,7 +278,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "rr": round(rr, 2) if rr is not None else None,
             "grade": grade,
             "score": score,
-            # 산식 버전 태그 (D4) — 이 행이 어느 산식으로 채점됐는지. 과거 행 소급 없음.
+            "score_breakdown": json.dumps(bd),
             "grade_ver": settings.get("grade_formula_ver"),
             "author": idea.get("author"),
             "author_followers": followers,

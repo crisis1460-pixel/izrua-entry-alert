@@ -168,35 +168,55 @@ def prune_old_dumps(out_dir, keep_weeks: int) -> list:
 
 
 def _compute_touch_time_stats(conn) -> dict:
-    """수집→터치 소요시간 구간별 적중률. DB 컬럼 추가 없이 collected_at·touched_at 활용."""
+    """수집→터치 소요시간 구간별 적중률 + 등급 교차분석.
+
+    반환: {"overall": {bucket: {n, wins, hit_rate}},
+           "by_grade": {grade: {bucket: {n, wins, hit_rate}}}}"""
     rows = conn.execute(
         """SELECT (touched_at - collected_at) / 3600.0 AS hours_to_touch,
-                  outcome
+                  outcome, grade
            FROM levels
            WHERE touched_at IS NOT NULL AND collected_at IS NOT NULL
              AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')"""
     ).fetchall()
     if not rows:
         return {}
-    buckets = {"<1h": [0, 0], "1-6h": [0, 0], "6-24h": [0, 0], "24-72h": [0, 0], ">72h": [0, 0]}
-    for r in rows:
-        h = r["hours_to_touch"]
+
+    def _bucket_key(h):
         if h < 1:
-            b = "<1h"
-        elif h < 6:
-            b = "1-6h"
-        elif h < 24:
-            b = "6-24h"
-        elif h < 72:
-            b = "24-72h"
-        else:
-            b = ">72h"
-        buckets[b][0] += 1
-        if r["outcome"] in ("hit", "timeboxed_win"):
-            buckets[b][1] += 1
-    return {k: {"n": v[0], "wins": v[1],
-                "hit_rate": round(v[1] / v[0], 3) if v[0] else None}
-            for k, v in buckets.items() if v[0]}
+            return "<1h"
+        if h < 6:
+            return "1-6h"
+        if h < 24:
+            return "6-24h"
+        if h < 72:
+            return "24-72h"
+        return ">72h"
+
+    _LABELS = ("<1h", "1-6h", "6-24h", "24-72h", ">72h")
+    overall = {k: [0, 0] for k in _LABELS}
+    by_grade: dict = {}
+    for r in rows:
+        b = _bucket_key(r["hours_to_touch"])
+        is_win = r["outcome"] in ("hit", "timeboxed_win")
+        overall[b][0] += 1
+        if is_win:
+            overall[b][1] += 1
+        g = r["grade"]
+        if g:
+            if g not in by_grade:
+                by_grade[g] = {k: [0, 0] for k in _LABELS}
+            by_grade[g][b][0] += 1
+            if is_win:
+                by_grade[g][b][1] += 1
+
+    def _fmt(d):
+        return {k: {"n": v[0], "wins": v[1],
+                     "hit_rate": round(v[1] / v[0], 3) if v[0] else None}
+                for k, v in d.items() if v[0]}
+
+    return {"overall": _fmt(overall),
+            "by_grade": {g: _fmt(d) for g, d in by_grade.items() if any(v[0] for v in d.values())}}
 
 
 def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
@@ -219,6 +239,8 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     # 등급별 적중률 + 작성자별 고급 통계 JSON 덤프 (내부 통계용, 알림 미출력)
     try:
         grade_stats = db.get_grade_stats(conn)
+        score_bucket_stats = db.get_score_bucket_stats(conn)
+        grade_ret_stats = db.get_grade_ret_stats(conn)
         authors = [r["author"] for r in conn.execute(
             """SELECT DISTINCT author FROM levels
                WHERE r_multiple IS NOT NULL AND touched_at IS NOT NULL
@@ -232,6 +254,8 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
             json.dump({
                 "_week": week, "_generated_at": now,
                 "grade_hit_rates": grade_stats,
+                "score_bucket_hit_rates": score_bucket_stats,
+                "grade_ret_distribution": grade_ret_stats,
                 "author_advanced": author_advanced,
                 "touch_time_analysis": touch_time_stats,
             }, fp, ensure_ascii=False, indent=2)
