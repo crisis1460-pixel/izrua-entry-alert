@@ -111,7 +111,8 @@ _CYCLE_PROFILE_BUDGET = 10
 _cycle_profile_used = 0
 _PROFILE_SLEEP_SEC = 1.0
 _last_profile_at = 0.0
-_FOLLOWERS_TTL_OK_SEC = 7 * 86400   # 성공값 7일 캐시
+_FOLLOWERS_TTL_OK_SEC = 7 * 86400   # 성공값 TTL 7일이나 프로세스 내 메모리 캐시라
+                                     # subprocess 재시작(4h) 시 소멸. 실효 수명 ≤ 4h.
 _FOLLOWERS_TTL_NONE_SEC = 6 * 3600  # 실패(None)는 6시간만 (영구 미스 방지)
 _followers_cache: dict = {}         # username → (cached_at, followers|None)
 

@@ -297,6 +297,11 @@ SETTINGS = {
     # 1.0 미만으로 낮춰도 위험하진 않지만 의미가 없다는 점만 알아둘 것.
     "oi_spike_cooldown_hours": 6.0,
 
+    # 데드맨 스위치 — 회차 성공 시 외부 서비스(healthchecks.io 등)에 핑.
+    # 텔레그램 단일 채널 장애 시에도 파이프라인 정지를 독립 감지할 수 있다.
+    # 빈 문자열이면 비활성(핑 안 함).
+    "deadman_ping_url": "",
+
     # 파일 경로 — data/ 는 레포에 커밋 백되는 영속 상태 (아티팩트 3일 만료 대체)
     "db_path": "data/levels.db",
     "universe_cache_path": "data/universe.json",
@@ -353,4 +358,5 @@ def secrets_status() -> dict:
         "TELEGRAM_CHAT_ID": mask(secret("TELEGRAM_CHAT_ID")),
         "COINGECKO_API_KEY": mask(secret("COINGECKO_API_KEY")),
         "WATCHER_GITHUB_TOKEN": mask(secret("WATCHER_GITHUB_TOKEN")),
+        "TV_COOKIE": mask(secret("TV_COOKIE")),
     }

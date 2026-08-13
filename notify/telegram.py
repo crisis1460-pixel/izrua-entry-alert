@@ -130,8 +130,15 @@ def _truncate_line(line: str, max_cols: int = _MAX_LINE_COLS) -> str:
 
 def _finalize(lines: list) -> str:
     """모든 렌더러의 최종 join 지점 — 각 행을 _truncate_line 으로 다듬은 뒤
-    개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용)."""
-    return "\n".join(_truncate_line(ln) for ln in lines)
+    개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용).
+    출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
+    result = []
+    for ln in lines:
+        if ln.startswith("🔗 ") or ln == _SEP:
+            result.append(ln)
+        else:
+            result.append(_truncate_line(ln))
+    return "\n".join(result)
 
 
 def _source_line(post_urls) -> str:
@@ -148,6 +155,10 @@ def _source_line(post_urls) -> str:
     if len(urls) > 5:
         line += f" · 외 {len(urls) - 5}건"
     return line
+
+# ── 발송 레이트리밋 (2026-08-13) ────────────────────────────────────
+_SEND_MIN_INTERVAL_SEC = 1.0
+_last_send_at = 0.0
 
 # ── 재시도 정책 상수 (2026-07-26 수리) ──────────────────────────────
 _RETRY_MAX = 2                  # 총 재시도 최대 횟수(최초 시도 제외)
@@ -183,8 +194,13 @@ def _retry_after_sec(resp) -> float:
     return _RETRY_429_MAX_WAIT_SEC
 
 
+_TG_MAX_LEN = 4096
+
+
 def send(text: str, urgency: str = "high") -> bool:
     """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
+
+    4096자 초과 시 구분선(_SEP) 기준으로 자동 분할 전송한다.
 
     urgency: 'high'(기본, 유음) | 'low'(disable_notification=true, 무음). 기본값은
     기존 동작과 동일 - 활성화는 호출부 수정 후(사용자 확정 대기 중).
@@ -192,6 +208,14 @@ def send(text: str, urgency: str = "high") -> bool:
     재시도(2026-07-26): 429 는 retry_after(상한 10초) 대기 후, 5xx/타임아웃·연결
     오류는 1~2초 대기 후 재시도. 총 재시도 최대 _RETRY_MAX 회, 소진하면 기존처럼
     조용히 False."""
+    if len(text) > _TG_MAX_LEN:
+        return _split_send(text, urgency)
+
+    global _last_send_at
+    elapsed = time.time() - _last_send_at
+    if elapsed < _SEND_MIN_INTERVAL_SEC:
+        time.sleep(_SEND_MIN_INTERVAL_SEC - elapsed)
+
     token = settings.secret("TELEGRAM_BOT_TOKEN")
     chat_id = settings.secret("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
@@ -220,6 +244,7 @@ def send(text: str, urgency: str = "high") -> bool:
             return False
 
         if resp.status_code == 200:
+            _last_send_at = time.time()
             return True
 
         if resp.status_code == 429 and retry < _RETRY_MAX:
@@ -241,6 +266,28 @@ def send(text: str, urgency: str = "high") -> bool:
         logger.error("[tg] 발송 실패 status=%s body=%s", resp.status_code,
                      _redact(resp.text[:200], token))
         return False
+
+
+def _split_send(text: str, urgency: str) -> bool:
+    """_SEP 경계에서 분할하여 다건 전송. 전부 성공해야 True."""
+    chunks, current = [], []
+    for line in text.split("\n"):
+        candidate = "\n".join(current + [line])
+        if len(candidate) > _TG_MAX_LEN and current:
+            chunks.append("\n".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        chunks.append("\n".join(current))
+    ok = True
+    for i, chunk in enumerate(chunks):
+        if i > 0:
+            time.sleep(1.0)
+        if not send(chunk, urgency):
+            ok = False
+            logger.error("[tg] 분할 발송 %d/%d 실패", i + 1, len(chunks))
+    return ok
 
 
 # ── 포맷 유틸 (워쳐 notifier.py 이식) ─────────────────────────────

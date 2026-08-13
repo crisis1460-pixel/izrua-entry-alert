@@ -37,11 +37,7 @@ from storage import db
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("alert.collect")
 
-_KST = timezone(timedelta(hours=9))
-
-
-def _day_kst(now: float) -> str:
-    return datetime.fromtimestamp(now, tz=_KST).strftime("%Y-%m-%d")
+from utils.time_kst import KST as _KST, day_kst as _day_kst
 
 
 # ── 글 삭제 감지 (2026-07-26, ACCURACY_DB_PLAN 안티게이밍) ──────────────
@@ -582,9 +578,14 @@ def main() -> int:
         #    같다(시각이 아니라 조건으로 판정). 4시간 늦게 만료되는 것뿐.
         #  · stats — 로그용 읽기 전용.
         # 즉 중간 커밋으로 "수집분만 살고 뒷정리는 안 된" 상태가 남아도 무해하다.
-        reparsed = db.reparse_all(conn)
-        expired = db.expire_old(conn, settings.get("level_expiry_hours") * 3600)
-        st = db.stats(conn)
+        try:
+            reparsed = db.reparse_all(conn)
+            expired = db.expire_old(conn, settings.get("level_expiry_hours") * 3600)
+            st = db.stats(conn)
+        except Exception as e:  # noqa: BLE001 - 뒷정리 실패가 쿨다운 영속화를 막으면 안 된다
+            logger.error("뒷정리(reparse/expire/stats) 실패: %s: %s", type(e).__name__, e,
+                         exc_info=True)
+            reparsed, expired, st = 0, 0, "(오류)"
 
         # 확정 차단 감지 시 즉시 경보(과제2) - 위 심볼 루프 도중 차단으로 조기 종료
         # 됐어도 hard_block_detected() 는 주기 내내 유지되므로 여기서 잡힌다.

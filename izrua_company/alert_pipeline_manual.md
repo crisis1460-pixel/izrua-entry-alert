@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-13 (채점 요소 분해 저장, 점수 구간별 적중률, 등급별 수익률 분포, 터치시간×등급 교차분석, short 판정 가드, 대표 선정 tiebreaker)  
+> 마지막 업데이트: 2026-08-13 (비채점 인프라 개선: TG 4096 자동분할·속도제한, deadman switch, 감사덤프 진부화 감시, 스택트레이스 보존, KST 타임존 통합, 의존성 버전 고정)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -179,6 +179,13 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 **파일:** `notify/telegram.py`  
 조건 통과 시 `sendMessage` (텍스트) 또는 향후 확장 시 `sendPhoto` (이미지).
 
+### 7-1. 안전장치 (2026-08-13)
+| 항목 | 내용 |
+|------|------|
+| 메시지 자동 분할 | 4096자 초과 시 줄바꿈 기준 청크 분할, 청크 간 1초 간격 전송 |
+| 발송 속도 제한 | 연속 전송 간 최소 **1.0초** 간격 (`_SEND_MIN_INTERVAL_SEC`) |
+| 출처 링크 보존 | 🔗 출처 행과 구분선은 말줄임(`…`) 대상에서 제외 |
+
 ---
 
 ## 기타 내부 집계 (알림 미출력)
@@ -203,6 +210,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
 | 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |
 | 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+
+---
+
+## 운영 인프라 (2026-08-13)
+
+| 항목 | 파일 | 내용 |
+|------|------|------|
+| Deadman switch | `scripts/run_cycle.py` | 사이클 완료 시 `deadman_ping_url` (healthchecks.io 등) GET → 미도착 시 외부 알림 |
+| 감사덤프 진부화 감시 | `scripts/run_cycle.py` | `META_LAST_DUMP` 타임스탬프 2× interval 초과 시 텔레그램 경고 |
+| 스택트레이스 보존 | `scripts/run_cycle.py`, `run_collect.py` | 모든 `logger.error`에 `exc_info=True` 적용 |
+| KST 타임존 통합 | `utils/time_kst.py` | `KST`, `day_kst()` 단일 소스 → 5개 파일에서 import |
+| 의존성 버전 고정 | `requirements.txt` | 메이저 버전 상한 추가 (`<3`, `<2`, `<1`) |
+| 정비 스크립트 아카이브 | `scripts/archive/` | 일회성 repair 스크립트 5건 이동 |
 
 ---
 

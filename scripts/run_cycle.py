@@ -65,11 +65,7 @@ META_LAST_COLLECT_FAIL = "last_collect_fail_at"
 META_LAST_REPORT = "last_weekly_report_at"
 META_LAST_REPORT_FAIL = "last_weekly_report_fail_at"
 
-KST = timezone(timedelta(hours=9))
-
-
-def _day_kst(now: float) -> str:
-    return datetime.fromtimestamp(now, KST).strftime("%Y-%m-%d")
+from utils.time_kst import KST, day_kst as _day_kst
 
 
 # 수집 하드 타임아웃 — 잡 timeout(20분)보다 넉넉히 짧게 잡아, 수집이 멈춰도
@@ -171,7 +167,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - 수집 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 주기 판정 실패: %s: %s", type(e).__name__, e)
+        logger.error("수집 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 주기 판정 실패 - {type(e).__name__}")
         return "failed"
 
@@ -210,7 +206,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 meta 기록 실패(수집 자체는 완료): %s: %s", type(e).__name__, e)
+        logger.error("수집 meta 기록 실패(수집 자체는 완료): %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 meta 기록 실패 - {type(e).__name__}")
         return "failed"
 
@@ -249,7 +245,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
     except BaseException as e:  # noqa: BLE001 - 감시 자체가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 정체 감시 조회 실패: %s: %s", type(e).__name__, e)
+        logger.error("수집 정체 감시 조회 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 정체 감시 조회 실패 - {type(e).__name__}")
         return "failed"
 
@@ -282,7 +278,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 정체 경고 meta 기록 실패(발송 생략): %s: %s", type(e).__name__, e)
+        logger.error("수집 정체 경고 meta 기록 실패(발송 생략): %s: %s", type(e).__name__, e, exc_info=True)
         return "failed"
 
     try:
@@ -290,7 +286,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
     except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("수집 정체 경고 발송 실패(meta는 기록됨): %s: %s", type(e).__name__, e)
+        logger.error("수집 정체 경고 발송 실패(meta는 기록됨): %s: %s", type(e).__name__, e, exc_info=True)
         sent = False
     if not sent:
         print("::warning::수집 정체 경고 발송 실패")
@@ -352,7 +348,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("작성자 스냅샷 주기 판정 실패: %s: %s", type(e).__name__, e)
+        logger.error("작성자 스냅샷 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::작성자 스냅샷 주기 판정 실패 - {type(e).__name__}")
         return "failed"
 
@@ -371,7 +367,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("작성자 스냅샷 실패: %s: %s", type(e).__name__, e)
+        logger.error("작성자 스냅샷 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::작성자 스냅샷 실패 - {type(e).__name__}")
         return "failed"
 
@@ -472,7 +468,7 @@ def maybe_reverse_check(db_path: str, now: float = None, enabled: bool = True) -
     except BaseException as e:  # noqa: BLE001 - 역신호 검사 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("역신호 판정 실패: %s: %s", type(e).__name__, e)
+        logger.error("역신호 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::역신호 판정 실패 - {type(e).__name__}")
         return "failed"
     if res["confirmed"] or res["released"]:
@@ -506,7 +502,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("주간 리포트 주기 판정 실패: %s: %s", type(e).__name__, e)
+        logger.error("주간 리포트 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::주간 리포트 주기 판정 실패 - {type(e).__name__}")
         return "failed"
 
@@ -528,7 +524,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - meta 선기록 실패로 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("주간 리포트 meta 선기록 실패: %s: %s", type(e).__name__, e)
+        logger.error("주간 리포트 meta 선기록 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::주간 리포트 meta 선기록 실패 - {type(e).__name__}")
         return "failed"
 
@@ -537,7 +533,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
         if isinstance(e, KeyboardInterrupt):
             raise
-        logger.error("주간 리포트 실패: %s: %s", type(e).__name__, e)
+        logger.error("주간 리포트 실패: %s: %s", type(e).__name__, e, exc_info=True)
         sent = False
 
     if not sent:
@@ -559,6 +555,59 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
         return "failed"
 
     return "ok"
+
+
+# ── 감사 덤프 정체 감시 ────────────────────────────────────────────
+# collect_stale 과 동일 패턴: meta.last_audit_dump_at 이 2주 이상 갱신 안 되면 경고.
+_META_DUMP_STALE_WARNED = "audit_dump_stale_warned_date"
+
+
+def _check_audit_dump_stale(db_path: str, now: float) -> None:
+    try:
+        with db.connect(db_path) as conn:
+            from storage.audit_dump import META_LAST_DUMP
+            last = db.get_meta(conn, META_LAST_DUMP)
+            warned = db.get_meta(conn, _META_DUMP_STALE_WARNED)
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        last_ts = float(last) if last else 0.0
+    except (TypeError, ValueError):
+        last_ts = 0.0
+    if not last_ts:
+        return
+    day = _day_kst(now)
+    if warned == day:
+        return
+    threshold_sec = settings.get("audit_dump_interval_hours") * 3600 * 2
+    if (now - last_ts) < threshold_sec:
+        return
+    try:
+        with db.connect(db_path) as conn:
+            db.set_meta(conn, _META_DUMP_STALE_WARNED, day)
+    except Exception:  # noqa: BLE001
+        return
+    text = f"⚠️ 감사 덤프 정체: {(now - last_ts) / 3600:.0f}시간 미갱신"
+    try:
+        telegram.send(text)
+        logger.warning("[정체감시] 감사 덤프 정체 경고 발송(%.0fh 미갱신)", (now - last_ts) / 3600)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ── 데드맨 스위치 ──────────────────────────────────────────────────
+# 텔레그램 단일 채널 장애 시에도 파이프라인 정지를 독립 감지할 수 있도록
+# 외부 서비스(healthchecks.io 등)에 회차 완료 핑을 보낸다.
+
+def _deadman_ping() -> None:
+    url = settings.get("deadman_ping_url")
+    if not url:
+        return
+    try:
+        import requests
+        requests.get(url, timeout=10)
+    except Exception:  # noqa: BLE001 - 핑 실패가 회차를 죽이면 안 된다
+        logger.debug("데드맨 핑 실패(무시): %s", url)
 
 
 # ── 회차 ────────────────────────────────────────────────────────────
@@ -609,6 +658,12 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
         db_path, now=now, force=force_report,
         enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
         report_runner=report_runner)
+
+    # 감사 덤프 정체 감시 — collect_stale 과 동일 패턴
+    _check_audit_dump_stale(db_path, now)
+
+    # 데드맨 스위치 핑 — 회차 완료 시 외부 서비스에 생존 신호 전송
+    _deadman_ping()
 
     logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 역신호=%s 주간리포트=%s",
                 price_status, collect_status, collect_stale_status, snapshot_status,

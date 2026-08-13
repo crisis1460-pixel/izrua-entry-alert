@@ -28,7 +28,7 @@ from storage import alert_ledger, db
 
 logger = logging.getLogger("alert.price_check")
 
-_KST = timezone(timedelta(hours=9))
+from utils.time_kst import KST as _KST
 
 # 직전 체크 시각은 DB meta 에 저장한다(2026-07-24 감사 #3). 예전엔 cache/ 임시파일에
 # 뒀는데 커밋백 대상이 아니라 러너 재체크아웃마다 소실 → 소급창이 늘 기본값(45분)에
@@ -82,8 +82,7 @@ def _save_last_cycle(conn, ts: float) -> None:
     db.set_meta(conn, _LAST_CYCLE_META, str(ts))
 
 
-def _day_kst(now: float) -> str:
-    return datetime.fromtimestamp(now, tz=_KST).strftime("%Y-%m-%d")
+from utils.time_kst import day_kst as _day_kst
 
 
 # ── 수집 급감(조용한 고장) 감지 (2026-07-26) ──────────────────────────
