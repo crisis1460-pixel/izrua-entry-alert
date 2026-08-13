@@ -280,14 +280,6 @@ def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optiona
         return None
 
 
-def fetch_rsi_pair(market: str, timeout: float) -> tuple:
-    """(일봉 RSI, 주봉 RSI) — 각각 실패 시 None. 터치 발송 확정건에만 호출
-    (52주 조회와 동일 원칙, 회당 2콜). 200개 요청 — Wilder 평활은 표본이
-    길수록 수렴하고 업비트 1콜 상한이 200이라 그대로 쓴다."""
-    d = _fetch_closes(market, "days", 200, timeout)
-    w = _fetch_closes(market, "weeks", 200, timeout)
-    return (_wilder_rsi(d) if d else None, _wilder_rsi(w) if w else None)
-
 
 def _sma(closes: list, period: int) -> Optional[float]:
     """단순이동평균 — 최근 period 개 종가 평균. 표본 부족 시 None."""
