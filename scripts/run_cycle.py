@@ -73,18 +73,11 @@ from utils.time_kst import KST, day_kst as _day_kst
 COLLECT_TIMEOUT_SEC = 12 * 60
 
 
-def _meta_float(conn, key: str) -> float:
-    try:
-        return float(db.get_meta(conn, key) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def _due(conn, now: float, ok_key: str, fail_key: str,
          interval_sec: float, retry_sec: float) -> tuple:
     """주기 판정 공통부. 반환 (실행여부, 사유)."""
-    last_ok = _meta_float(conn, ok_key)
-    last_fail = _meta_float(conn, fail_key)
+    last_ok = db.meta_float(conn, ok_key)
+    last_fail = db.meta_float(conn, fail_key)
     # 미래 시각(시계 역행/수동 편집)은 신뢰하지 않는다 — 영구 굶주림 방지.
     if last_ok > now:
         last_ok = 0.0
@@ -185,7 +178,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
         if isinstance(e, KeyboardInterrupt):
             raise
         logger.error("수집 실패(%.0f초, 나머지 단계는 계속): %s: %s",
-                     time.time() - t0, type(e).__name__, e)
+                     time.time() - t0, type(e).__name__, e, exc_info=True)
         # 실패 마킹도 DB 접근 - 여기서마저 실패하면 백오프가 기록되지 않아 다음 회차가
         # 즉시 재시도하게 될 뿐이니, 로그만 남기고 원래의 failed 반환을 계속 진행한다.
         try:
@@ -194,7 +187,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
             if isinstance(e2, KeyboardInterrupt):
                 raise
             logger.error("수집 실패 meta 기록 실패(백오프 미기록): %s: %s",
-                         type(e2).__name__, e2)
+                         type(e2).__name__, e2, exc_info=True)
         print(f"::warning::수집 실패 - {type(e).__name__} "
               f"({settings.get('collect_retry_minutes')}분 후 재시도, 알림은 정상 동작)")
         return "failed"
@@ -250,7 +243,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
         return "failed"
 
     # "0" 문자열(테스트 reset_meta 등의 리셋 센티널)도 "이력 없음"과 동일 취급해야
-    # 하므로, 존재 여부가 아니라 다른 due 판정(_meta_float)과 동일하게 float 변환
+    # 하므로, 존재 여부가 아니라 다른 due 판정(db.meta_float)과 동일하게 float 변환
     # 결과의 참거짓으로 판단한다 - 문자열 "0"은 참(존재)이지만 수치 0.0은 거짓이다.
     try:
         last_ts = float(last) if last else 0.0
@@ -380,7 +373,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
         if isinstance(e, KeyboardInterrupt):
             raise
         logger.error("작성자 스냅샷 meta 기록 실패(스냅샷 %d명 저장은 완료): %s: %s",
-                     n, type(e).__name__, e)
+                     n, type(e).__name__, e, exc_info=True)
         print(f"::warning::작성자 스냅샷 meta 기록 실패 - {type(e).__name__}")
         return "failed"
 
@@ -447,7 +440,7 @@ def _send_reverse_alert(text: str, kind: str, author: str) -> None:
         if isinstance(e, KeyboardInterrupt):
             raise
         logger.error("역신호 %s 경보 발송 예외(@%s, 기록은 유지): %s: %s",
-                     kind, author, type(e).__name__, e)
+                     kind, author, type(e).__name__, e, exc_info=True)
         return
     if sent:
         logger.warning("[역신호] %s 경보 발송: @%s", kind, author)
@@ -518,7 +511,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     # 대가: 선기록 후 발송 전 크래시 시 이번 리포트 유실(다음 주기에 새 리포트 발송).
     try:
         with db.connect(db_path) as conn:
-            _prev_ok = _meta_float(conn, META_LAST_REPORT)
+            _prev_ok = db.meta_float(conn, META_LAST_REPORT)
             db.set_meta(conn, META_LAST_REPORT, str(now))
             db.set_meta(conn, META_LAST_REPORT_FAIL, "0")
     except BaseException as e:  # noqa: BLE001 - meta 선기록 실패로 회차를 죽이면 안 된다
@@ -550,7 +543,8 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
             except BaseException as e:  # noqa: BLE001
                 if isinstance(e, KeyboardInterrupt):
                     raise
-                logger.error("주간 리포트 meta 롤백 실패(%s): %s: %s", _key, type(e).__name__, e)
+                logger.error("주간 리포트 meta 롤백 실패(%s): %s: %s", _key, type(e).__name__, e,
+                             exc_info=True)
                 print(f"::error::주간 리포트 meta 롤백 실패({_key}) - {type(e).__name__}")
         return "failed"
 
@@ -680,6 +674,9 @@ def _env_flag(name: str) -> bool:
 
 
 def main(argv=None) -> int:
+    settings.secret("TELEGRAM_BOT_TOKEN", required=True)
+    settings.secret("TELEGRAM_CHAT_ID", required=True)
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--force-collect", action="store_true", help="주기와 무관하게 이번 회차 수집")
     ap.add_argument("--force-report", action="store_true", help="주기와 무관하게 주간 리포트 발송")

@@ -57,7 +57,7 @@ def set_meta(key, val):
 
 def get_meta(key):
     with db.connect(TEST_DB) as conn:
-        return run_cycle._meta_float(conn, key)
+        return db.meta_float(conn, key)
 
 
 def due_collect(now):

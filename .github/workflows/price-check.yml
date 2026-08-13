@@ -41,7 +41,6 @@ on:
 
 permissions:
   contents: write  # data/ 상태 커밋 백
-  actions: read    # 구버전 아티팩트 마이그레이션용
 
 # 단일 라이터이므로 그룹도 하나. cancel-in-progress: false 가 핵심이다 —
 # true 였다면 2분마다 오는 트리거가 진행 중인 5~8분짜리 수집 회차를 중도 취소해,
@@ -66,25 +65,6 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-
-      - name: 구버전 아티팩트 마이그레이션 (data/ 에 DB 없을 때 1회만)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          if [ -f data/levels.db ]; then
-            echo "data/levels.db 존재 - 마이그레이션 불필요"
-            exit 0
-          fi
-          ART_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=50" \
-            --jq '[.artifacts[] | select(.name=="bot-state" and .expired==false)] | sort_by(.created_at) | last | .id' || true)
-          if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
-            gh api "repos/${{ github.repository }}/actions/artifacts/$ART_ID/zip" > state.zip
-            mkdir -p data && unzip -o state.zip -d data && rm state.zip
-            echo "아티팩트 → data/ 마이그레이션 완료 (artifact $ART_ID)"
-          else
-            echo "이전 상태 없음 - 첫 회차가 수집부터 수행한다 (레벨 0개로 정상 종료)"
-          fi
 
       # ── 실행 직전 data/ 최신화 (2026-07-28 중복알림 사고 수리) ──────────────
       # 왜 필요한가: 체크아웃과 이 잡의 실제 실행 사이에는 setup-python + pip

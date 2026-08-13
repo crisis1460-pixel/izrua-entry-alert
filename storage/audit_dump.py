@@ -276,29 +276,23 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
             "raw_text_pruned": raw_pruned, "removed": removed}
 
 
-def _meta_float(conn, key: str) -> float:
-    from storage import db
-    try:
-        return float(db.get_meta(conn, key) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def maybe_weekly_audit(conn, db_path, now: float = None, force: bool = False,
                        out_dir=None) -> str:
     """주기가 도래했으면 감사 덤프 1회 수행. 반환 "skipped" | "ok" | "failed".
 
     주기 판정은 run_cycle 의 수집/리포트와 같은 meta 패턴(성공 키 + 실패 백오프 키,
     미래 시각 방어)을 그대로 따른다. run_cycle.py 는 다른 세션이 잡고 있어 임포트하지
-    않고 최소 형태로 재현한다(의존 방향도 storage → scripts 로 뒤집히면 안 된다)."""
+    않고 최소 형태로 재현한다(의존 방향도 storage → scripts 로 뒤집히면 안 된다).
+    meta_float 만은 db.py 의 공용 함수를 쓴다(run_cycle.py 와 중복 정의였던 것을
+    2026-08-13 storage/db.py 로 통합)."""
     from storage import db
 
     if SUPPRESSED or not _cfg("audit_dump_enabled"):
         return "skipped"
     now = time.time() if now is None else now
 
-    last_ok = _meta_float(conn, META_LAST_DUMP)
-    last_fail = _meta_float(conn, META_LAST_DUMP_FAIL)
+    last_ok = db.meta_float(conn, META_LAST_DUMP)
+    last_fail = db.meta_float(conn, META_LAST_DUMP_FAIL)
     if last_ok > now:      # 시계 역행/수동 편집 — 영구 굶주림 방지
         last_ok = 0.0
     if last_fail > now:

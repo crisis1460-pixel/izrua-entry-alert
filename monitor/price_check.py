@@ -347,7 +347,7 @@ def magnify_order(ticker: str, scan_from: float, c_end: float,
     return None
 
 
-def run_once(now: float = None) -> dict:
+def run_once(now: float | None = None) -> dict:
     """1회 체크. 반환 요약 dict (테스트/로그용)."""
     now = now if now is not None else time.time()
     cfg_get = settings.get

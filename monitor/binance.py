@@ -80,7 +80,7 @@ def _coingecko_binance_funding_map(timeout: float) -> Optional[dict]:
         if key:
             headers["x-cg-demo-api-key"] = key
     except Exception:  # noqa: BLE001 - 키는 선택사항, 설정 로드 실패는 keyless 진행
-        pass
+        logger.debug("[binance] CoinGecko API 키 로드 실패 - keyless 진행")
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/derivatives/exchanges/binance_futures",
@@ -399,58 +399,41 @@ def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[flo
 _FAPI_BASE = "https://fapi.binance.com"
 
 
-def fetch_long_short_ratio(symbol: str, timeout: float) -> Optional[float]:
-    """전체 계정 롱/숏 비율 — 최근 4h 평균. 미상장/실패 → None."""
+def _fetch_fapi_ratio(endpoint: str, symbol: str, field: str,
+                      timeout: float, label: str) -> Optional[float]:
+    """Binance FAPI ratio 공통 헬퍼. 미상장/실패 → None."""
     pair = f"{symbol.upper()}USDT"
     try:
         r = requests.get(
-            f"{_FAPI_BASE}/futures/data/globalLongShortAccountRatio",
+            f"{_FAPI_BASE}/futures/data/{endpoint}",
             params={"symbol": pair, "period": "4h", "limit": 1},
             timeout=timeout,
         )
         if r.status_code != 200:
             return None
         data = r.json()
-        return float(data[0]["longAccount"]) if data else None
+        return float(data[0][field]) if data else None
     except Exception as e:  # noqa: BLE001
-        logger.warning("[binance] longShort %s 실패: %s", pair, e)
+        logger.warning("[binance] %s %s 실패: %s", label, pair, e)
         return None
+
+
+def fetch_long_short_ratio(symbol: str, timeout: float) -> Optional[float]:
+    """전체 계정 롱/숏 비율 — 최근 4h 평균. 미상장/실패 → None."""
+    return _fetch_fapi_ratio("globalLongShortAccountRatio", symbol,
+                             "longAccount", timeout, "longShort")
 
 
 def fetch_top_trader_position_ratio(symbol: str, timeout: float) -> Optional[float]:
     """상위 트레이더 롱 비율 — 최근 4h. 미상장/실패 → None."""
-    pair = f"{symbol.upper()}USDT"
-    try:
-        r = requests.get(
-            f"{_FAPI_BASE}/futures/data/topLongShortPositionRatio",
-            params={"symbol": pair, "period": "4h", "limit": 1},
-            timeout=timeout,
-        )
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        return float(data[0]["longAccount"]) if data else None
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[binance] topTrader %s 실패: %s", pair, e)
-        return None
+    return _fetch_fapi_ratio("topLongShortPositionRatio", symbol,
+                             "longAccount", timeout, "topTrader")
 
 
 def fetch_taker_buy_sell_ratio(symbol: str, timeout: float) -> Optional[float]:
     """선물 테이커 매수/매도 비율 — 최근 4h. >1 매수 우위, <1 매도 우위. 미상장/실패 → None."""
-    pair = f"{symbol.upper()}USDT"
-    try:
-        r = requests.get(
-            f"{_FAPI_BASE}/futures/data/takerlongshortRatio",
-            params={"symbol": pair, "period": "4h", "limit": 1},
-            timeout=timeout,
-        )
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        return float(data[0]["buySellRatio"]) if data else None
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[binance] takerRatio %s 실패: %s", pair, e)
-        return None
+    return _fetch_fapi_ratio("takerlongshortRatio", symbol,
+                             "buySellRatio", timeout, "takerRatio")
 
 
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:

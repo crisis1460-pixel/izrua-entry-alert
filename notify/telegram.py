@@ -29,10 +29,11 @@ import logging
 import re
 import time
 import unicodedata
+from typing import Literal
 
 import requests
 
-from analytics import calibration, clustering, distribution, ranking
+from analytics import calibration, clustering, ranking
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -197,7 +198,7 @@ def _retry_after_sec(resp) -> float:
 _TG_MAX_LEN = 4096
 
 
-def send(text: str, urgency: str = "high") -> bool:
+def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
     """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
 
     4096자 초과 시 구분선(_SEP) 기준으로 자동 분할 전송한다.
@@ -214,6 +215,7 @@ def send(text: str, urgency: str = "high") -> bool:
     global _last_send_at
     elapsed = time.time() - _last_send_at
     if elapsed < _SEND_MIN_INTERVAL_SEC:
+        logger.debug("[tg] 속도제한 대기 %.1f초", _SEND_MIN_INTERVAL_SEC - elapsed)
         time.sleep(_SEND_MIN_INTERVAL_SEC - elapsed)
 
     token = settings.secret("TELEGRAM_BOT_TOKEN")
@@ -270,6 +272,7 @@ def send(text: str, urgency: str = "high") -> bool:
 
 def _split_send(text: str, urgency: str) -> bool:
     """_SEP 경계에서 분할하여 다건 전송. 전부 성공해야 True."""
+    logger.info("[tg] %d자 → 분할 발송 시작", len(text))
     chunks, current = [], []
     for line in text.split("\n"):
         candidate = "\n".join(current + [line])

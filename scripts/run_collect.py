@@ -295,7 +295,7 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         return True, bool(db.upsert_level(conn, level))
     except Exception as e:  # noqa: BLE001 - 글 1건 오류가 사이클 전체를 막으면 안 됨
         logger.warning("[%s] 아이디어 1건 처리 실패 - 스킵: %s", coin.get("symbol"), e)
-        return False, False
+        return None, False
 
 
 # ── 텔레그램 공개채널 수집 (2026-07-27 기획 카드 #14) ──────────────────
@@ -422,7 +422,7 @@ def main() -> int:
 
     author_stats = watcher_stats.load_author_stats()
 
-    n_posts = n_new = n_setup = 0
+    n_posts = n_new = n_setup = n_ingest_errors = 0
     sleep_sec = settings.get("tv_fetch_sleep_sec")
     # 랜덤 지터 상한 (2026-08-02) — 고정 간격 봇 패턴 희석. min>max 설정 실수는
     # 지터 없는 고정 간격으로 강등(방어적). 테스트는 양쪽 다 0 으로 덮어쓴다.
@@ -524,6 +524,8 @@ def main() -> int:
 
             for idea in ideas:
                 had_setup, is_new = _ingest_idea(conn, coin, idea, author_stats, timeout)
+                if had_setup is None:
+                    n_ingest_errors += 1
                 n_setup += 1 if had_setup else 0
                 n_new += 1 if is_new else 0
 
@@ -620,9 +622,9 @@ def main() -> int:
         #  '앞'으로 이동. 이유는 위 호출부 주석 참고 — 되돌리면 다시 기아가 된다.)
 
     logger.info(
-        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 재파싱치유 %d건 / 만료 %d건 / "
+        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 오류 %d건 / 재파싱치유 %d건 / 만료 %d건 / "
         "삭제감지 %d건 / DB %s",
-        time.time() - t0, n_posts, n_setup, n_new, reparsed, expired, n_deleted, st,
+        time.time() - t0, n_posts, n_setup, n_new, n_ingest_errors, reparsed, expired, n_deleted, st,
     )
     return 0
 

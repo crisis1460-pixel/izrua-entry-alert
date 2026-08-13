@@ -12,8 +12,6 @@ import sqlite3
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
-
 import requests
 
 from config import settings
@@ -113,7 +111,7 @@ def _parse_db(db_bytes: bytes) -> dict:
                                                    "whitelisted": False, "followers": None})
                     out[r["username"]]["whitelisted"] = True
             except sqlite3.OperationalError:
-                pass
+                logger.warning("[watcher] chartist_whitelist 스키마 인식 실패 - 화이트리스트 생략")
 
             try:
                 for r in c.execute("SELECT username, followers FROM author_cache").fetchall():
@@ -121,7 +119,7 @@ def _parse_db(db_bytes: bytes) -> dict:
                                                    "whitelisted": False, "followers": None})
                     out[r["username"]]["followers"] = r["followers"]
             except sqlite3.OperationalError:
-                pass
+                logger.warning("[watcher] author_cache 스키마 인식 실패 - 팔로워 생략")
 
             logger.info("[watcher] 작성자 통계 %d명 로드", len(out))
             return out

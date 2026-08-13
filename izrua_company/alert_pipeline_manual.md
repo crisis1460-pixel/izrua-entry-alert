@@ -220,9 +220,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | Deadman switch | `scripts/run_cycle.py` | 사이클 완료 시 `deadman_ping_url` (healthchecks.io 등) GET → 미도착 시 외부 알림 |
 | 감사덤프 진부화 감시 | `scripts/run_cycle.py` | `META_LAST_DUMP` 타임스탬프 2× interval 초과 시 텔레그램 경고 |
 | 스택트레이스 보존 | `scripts/run_cycle.py`, `run_collect.py` | 모든 `logger.error`에 `exc_info=True` 적용 |
-| KST 타임존 통합 | `utils/time_kst.py` | `KST`, `day_kst()` 단일 소스 → 5개 파일에서 import |
+| KST 타임존 통합 | `utils/time_kst.py` | `KST`, `day_kst()`, `iso_to_epoch()` 단일 소스 |
 | 의존성 버전 고정 | `requirements.txt` | 메이저 버전 상한 추가 (`<3`, `<2`, `<1`) |
+| Dependabot | `.github/dependabot.yml` | pip 주간 보안 패치 자동 PR 생성 |
 | 정비 스크립트 아카이브 | `scripts/archive/` | 일회성 repair 스크립트 5건 이동 |
+| 시작 시 시크릿 검증 | `scripts/run_cycle.py` | `TELEGRAM_BOT_TOKEN`/`CHAT_ID` 미설정 시 즉시 실패 (무음 블랙아웃 방지) |
+| SQLite WAL 모드 | `storage/db.py` | `journal_mode=WAL`, `busy_timeout=5000` — 동시 접근 안정성 |
+| levels.author 인덱스 | `storage/db.py` | 주간리포트 작성자별 쿼리 풀스캔 방지 |
+| alerts_log 보존정책 | `storage/db.py` | 30일 초과 항목 자동 정리 (`prune_alerts_log`) |
+| Binance ratio 통합 | `monitor/binance.py` | 3개 ratio 함수 → `_fetch_fapi_ratio` 공통 헬퍼 |
+| TP sanity 상수화 | `collector/extractor.py` | `_SANITY_LO_MULT=0.25`, `_SANITY_HI_MULT=4.0` 추출 |
+| meta_float 통합 | `storage/db.py` | `run_cycle.py`·`audit_dump.py` 중복 헬퍼 → DB 모듈 단일 정의 |
+| GH Actions 정리 | `price-check.yml` | 구버전 마이그레이션 스텝·`actions:read` 권한 제거 |
+| 수집 ingest 오류집계 | `scripts/run_collect.py` | 개별 ingest 실패 건수 로그 출력 |
 
 ---
 

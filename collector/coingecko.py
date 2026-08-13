@@ -175,7 +175,8 @@ def _load_json_cache(path: str) -> dict:
     try:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        logger.warning("[cg] 캐시 파일 로드 실패(무시): %s: %s", path, e)
         return {}
 
 
@@ -435,5 +436,7 @@ def _save_cache(path: str, universe: list) -> None:
         return
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"updated_at": time.time(), "universe": universe}, f, ensure_ascii=False, indent=2)
+    tmp.replace(p)

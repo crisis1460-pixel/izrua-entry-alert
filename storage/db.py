@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS levels (
 );
 CREATE INDEX IF NOT EXISTS idx_levels_status ON levels(status);
 CREATE INDEX IF NOT EXISTS idx_levels_coin   ON levels(coin_symbol);
+CREATE INDEX IF NOT EXISTS idx_levels_author ON levels(author);
 
 -- 알림 발송 로그 (코인당 하루 상한 계산 + 중복 방지용)
 CREATE TABLE IF NOT EXISTS alerts_log (
@@ -208,9 +209,11 @@ def make_signal_key(coin_symbol: str, entry_usd, author: str, post_url: str,
 
 
 @contextmanager
-def connect(db_path: str):
+def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -345,9 +348,13 @@ def _migrate(conn) -> None:
     새 컬럼을 붙여주지 않아서, 운영 DB에 테이블이 생긴 뒤 컬럼을 추가하면 조용히
     누락된다(2026-07-26 ambiguous_* 추가 때 발견). 카운터라 기본값 0 으로 채운다."""
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+    added = []
     for col, decl in list(_OUTCOME_COLUMNS.items()) + list(_EXTRA_COLUMNS.items()):
         if col not in existing:
             conn.execute(f"ALTER TABLE levels ADD COLUMN {col} {decl}")
+            added.append(col)
+    if added:
+        logger.info("[db] 마이그레이션: 컬럼 추가 %s", added)
 
     ds_cols = {r["name"] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
     if ds_cols:  # 테이블이 아직 없으면 SCHEMA 가 최신 정의로 만들어준다
@@ -1491,6 +1498,15 @@ def set_meta(conn, key: str, value: str) -> None:
     )
 
 
+def meta_float(conn, key: str) -> float:
+    """meta 값을 float 로 읽는다. 미존재/손상값은 0.0(run_cycle·audit_dump 공용
+    주기 판정에서 "이력 없음"과 동일 취급하는 관례를 그대로 따른다)."""
+    try:
+        return float(get_meta(conn, key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # ── 터치 판정 로깅 + 자가검증 집계 (2026-08-07) ──────────────────────────
 def record_touch_verdicts(conn, level_ids: list, supply, position,
                           ma200_above=None, cvd_ratio=None,
@@ -1719,6 +1735,17 @@ def prune_raw_text(conn, now: Optional[float] = None, keep_days: int = 14) -> in
         (cutoff,),
     )
     return cur.rowcount
+
+
+def prune_alerts_log(conn, keep_days: int = 30) -> int:
+    """보존기간(기본 30일) 넘은 알림 발송 로그 삭제 — DB 무한 증가 방지.
+    (prune_daily_stats/prune_raw_text 와 같은 '보존정책' 계열 함수)"""
+    cutoff = time.time() - keep_days * 86400
+    cur = conn.execute("DELETE FROM alerts_log WHERE sent_at < ?", (cutoff,))
+    n = cur.rowcount
+    if n:
+        logger.info("[db] alerts_log %d건 정리(>%d일)", n, keep_days)
+    return n
 
 
 def get_daily_stats(conn, days: int = 30) -> list:

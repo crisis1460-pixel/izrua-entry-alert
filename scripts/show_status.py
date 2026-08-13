@@ -552,7 +552,8 @@ def _fetch_live_prices(conn) -> dict:
         tickers = [f"KRW-{c}" for c in coins]
         prices = upbit.fetch_prices(tickers, timeout) if tickers else {}
         return {"usdt_krw": usdt_krw, "prices": prices}
-    except Exception:
+    except Exception as e:
+        logger.warning("[status] 실시간 시세 조회 실패: %s", e)
         return {}
 
 

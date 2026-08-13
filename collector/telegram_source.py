@@ -196,17 +196,7 @@ def _strip_html(fragment: str) -> str:
     return "\n".join(ln for ln in lines if ln).strip()
 
 
-def _iso_to_epoch(s: str) -> Optional[float]:
-    """'2026-05-16T13:57:49+00:00' → epoch float. 실패 시 None."""
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except (ValueError, TypeError):
-        return None
+from utils.time_kst import iso_to_epoch as _iso_to_epoch
 
 
 _VIEWS_RE = re.compile(r'tgme_widget_message_views"[^>]*>([^<]+)<')

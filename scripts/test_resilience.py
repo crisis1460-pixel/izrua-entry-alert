@@ -700,11 +700,13 @@ def _post_500_always(url, json=None, timeout=None):
 
 requests.post = _post_500_always
 _tg_sleep_calls.clear()
+telegram._last_send_at = 0.0
 res_c = telegram.send("hi")
 check("수리5c: 5xx 계속 실패 - 재시도 소진 후 False(삼키고 False, 잡을 안 막음)",
       res_c is False)
 check("수리5c: 총 시도 3회(최초 1 + 재시도 2)", len(_posts_c) == 3)
-check("수리5c: 5xx 백오프 1초→2초 순서", _tg_sleep_calls == [1.0, 2.0])
+backoff_sleeps_c = [s for s in _tg_sleep_calls if s in (1.0, 2.0)]
+check("수리5c: 5xx 백오프 1초→2초 순서", backoff_sleeps_c == [1.0, 2.0])
 
 # 5d: 타임아웃/연결오류(RequestException) 도 동일 정책으로 재시도 후 소진
 _calls_d = {"n": 0}

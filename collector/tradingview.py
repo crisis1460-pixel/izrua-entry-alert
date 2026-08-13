@@ -291,17 +291,7 @@ def _init_data_blobs(html_text: str):
 
 # ── 파싱 유틸 ─────────────────────────────────────────────────
 
-def _iso_to_epoch(s) -> Optional[float]:
-    """'2026-07-17T07:11:47+00:00' / '...Z' → epoch float. 실패 시 None."""
-    if not isinstance(s, str) or not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except ValueError:
-        return None
+from utils.time_kst import iso_to_epoch as _iso_to_epoch
 
 
 def _decode_json_string(raw: str) -> str:

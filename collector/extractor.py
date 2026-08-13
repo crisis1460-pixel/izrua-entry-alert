@@ -133,6 +133,8 @@ _LADDER_MAX_WINDOW = 200
 # 위로 얹은 여유이자, 본문 산문에 'target' 이 흩뿌려져 단계가 부풀 때의 방어선 —
 # 넘으면 '틀린 단계 수를 보여주느니 안 보여준다'(이 모듈의 판단 보류 원칙).
 _LADDER_MAX_STEPS = 12
+_SANITY_LO_MULT = 0.25
+_SANITY_HI_MULT = 4.0
 
 # 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
@@ -416,7 +418,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             return False
         if direction == "short" and entry is not None and v >= entry:
             return False
-        if entry is not None and entry > 0 and not (entry * 0.25 <= v <= entry * 4):
+        if entry is not None and entry > 0 and not (entry * _SANITY_LO_MULT <= v <= entry * _SANITY_HI_MULT):
             return False
         return True
 
@@ -449,7 +451,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         if sl is not None and entry is not None and sl <= entry:
             sl = None
     if entry is not None and entry > 0:
-        if sl is not None and not (entry * 0.25 <= sl <= entry * 4):
+        if sl is not None and not (entry * _SANITY_LO_MULT <= sl <= entry * _SANITY_HI_MULT):
             sl = None
 
     # 손익비
@@ -476,7 +478,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             # 2개뿐인 불일치가 있었다. 줄바꿈 스펙형(아래 elif 분기, 2026-08-01
             # 수정)과 동일 기준(entry 방향+크기)으로 통일한다.
             _ivals = getattr(_tp_grp, "ladder_values", None) or list(_tp_grp)
-            _ilo, _ihi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
+            _ilo, _ihi = ((entry * _SANITY_LO_MULT, entry * _SANITY_HI_MULT) if (entry and entry > 0)
                          else (float("-inf"), float("inf")))
             _ivalid = {v for v in _ivals if v is not None and _ilo <= v <= _ihi
                       and (entry is None
@@ -502,7 +504,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             # 0.185 짜리 셋업에 5.0 이 한 단계로 잡혔다(실제 목표는 3개, 본문의
             # 배분도 TP1~TP3 뿐). 대표값 tp 만 걸러선 단계 수가 부푼 채로 남는다.
             if tps.is_spec:
-                _lo, _hi = ((entry * 0.25, entry * 4) if (entry and entry > 0)
+                _lo, _hi = ((entry * _SANITY_LO_MULT, entry * _SANITY_HI_MULT) if (entry and entry > 0)
                             else (float("-inf"), float("inf")))
                 # 2026-08-01 수정: 크기뿐 아니라 방향도 걸러 tps_all/_tp_valid 와
                 # 같은 기준으로 맞춘다 — 안 그러면 CFX 케이스처럼 entry 아래인
@@ -523,7 +525,7 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     # (대표값 없는데 목록만 남기면 후처리가 혼선).
     tps_all: list = []
     if tps and tp is not None and entry and entry > 0:
-        _lo, _hi = entry * 0.25, entry * 4
+        _lo, _hi = entry * _SANITY_LO_MULT, entry * _SANITY_HI_MULT
         _n = getattr(_tp_grp, "ladder_n", 0)
         if _n > 1:
             # ladder_values: _grab_after 에서 저장한 인라인 사다리 전체 값 목록.
