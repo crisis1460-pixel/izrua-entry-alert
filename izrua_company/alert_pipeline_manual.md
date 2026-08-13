@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-13 (touch_funding_rate·touch_oi_pct 저장, 유니버스 거래대금·시총 하한 필터 추가, 터치 소요시간 분석 추가)  
+> 마지막 업데이트: 2026-08-13 (롱숏·탑트레이더·테이커비율·스테이블코인시총 축적, touch_funding_rate·touch_oi_pct 저장, 유니버스 거래대금·시총 하한 필터, 터치 소요시간 분석)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -192,6 +192,10 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | CVD 비율 (2026-08-11) | `binance.fetch_cvd_ratio()` — 터치 시점 4h taker 매수-매도 불균형 [-1,+1] | `levels.touch_cvd_ratio` (터치 확정건만) |
 | 펀딩비 (2026-08-13) | `binance.fetch_funding_rate()` — 터치 시점 무기한 선물 펀딩비(%) | `levels.touch_funding_rate` (터치 확정건만) |
 | OI 변화율 (2026-08-13) | 터치 시점 OI 24h 변화율(%) | `levels.touch_oi_pct` (터치 확정건만) |
+| 롱/숏 비율 (2026-08-13) | `binance.fetch_long_short_ratio()` — 전체 계정 롱 비율 (0~1) | `levels.touch_long_short_ratio` (터치 확정건만) |
+| 탑 트레이더 비율 (2026-08-13) | `binance.fetch_top_trader_position_ratio()` — 상위 20% 트레이더 롱 비율 | `levels.touch_top_trader_ratio` (터치 확정건만) |
+| 선물 테이커 비율 (2026-08-13) | `binance.fetch_taker_buy_sell_ratio()` — 선물 매수/매도 비율 | `levels.touch_taker_buy_sell_ratio` (터치 확정건만) |
+| 스테이블코인 시총 (2026-08-13) | DeFiLlama — 전체 스테이블코인 유통량 (십억$) | `levels.touch_stablecoin_mcap_b` (터치 확정건만) |
 | 호가 매수/매도 압력 | 터치 시점 스냅샷 | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
 | 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |

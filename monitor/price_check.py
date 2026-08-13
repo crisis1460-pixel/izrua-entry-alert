@@ -823,12 +823,24 @@ def run_once(now: float = None) -> dict:
                     # touch_ma200_above 와 동일 성격. 터치 확정건에만 1콜
                     # (예고 경로는 기록 자체가 없어 조회도 생략 — 콜 낭비 방지).
                     _snap_cvd = None
+                    _snap_ls_ratio = None
+                    _snap_top_trader = None
+                    _snap_taker_ratio = None
                     if touched:
                         try:
                             _snap_cvd = binance.fetch_cvd_ratio(
                                 coin, cfg_get("http_timeout_sec"), hours=4)
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s CVD 조회 실패(무시): %s", coin, e)
+                        try:
+                            _snap_ls_ratio = binance.fetch_long_short_ratio(
+                                coin, cfg_get("http_timeout_sec"))
+                            _snap_top_trader = binance.fetch_top_trader_position_ratio(
+                                coin, cfg_get("http_timeout_sec"))
+                            _snap_taker_ratio = binance.fetch_taker_buy_sell_ratio(
+                                coin, cfg_get("http_timeout_sec"))
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s 선물 포지션 조회 실패(무시): %s", coin, e)
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
@@ -855,12 +867,17 @@ def run_once(now: float = None) -> dict:
                         # 발송 성공 직후에 기록해 "표시된 것만 기록" 불변식 유지.
                         # ma200_above (08-08): 내부 축적 전용 — 알림 무노출.
                         if touched:
+                            _sc_mcap = (_snap_sentiment or {}).get("stablecoin_mcap_b")
                             db.record_touch_verdicts(conn, ids, _snap_supply,
                                                      _snap_position,
                                                      ma200_above=_snap_ma200_above,
                                                      cvd_ratio=_snap_cvd,
                                                      funding_rate=_snap_funding,
-                                                     oi_pct=_oi_chg)
+                                                     oi_pct=_oi_chg,
+                                                     long_short_ratio=_snap_ls_ratio,
+                                                     top_trader_ratio=_snap_top_trader,
+                                                     taker_buy_sell_ratio=_snap_taker_ratio,
+                                                     stablecoin_mcap_b=_sc_mcap)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1

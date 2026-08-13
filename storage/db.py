@@ -264,6 +264,18 @@ _OUTCOME_COLUMNS = {
     # 터치 시점 OI 24h 변화율(%) (2026-08-13) — 내부 전용 로깅. OI 급증/감소
     # 시 터치 성과 차이를 사후 분석하기 위한 원천 데이터.
     "touch_oi_pct": "REAL",
+    # 터치 시점 전체 계정 롱 비율 (2026-08-13) — Binance globalLongShortAccountRatio.
+    # 0~1 (예: 0.64 = 64% 롱). 군중 포지션 쏠림 → 역행 시그널 사후 분석용.
+    "touch_long_short_ratio": "REAL",
+    # 터치 시점 상위 트레이더 롱 비율 (2026-08-13) — topLongShortPositionRatio.
+    # 스마트 머니 vs 일반 계정 괴리 분석용.
+    "touch_top_trader_ratio": "REAL",
+    # 터치 시점 선물 테이커 매수/매도 비율 (2026-08-13) — takerlongshortRatio.
+    # >1 매수 우위, <1 매도 우위. 스팟 CVD와 대비되는 선물 측 공격성.
+    "touch_taker_buy_sell_ratio": "REAL",
+    # 터치 시점 스테이블코인 총 시총(십억 달러) (2026-08-13) — DeFiLlama.
+    # 시장 대기 자금 규모 추세 사후 분석용.
+    "touch_stablecoin_mcap_b": "REAL",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -1419,10 +1431,11 @@ def set_meta(conn, key: str, value: str) -> None:
 # ── 터치 판정 로깅 + 자가검증 집계 (2026-08-07) ──────────────────────────
 def record_touch_verdicts(conn, level_ids: list, supply, position,
                           ma200_above=None, cvd_ratio=None,
-                          funding_rate=None, oi_pct=None) -> None:
-    """터치 알림에 표시된 수급/자리 판정(+200일선 상하, +CVD, +펀딩비, +OI변화율)을 레벨 행에 기록.
-    supply/position: (label, reason) 튜플 또는 None. ma200_above: 1/0/None.
-    cvd_ratio: [-1,+1] float, funding_rate: %, oi_pct: % 또는 None (내부 전용).
+                          funding_rate=None, oi_pct=None,
+                          long_short_ratio=None, top_trader_ratio=None,
+                          taker_buy_sell_ratio=None,
+                          stablecoin_mcap_b=None) -> None:
+    """터치 시점 내부 축적 데이터 일괄 기록. 모든 파라미터 None이면 해당 컬럼 미기록.
     최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
     if not level_ids:
         return
@@ -1464,6 +1477,16 @@ def record_touch_verdicts(conn, level_ids: list, supply, position,
             f"WHERE id IN ({ph}) AND touch_oi_pct IS NULL",
             (float(oi_pct), *level_ids),
         )
+    for col, val in (("touch_long_short_ratio", long_short_ratio),
+                     ("touch_top_trader_ratio", top_trader_ratio),
+                     ("touch_taker_buy_sell_ratio", taker_buy_sell_ratio),
+                     ("touch_stablecoin_mcap_b", stablecoin_mcap_b)):
+        if val is not None:
+            conn.execute(
+                f"UPDATE levels SET {col}=? "
+                f"WHERE id IN ({ph}) AND {col} IS NULL",
+                (float(val), *level_ids),
+            )
 
 
 def get_verdict_stats(conn) -> dict:

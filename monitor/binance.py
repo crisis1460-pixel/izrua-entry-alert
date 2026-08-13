@@ -396,6 +396,63 @@ def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[flo
     return None
 
 
+_FAPI_BASE = "https://fapi.binance.com"
+
+
+def fetch_long_short_ratio(symbol: str, timeout: float) -> Optional[float]:
+    """전체 계정 롱/숏 비율 — 최근 4h 평균. 미상장/실패 → None."""
+    pair = f"{symbol.upper()}USDT"
+    try:
+        r = requests.get(
+            f"{_FAPI_BASE}/futures/data/globalLongShortAccountRatio",
+            params={"symbol": pair, "period": "4h", "limit": 1},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return float(data[0]["longAccount"]) if data else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[binance] longShort %s 실패: %s", pair, e)
+        return None
+
+
+def fetch_top_trader_position_ratio(symbol: str, timeout: float) -> Optional[float]:
+    """상위 트레이더 롱 비율 — 최근 4h. 미상장/실패 → None."""
+    pair = f"{symbol.upper()}USDT"
+    try:
+        r = requests.get(
+            f"{_FAPI_BASE}/futures/data/topLongShortPositionRatio",
+            params={"symbol": pair, "period": "4h", "limit": 1},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return float(data[0]["longAccount"]) if data else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[binance] topTrader %s 실패: %s", pair, e)
+        return None
+
+
+def fetch_taker_buy_sell_ratio(symbol: str, timeout: float) -> Optional[float]:
+    """선물 테이커 매수/매도 비율 — 최근 4h. >1 매수 우위, <1 매도 우위. 미상장/실패 → None."""
+    pair = f"{symbol.upper()}USDT"
+    try:
+        r = requests.get(
+            f"{_FAPI_BASE}/futures/data/takerlongshortRatio",
+            params={"symbol": pair, "period": "4h", "limit": 1},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return float(data[0]["buySellRatio"]) if data else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[binance] takerRatio %s 실패: %s", pair, e)
+        return None
+
+
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:
     """코인의 USDT 페어 현재가. 전 경로 실패 시 None
     (김프 줄만 생략됨 — 알림 발송은 계속된다)."""

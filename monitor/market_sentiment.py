@@ -43,6 +43,7 @@ def _fetch_fresh(timeout: float) -> dict:
         "fear_greed": None,
         "fear_greed_label": None,
         "altcoin_season_index": None,
+        "stablecoin_mcap_b": None,
     }
 
     try:
@@ -64,6 +65,20 @@ def _fetch_fresh(timeout: float) -> dict:
                 result["fear_greed_label"] = data[0].get("value_classification", "")
     except Exception as e:  # noqa: BLE001
         logger.warning("[sentiment] F&G 조회 실패: %s", e)
+
+    # 스테이블코인 총 시총 (DeFiLlama, 무인증) — 시장 대기 자금 규모
+    try:
+        r = requests.get("https://stablecoins.llama.fi/stablecoins?includePrices=false",
+                         timeout=timeout)
+        if r.status_code == 200:
+            total = sum(
+                a.get("circulating", {}).get("peggedUSD", 0)
+                for a in r.json().get("peggedAssets", [])
+            )
+            if total > 0:
+                result["stablecoin_mcap_b"] = round(total / 1e9, 1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[sentiment] 스테이블코인 시총 조회 실패: %s", e)
 
     # ALT.S — CoinGecko markets 엔드포인트가 실제 지원하는 기간만 사용(90d 미지원,
     # 2026-07-26 수리): 30d 우선, 데이터 부족 시 7d 폴백
