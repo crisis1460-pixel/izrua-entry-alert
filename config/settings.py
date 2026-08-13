@@ -27,6 +27,8 @@ SETTINGS = {
     "universe_exclude_upbit_warning": True,       # 업비트 투자경고(warning) 코인 제외
     "universe_rank_drop_threshold": 80,           # N일 최고순위 대비 현재 하락폭 초과 시 제외 (0=비활성화)
     "universe_rank_drop_min_history": 7,          # 순위 급락 판정에 필요한 최소 기록 일수
+    "universe_min_volume_usd": 0,                 # 24h 거래대금(USD) 하한 (0=비활성화). CoinGecko total_volume 기준
+    "universe_min_mcap_usd": 0,                   # 시총(USD) 절대 하한 (0=비활성화). 침체장 저시총 방어
 
     # 시총 등급 경계 (심볼 옆 아이콘)
     "mcap_tiers": [                      # (상한 순위, 아이콘, 라벨)

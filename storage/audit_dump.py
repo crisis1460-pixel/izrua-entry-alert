@@ -167,6 +167,38 @@ def prune_old_dumps(out_dir, keep_weeks: int) -> list:
     return sorted(removed)
 
 
+def _compute_touch_time_stats(conn) -> dict:
+    """수집→터치 소요시간 구간별 적중률. DB 컬럼 추가 없이 collected_at·touched_at 활용."""
+    rows = conn.execute(
+        """SELECT (touched_at - collected_at) / 3600.0 AS hours_to_touch,
+                  outcome
+           FROM levels
+           WHERE touched_at IS NOT NULL AND collected_at IS NOT NULL
+             AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')"""
+    ).fetchall()
+    if not rows:
+        return {}
+    buckets = {"<1h": [0, 0], "1-6h": [0, 0], "6-24h": [0, 0], "24-72h": [0, 0], ">72h": [0, 0]}
+    for r in rows:
+        h = r["hours_to_touch"]
+        if h < 1:
+            b = "<1h"
+        elif h < 6:
+            b = "1-6h"
+        elif h < 24:
+            b = "6-24h"
+        elif h < 72:
+            b = "24-72h"
+        else:
+            b = ">72h"
+        buckets[b][0] += 1
+        if r["outcome"] in ("hit", "timeboxed_win"):
+            buckets[b][1] += 1
+    return {k: {"n": v[0], "wins": v[1],
+                "hit_rate": round(v[1] / v[0], 3) if v[0] else None}
+            for k, v in buckets.items() if v[0]}
+
+
 def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     """덤프 → (성공 시) raw_text 정리 → 오래된 덤프 정리. 반환: 요약 dict.
 
@@ -193,6 +225,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                  AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')"""
         ).fetchall()]
         author_advanced = {a: db.get_author_advanced_stats(conn, a) for a in authors}
+        touch_time_stats = _compute_touch_time_stats(conn)
         stats_path = out_dir / f"grade_stats_{week}.json"
         stats_tmp = out_dir / f".grade_stats_{week}.json.tmp"
         with open(stats_tmp, "w", encoding="utf-8", newline="\n") as fp:
@@ -200,6 +233,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                 "_week": week, "_generated_at": now,
                 "grade_hit_rates": grade_stats,
                 "author_advanced": author_advanced,
+                "touch_time_analysis": touch_time_stats,
             }, fp, ensure_ascii=False, indent=2)
         os.replace(stats_tmp, stats_path)
         files.append(stats_path.name)

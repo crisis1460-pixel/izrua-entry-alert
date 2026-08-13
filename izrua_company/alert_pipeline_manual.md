@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-11 (버그픽스: 감사덤프 예외처리 BaseException→Exception, grade_stats JSON 원자 쓰기)  
+> 마지막 업데이트: 2026-08-13 (touch_funding_rate·touch_oi_pct 저장, 유니버스 거래대금·시총 하한 필터 추가, 터치 소요시간 분석 추가)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -28,7 +28,7 @@
 | 상장 조건 | 업비트 KRW 마켓 교집합 |
 | 기본 제외 | 스테이블코인 (USDT, USDC, DAI 등 20종) |
 
-### 1-2. 품질 필터 4종 (2026-08-11 추가)
+### 1-2. 품질 필터 6종 (2026-08-13 확장)
 
 | 필터 | 제외 조건 | 설정 키 |
 |------|-----------|---------|
@@ -36,6 +36,8 @@
 | Binance 미상장 | Binance USDT TRADING 쌍 없음 | `universe_exclude_non_binance = True` |
 | 업비트 투자경고 | `market_event.warning = True` (투자경고 수준만, 유의종목 아님) | `universe_exclude_upbit_warning = True` |
 | 시총 순위 급락 | 과거 최고 순위 대비 현재 **80위 이상** 하락 + **7일 이상** 이력 필요 | `universe_rank_drop_threshold = 80` |
+| 24h 거래대금 하한 | CoinGecko 24h 거래대금(USD) 미달 | `universe_min_volume_usd = 0` (비활성) |
+| 시총 절대 하한 | CoinGecko 시총(USD) 미달 | `universe_min_mcap_usd = 0` (비활성) |
 
 > **주의:** 품질 필터는 개별 실패 시 해당 필터만 건너뜀 (API 장애에도 수집 회차 안전).  
 > 신규 상장 이력은 `data/universe_first_seen.json`, 순위 이력은 `data/universe_rank_history.json` 에 누적.
@@ -188,9 +190,12 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | R-Expectancy | 동일 | 동일 |
 | Consistency Score | 동일 | 동일 |
 | CVD 비율 (2026-08-11) | `binance.fetch_cvd_ratio()` — 터치 시점 4h taker 매수-매도 불균형 [-1,+1] | `levels.touch_cvd_ratio` (터치 확정건만) |
+| 펀딩비 (2026-08-13) | `binance.fetch_funding_rate()` — 터치 시점 무기한 선물 펀딩비(%) | `levels.touch_funding_rate` (터치 확정건만) |
+| OI 변화율 (2026-08-13) | 터치 시점 OI 24h 변화율(%) | `levels.touch_oi_pct` (터치 확정건만) |
 | 호가 매수/매도 압력 | 터치 시점 스냅샷 | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
 | 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |
+| 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 수집→터치 구간별 적중률 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
 
 ---
 

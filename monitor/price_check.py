@@ -803,9 +803,9 @@ def run_once(now: float = None) -> dict:
                     # 수급 판정 (2026-08-07 사용자 결정): 펀딩+OI 를 결론 한 줄로.
                     # OI 24h 변화율은 자체 스냅샷(oi_history) 대비 — 기준 없으면
                     # (배포 후 첫 24h/미상장) derive 가 펀딩 단독으로 폴백한다.
+                    _oi_chg = None
                     try:
                         _deriv = binance.fetch_deriv_snapshot(coin, cfg_get("http_timeout_sec"))
-                        _oi_chg = None
                         _pchg = (_deriv or {}).get("pchg")
                         _oi_now = (_deriv or {}).get("oi")
                         if _oi_now:
@@ -858,7 +858,9 @@ def run_once(now: float = None) -> dict:
                             db.record_touch_verdicts(conn, ids, _snap_supply,
                                                      _snap_position,
                                                      ma200_above=_snap_ma200_above,
-                                                     cvd_ratio=_snap_cvd)
+                                                     cvd_ratio=_snap_cvd,
+                                                     funding_rate=_snap_funding,
+                                                     oi_pct=_oi_chg)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1

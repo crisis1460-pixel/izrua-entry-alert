@@ -107,6 +107,8 @@ def fetch_top_coins(top_n: int, timeout: float) -> list:
                 "name": c.get("name"),
                 "price_usd": c.get("current_price"),
                 "tier_icon": icon,
+                "total_volume": c.get("total_volume"),
+                "market_cap": c.get("market_cap"),
             })
         if len(data) < 250:
             break  # per_page 미만 응답 = 데이터 소진(마지막 페이지) — 다음 페이지 무의미
@@ -192,18 +194,22 @@ def _save_json_cache(path: str, data: dict) -> None:
 
 
 def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
-    """유니버스 품질 필터 4종 적용. 각 필터 실패는 해당 필터만 건너뜀(회차 안전).
+    """유니버스 품질 필터 6종 적용. 각 필터 실패는 해당 필터만 건너뜀(회차 안전).
 
     1. 신규 상장 N일 미만 제외 (최초 감지 기준)
     2. Binance USDT 미상장 제외
     3. 업비트 투자경고(warning) 제외
     4. 시총 순위 급락 코인 제외
+    5. 24h 거래대금 하한 미달 제외
+    6. 시총 절대 하한 미달 제외
     """
     exclude_new_days = settings.get("universe_exclude_new_listing_days")
     exclude_binance = settings.get("universe_exclude_non_binance")
     exclude_warning = settings.get("universe_exclude_upbit_warning")
     rank_drop_threshold = settings.get("universe_rank_drop_threshold")
     rank_drop_min_hist = settings.get("universe_rank_drop_min_history")
+    min_volume_usd = settings.get("universe_min_volume_usd") or 0
+    min_mcap_usd = settings.get("universe_min_mcap_usd") or 0
 
     # ── 필터 1: 신규 상장 ─────────────────────────────────────────────────
     first_seen: dict = {}
@@ -253,7 +259,8 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
 
     # ── 적용 ───────────────────────────────────────────────────────────────
     filtered = []
-    excluded = {"new_listing": [], "binance": [], "warning": [], "rank_drop": []}
+    excluded = {"new_listing": [], "binance": [], "warning": [], "rank_drop": [],
+                "low_volume": [], "low_mcap": []}
     new_cutoff = now - exclude_new_days * 86400 if exclude_new_days else 0
 
     for coin in universe:
@@ -282,17 +289,31 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
                     excluded["rank_drop"].append(sym)
                     continue
 
+        if min_volume_usd > 0:
+            vol = coin.get("total_volume") or 0
+            if vol < min_volume_usd:
+                excluded["low_volume"].append(sym)
+                continue
+
+        if min_mcap_usd > 0:
+            mcap = coin.get("market_cap") or 0
+            if mcap < min_mcap_usd:
+                excluded["low_mcap"].append(sym)
+                continue
+
         filtered.append(coin)
 
     total_excluded = sum(len(v) for v in excluded.values())
     if total_excluded:
         logger.info(
-            "[cg] 품질 필터 제외 %d개: 신규=%s 바이낸스미상장=%s 투자경고=%s 순위급락=%s",
+            "[cg] 품질 필터 제외 %d개: 신규=%s 바이낸스미상장=%s 투자경고=%s 순위급락=%s 저거래량=%s 저시총=%s",
             total_excluded,
             excluded["new_listing"] or "없음",
             excluded["binance"] or "없음",
             excluded["warning"] or "없음",
             excluded["rank_drop"] or "없음",
+            excluded["low_volume"] or "없음",
+            excluded["low_mcap"] or "없음",
         )
     return filtered
 
