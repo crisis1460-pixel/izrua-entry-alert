@@ -285,6 +285,8 @@ def _split_send(text: str, urgency: str) -> bool:
         chunks.append("\n".join(current))
     ok = True
     for i, chunk in enumerate(chunks):
+        if len(chunk) > _TG_MAX_LEN:
+            chunk = chunk[:_TG_MAX_LEN - 20] + "\n… (truncated)"
         if i > 0:
             time.sleep(1.0)
         if not send(chunk, urgency):
