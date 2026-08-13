@@ -1012,6 +1012,7 @@ def run_once(now: float | None = None) -> dict:
         # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
         db.bump_daily_stats(conn, day, **obs)
         db.prune_daily_stats(conn, now)
+        db.prune_alerts_log(conn)
 
         # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의
         # 버그/예외가 2분 주기 핫패스를 죽이면 절대 안 되므로 통째로 격리한다

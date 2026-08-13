@@ -227,7 +227,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 시작 시 시크릿 검증 | `scripts/run_cycle.py` | `TELEGRAM_BOT_TOKEN`/`CHAT_ID` 미설정 시 즉시 실패 (무음 블랙아웃 방지) |
 | SQLite WAL 모드 | `storage/db.py` | `journal_mode=WAL`, `busy_timeout=5000` — 동시 접근 안정성 |
 | levels.author 인덱스 | `storage/db.py` | 주간리포트 작성자별 쿼리 풀스캔 방지 |
-| alerts_log 보존정책 | `storage/db.py` | 30일 초과 항목 자동 정리 (`prune_alerts_log`) |
+| alerts_log 보존정책 | `storage/db.py` → `monitor/price_check.py` | 30일 초과 항목 자동 정리 (`prune_alerts_log`, 2분 주기 `run_once`에서 호출) |
 | Binance ratio 통합 | `monitor/binance.py` | 3개 ratio 함수 → `_fetch_fapi_ratio` 공통 헬퍼 |
 | TP sanity 상수화 | `collector/extractor.py` | `_SANITY_LO_MULT=0.25`, `_SANITY_HI_MULT=4.0` 추출 |
 | meta_float 통합 | `storage/db.py` | `run_cycle.py`·`audit_dump.py` 중복 헬퍼 → DB 모듈 단일 정의 |
