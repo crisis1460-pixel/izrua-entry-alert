@@ -147,7 +147,10 @@ SUPPLY_LIQ_CONFIRM = "short_heavy"  # 상방 숏 청산 집중 = 확인
 
 def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
                           cvd_ratio=None, bid_ask_ratio=None,
-                          options_ctx=None, liq_ctx=None):
+                          options_ctx=None, liq_ctx=None,
+                          # 새 시장환경 입력 (2026-08-14)
+                          dxy=None, usdt_dominance=None, dvol=None,
+                          macro_event=None):
     """펀딩 쏠림 × (OI 증감 + 가격 방향) → 매수 관점 판정.
 
     반환 (label, reason|None) — label ∈ '우호'/'주의'/'중립', reason 은 괄호
@@ -232,6 +235,36 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
             warn += 1
         elif liq_dir == SUPPLY_LIQ_CONFIRM:
             confirm += 1
+    # ── 매크로 환경 보정 (2026-08-14) ──────────────────────────
+    # DXY > 105 = 달러 강세 → 코인 약세 압력 (warn)
+    # DXY < 100 = 달러 약세 → 코인 우호 (confirm)
+    if dxy is not None:
+        if dxy > 105:
+            warn += 1
+        elif dxy < 100:
+            confirm += 1
+
+    # USDT.D > 8% = 위험회피 심화 (warn)
+    # USDT.D < 5% = 위험선호 (confirm)
+    if usdt_dominance is not None:
+        if usdt_dominance > 8:
+            warn += 1
+        elif usdt_dominance < 5:
+            confirm += 1
+
+    # DVOL > 80 = 변동성 위기 (warn, 강하게)
+    # DVOL > 60 = 변동성 경계 (warn)
+    # DVOL < 40 = 평상시 — 신호 없음
+    if dvol is not None:
+        if dvol > 80:
+            warn += 2
+        elif dvol > 60:
+            warn += 1
+
+    # FOMC/CPI 24h 이내: 경고(warn) — 고영향 이벤트 전후 방향성 불확실
+    if macro_event is not None:
+        warn += 1
+
     if label == "우호" and warn >= 1:
         label = "중립"
     elif label == "중립" and warn >= 2:

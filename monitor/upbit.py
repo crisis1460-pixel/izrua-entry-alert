@@ -407,6 +407,46 @@ RSI_4H_HOT = 70
 RSI_4H_COLD = 30
 
 
+def derive_mtf_alignment(position_data: Optional[dict],
+                         price: Optional[float] = None) -> Optional[dict]:
+    """멀티타임프레임 정렬 점수 — 일봉 RSI + MA200 방향 일치도.
+
+    position_data: fetch_position_data() 반환값.
+    price: 현재가(KRW) — MA200 대비 위치 판정에 사용. None 이면 MA200 항목 생략.
+
+    반환: {"score": int(-2..+2), "label": str} 또는 None.
+    score: +2=완전 강세 정렬, -2=완전 약세 정렬, 0=혼조.
+    label: "강세정렬"/"약세정렬"/"혼조"
+
+    판정 기준 (각 +1 또는 -1):
+    - 일봉 RSI > 50 → +1, < 50 → -1
+    - 현재가 > MA200 → +1, < MA200 → -1
+    """
+    if not position_data:
+        return None
+
+    score = 0
+
+    # 일봉 RSI
+    rsi_d = position_data.get("rsi_d")
+    if rsi_d is not None:
+        score += 1 if rsi_d > 50 else -1
+
+    # MA200 위/아래
+    ma200 = position_data.get("ma200")
+    if ma200 is not None and ma200 > 0 and price is not None and price > 0:
+        score += 1 if price >= ma200 else -1
+
+    if score >= 2:
+        label = "강세정렬"
+    elif score <= -2:
+        label = "약세정렬"
+    else:
+        label = "혼조"
+
+    return {"score": score, "label": label}
+
+
 def derive_position_verdict(rsi_d, rsi_w, price=None,
                             ma20=None, ma60=None, ma120=None,
                             rsi_4h=None) -> tuple:

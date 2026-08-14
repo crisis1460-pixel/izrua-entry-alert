@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-14 (BTC 옵션·청산 클러스터 시장 컨텍스트 수급 보정, MFE/MAE·ret_4h/ret_12h 성과 추적 고도화)  
+> 마지막 업데이트: 2026-08-14 (고도화 일괄 — 시장환경필터 5종, 토큰 언락, MTF 정렬, IC/ICIR, 글로벌 알림 상한, 섹터 집중도 placeholder)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -56,6 +56,7 @@
 | 포스트 나이 | **7일(168시간)** 이내 (`max_post_age_hours = 168`) |
 | 대상 | 유니버스 코인 + 워처 등록 작성자 포스트 |
 | 요청 페이싱 | 심볼당 **12~18초 지터** — 2026-08-14 24시간 슬로우 전환. git DB 스냅샷 47건 복원 분석: 주간 6~9s는 매 사이클 7~8분(~60번째 요청)에 403(하루 5~6회, 경보 상한 1회가 아침만 보여줘 착시), 심야 12~18s는 차단 0회 → 검증값으로 통일. 예산 48심볼/회차, 순환 로테이션이 커버 |
+| 자체 시간 예산 | TV 루프 **9.5분**(`collect_tv_deadline_sec = 570`) — 2026-08-15 수리. 슬로우 전환 직후 완주 ~20분 > run_cycle 하드킬 12분이라 **매 회차 TimeoutExpired** → `last_collect_at` 미갱신(수집 정지 경고 오탐, 08-14 실사고) + 루프 뒤 뒷정리(만료·재파싱·삭제감지) 전면 정지. 예산 소진 시 차단 이탈과 같은 순환 이월 경로로 스스로 멈춰 12분 안에 정상 종료(성공 마킹·뒷정리 복구). 회귀: 수리9-R7/R7b |
 
 ### 2-2. 파싱 & 추출 (`extractor.py`)
 추출 항목:
@@ -161,11 +162,18 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 스캘핑·단타 포스트 차단. TP가 없으면 **통과**.  
 클러스터 내 다른 멤버가 통과하면 낙오 멤버도 함께 승격.
 
-### 게이트 4: 일일 발송 한도
+### 게이트 4: 코인별 일일 발송 한도
 ```
 코인당 하루 최대 3회    (alert_max_per_coin_per_day = 3)
 ```
 터치 알림에만 적용. 예고 알림(현재 비활성)은 미적용.
+
+### 게이트 4-2: 글로벌 일일 발송 한도 (2026-08-14)
+```
+전체 코인 합산 하루 최대 15회    (alert_max_global_per_day = 15)
+```
+터치 알림에만 적용. 코인별 한도와 별개로 전체 알림 피로 방지.  
+**파일:** `monitor/price_check.py` (obs 키: `suppressed_global_cap`)
 
 ### 게이트 5: 중복 발송 차단
 ```
@@ -198,6 +206,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 자리 토큰 상한 | 3토큰+4h(최장 44칼럼 — 32칼럼 초과로 **잘림 버그**) | **2토큰 상한** (우선순위: 4h경고 > N일지지 > 추세 > RSI숫자) |
 | 펀딩 플립 | `🔥 N일 음수→양수` | `🔥 N일만에 매수세 복귀` |
 | 심리 헤더 | `🌍 BTC.D:` / `🪙 ALT.S:` / `😨 F&G:` | `🌍 비트 점유율:` / `🪙 알트장:` / `😨 시장심리:` |
+| USDT.D (2026-08-14) | — | CoinGecko `/global` 동일 응답에서 추출, 추가 API 콜 없음 |
 
 모든 개편 행은 봇 자체 폭 계산(`_display_width`) 기준 32칼럼 이내 검증 완료.
 
@@ -223,13 +232,24 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 스테이블코인 시총 (2026-08-13) | DeFiLlama — 전체 스테이블코인 유통량 (십억$) | `levels.touch_stablecoin_mcap_b` (터치 확정건만) |
 | 호가 매수/매도 압력 | 터치 시점 스냅샷. 2026-08-14 승격: 수급 판정 라벨 보정 입력 겸용(수치 알림 비노출) | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
-| BTC 옵션 컨텍스트 (2026-08-14) | `options.fetch_btc_options_context()` — Deribit P/C Ratio·Max Pain. P/C ≥1.0 또는 ≤0.30 → warn(수급 하향 보정). 정상 범위 0.5~0.6, 역대 최저 0.38/최고 0.84 기준. 5분 TTL 캐시, BTC 전용·전 코인 적용 | `monitor/options.py` (내부 보정 전용, 컬럼 미저장) |
+| MTF 정렬 점수 (2026-08-14) | `upbit.derive_mtf_alignment()` — 일봉 RSI>50 (+1/−1) + 현재가 vs MA200 (+1/−1). score −2~+2, label 강세정렬/약세정렬/혼조. `fetch_position_data` 공유(추가 콜 0). 터치 확정건만 `record_touch_verdicts`로 DB 기록 | `levels.touch_mtf_score` (터치 확정건만) |
+| 토큰 언락 경고 (2026-08-14) | `token_events.fetch_upcoming_unlocks()` — DeFiLlama 7일 내 5%+ 유통량 언락 예정 코인 맵. 6h DB 캐시. 회차 1콜, 전 코인 공유. 터치 확정건만 pct를 DB 기록. obs `token_unlock_warned` 카운터도 집계 | `levels.touch_token_unlock_pct` (터치 확정건만) |
+| 섹터 집중도 (2026-08-14) | `risk_checks.check_sector_concentration()` — 같은 섹터 코인 알림 집중도 경고. CoinGecko 카테고리 데이터 축적 후 활성화 예정 | `monitor/risk_checks.py` (placeholder) |
+| BTC 옵션 컨텍스트 (2026-08-14) | `options.fetch_btc_options_context()` — Deribit P/C Ratio·Max Pain·DVOL. P/C ≥1.0 또는 ≤0.30 → warn(수급 하향 보정). 정상 범위 0.5~0.6, 역대 최저 0.38/최고 0.84 기준. 5분 TTL 캐시, BTC 전용·전 코인 적용 | `monitor/options.py` (내부 보정 전용, 컬럼 미저장) |
+| DVOL 내재변동성 (2026-08-14) | `options._fetch_dvol()` — Deribit 30일 내재변동성 지수. 40이하=평상시, 60~80=경계(warn+1), 80+=위기(warn+2). `fetch_btc_options_context()` 반환값에 포함 | `monitor/options.py` (수급 보정 입력) |
+| DXY 달러 인덱스 (2026-08-14) | `macro.fetch_dxy()` — Yahoo Finance 비공식 API, 1시간 DB 캐시. 달러 강세 시 코인 약세 경향 (상관관계 −0.72~−0.90). >105 warn, <100 confirm | `monitor/macro.py` (수급 보정 입력) |
+| FOMC/CPI 캘린더 (2026-08-14) | `macro.get_nearby_macro_event()` — 정적 JSON, API 콜 0. 24h 전~2h 후 이벤트 감지 시 warn+1 (방향성 불확실). 수동 갱신 필요 | `monitor/macro.py` (수급 보정 입력) |
 | BTC 청산 클러스터 (2026-08-14) | `liquidation.fetch_btc_liq_context()` — ByKaranteli pressure score·direction. long_heavy → warn, short_heavy → confirm. 5분 TTL 캐시, BTC 전용·전 코인 적용 | `monitor/liquidation.py` (내부 보정 전용, 컬럼 미저장) |
-| 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시). 2026-08-14: CVD·호가·옵션·청산으로 수급 라벨 보정 — 우호+경고1→중립, 중립+경고2→주의, 중립+확인2→우호, 주의는 상향 불가 (`SUPPLY_CVD_NEG=-0.15/POS=0.15`, `SUPPLY_OBI_SELL_WALL=0.67/BUY_WALL=1.5`, `SUPPLY_PC_EXTREME_HIGH=1.0/LOW=0.30`, `SUPPLY_LIQ_WARN=long_heavy/CONFIRM=short_heavy`) | `levels.touch_supply_verdict` / `touch_position_verdict` |
+| 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시). 2026-08-14: CVD·호가·옵션·청산·DXY·USDT.D·DVOL·FOMC/CPI로 수급 라벨 보정 — 우호+경고1→중립, 중립+경고2→주의, 중립+확인2→우호, 주의는 상향 불가 (`SUPPLY_CVD_NEG=-0.15/POS=0.15`, `SUPPLY_OBI_SELL_WALL=0.67/BUY_WALL=1.5`, `SUPPLY_PC_EXTREME_HIGH=1.0/LOW=0.30`, `SUPPLY_LIQ_WARN=long_heavy/CONFIRM=short_heavy`, DXY>105=warn/<100=confirm, USDT.D>8%=warn/<5%=confirm, DVOL>80=warn+2/>60=warn+1, FOMC/CPI 24h이내=warn+1) | `levels.touch_supply_verdict` / `touch_position_verdict` |
 | MFE/MAE (2026-08-14) | `db.record_mfe_mae()` — 터치 후 판정 종결까지 최대유리이동(MFE%)·최대불리이동(MAE%). Freqtrade max_rate/min_rate 패턴. 1회 기록, 재기록 방지 | `levels.mfe_pct` / `levels.mae_pct` |
 | 다구간 수익률 (2026-08-14 확장) | 기존 ret_24h/ret_72h에 ret_4h/ret_12h 추가 — 초기 반응(4h)·중기 추세(12h) 포착. 1h는 2분 폴링 대비 오차 과대로 제외 | `levels.ret_4h` / `levels.ret_12h` |
 | 김프 급변 화살표 (2026-08-14) | `db.push_kimchi_history()` — 알림 시점 김프 이력 축적(meta, 12h 보존), ~6h 전 대비 ±0.5%p 이상이면 김프 행 끝 ▲/▼ 1글자 (`telegram._KIMCHI_DELTA_TH`) | `meta.kimchi_hist` (JSON) |
 | 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
+| 토큰 언락 경고 (2026-08-14) | `token_events.get_unlock_warning(conn, symbol)` — DeFiLlama 무료 API, 7일 내 유통량 5%+ 언락 예정 코인 감지. 6시간 DB 캐시. 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_token_unlock_pct` |
+| MTF 정렬 점수 (2026-08-14) | `upbit.derive_mtf_alignment(pos_data, price)` — 일봉RSI>50(+1)·MA200 위(+1) = -2~+2 점수. fetch_position_data() 재사용 (추가 콜 0). 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_mtf_score` |
+| 섹터 집중도 (2026-08-14) | `risk_checks.check_sector_concentration()` — placeholder. 향후 CoinGecko 카테고리 데이터 축적 후 활성화 | `monitor/risk_checks.py` |
+| IC/ICIR 신호 품질 (2026-08-14) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. 표기 전용 | `analytics/signal_quality.py` |
+| 시간대·요일별 성과 (2026-08-14) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률. 표기 전용 | `analytics/signal_quality.py` |
 
 ---
 
@@ -261,6 +281,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 기능 | 설정 키 | 현재값 |
 |------|---------|--------|
 | 예고 알림 (진입 전 접근) | `preview_alert_enabled` | `False` |
+| 섹터 집중도 경고 | `risk_checks.check_sector_concentration()` | placeholder (카테고리 데이터 미축적) |
 
 ---
 

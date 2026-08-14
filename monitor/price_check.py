@@ -457,11 +457,13 @@ def run_once(now: float | None = None) -> dict:
         cluster_band = cfg_get("cluster_band_pct")
         min_grade = cfg_get("alert_min_grade")
         daily_cap = cfg_get("alert_max_per_coin_per_day")
+        global_daily_cap = cfg_get("alert_max_global_per_day")
         day = _day_kst(now)
         # 관찰 집계(스프린트5) — 알림 발송과 무관하게 조용히 누적만 한다. 필터로
         # 억제돼도 여기엔 반드시 잡힌다(방금 들어간 TP 근접도 감점의 효과 측정 등).
         obs = {"touches_total": 0, "previews_total": 0, "suppressed_grade": 0,
-               "suppressed_cap": 0, "suppressed_dup": 0, "suppressed_send_fail": 0,
+               "suppressed_cap": 0, "suppressed_global_cap": 0,
+               "suppressed_dup": 0, "suppressed_send_fail": 0,
                "suppressed_grade_tp_penalty_only": 0, "suppressed_tp_too_close": 0,
                "preview_dwell": 0,
                "ambiguous_magnified": 0, "ambiguous_unresolved": 0,
@@ -469,7 +471,10 @@ def run_once(now: float | None = None) -> dict:
                # suppressed_tp_gate: _judge_outcomes 가 실제 증분(TP 단계 알림이 본알림
                # 게이트로 차단된 건수). 그 함수의 setdefault(945) 와 bump_daily_stats
                # 의 .get 폴백이 이미 방어하지만, 초기화 대칭성 유지(2026-08-03 감사).
-               "suppressed_tp_gate": 0}
+               "suppressed_tp_gate": 0,
+               # 토큰 언락 경고 해당 터치 건수 (2026-08-14). DeFiLlama 7일 내 5%+
+               # 유통량 언락 예정 코인에서 터치가 발생한 횟수 — 사후 분석 전용.
+               "token_unlock_warned": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
         # 작성자 종결 실적 캐시 (2026-08-01 S10 v3) — author → (n, hits). 한 회차 안에서
@@ -512,6 +517,20 @@ def run_once(now: float | None = None) -> dict:
                     logger.warning("[체크] BTC 청산 클러스터 조회 실패(무시): %s", e)
             return _mkt_ctx
 
+        # 매크로 환경 (DXY·FOMC/CPI) — 발송 시 1회 조회, 전 코인 공유
+        _macro_ctx = {"loaded": False, "dxy": None, "event": None}
+
+        def _macro_context():
+            if not _macro_ctx["loaded"]:
+                _macro_ctx["loaded"] = True
+                try:
+                    from monitor import macro
+                    _macro_ctx["dxy"] = macro.fetch_dxy(conn, cfg_get("http_timeout_sec"))
+                    _macro_ctx["event"] = macro.get_nearby_macro_event()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] 매크로 조회 실패(무시): %s", e)
+            return _macro_ctx
+
         # 거래량 순위도 발송 시에만 1회 조회해 이번 회차 알림들이 공유 (조회 시점 기준)
         vol_cache = {"loaded": False, "ranks": {}}
 
@@ -520,6 +539,20 @@ def run_once(now: float | None = None) -> dict:
                 vol_cache["loaded"] = True
                 vol_cache["ranks"] = upbit.fetch_volume_ranks(cfg_get("http_timeout_sec"))
             return vol_cache["ranks"]
+
+        # 토큰 언락 경고 — 발송 시 1회 조회, 전 코인 공유 (DeFiLlama 6h 캐시)
+        _unlock_ctx = {"loaded": False, "data": None}
+
+        def _unlock_data():
+            if not _unlock_ctx["loaded"]:
+                _unlock_ctx["loaded"] = True
+                try:
+                    from monitor import token_events
+                    _unlock_ctx["data"] = token_events.fetch_upcoming_unlocks(
+                        conn, cfg_get("http_timeout_sec"))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] 토큰 언락 조회 실패(무시): %s", e)
+            return _unlock_ctx["data"]
 
         def _get_range(ticker, limit):
             """캔들목록 조회 (예산·네거티브캐시 공유). 반환 목록|None."""
@@ -695,6 +728,14 @@ def run_once(now: float | None = None) -> dict:
                     send_ok = False
                     obs["suppressed_cap"] += 1
 
+                # 전체 코인 합산 하루 알림 상한 (알림 피로 방지)
+                if send_ok and kind == "touch" and \
+                        db.count_all_alerts_today(conn, day, kind="touch") >= global_daily_cap:
+                    logger.info("[체크] %s 글로벌 일일 알림 상한(%d) 도달 - 억제",
+                                coin, global_daily_cap)
+                    send_ok = False
+                    obs["suppressed_global_cap"] += 1
+
                 # 재발송 차단(2026-07-28 실사고 — DOT·ENA·AAVE 가 03:53·03:54 두 번).
                 # 평시엔 status 전이(touched/previewed)가 막지만, 회차가 겹치면 뒤
                 # 회차가 앞 회차 커밋 '이전' DB로 돌아 그 전이를 못 본다.
@@ -738,6 +779,8 @@ def run_once(now: float | None = None) -> dict:
                 _snap_kimchi = None
                 _snap_volume_rank = None
                 _snap_obi = None  # 호가 잔량비 — 발송/억제 양쪽 기록 경로 공용
+                _snap_unlock_warn = None  # 토큰 언락 경고 — 내부 축적 전용
+                _snap_mtf = None          # MTF 정렬 점수 — 내부 축적 전용
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -785,6 +828,7 @@ def run_once(now: float | None = None) -> dict:
                     # 현재가(KRW) — 캔들과 같은 단위.
                     _snap_position = None
                     _snap_ma200_above = None
+                    _snap_mtf = None
                     try:
                         _pd = upbit.fetch_position_data(
                             ticker, cfg_get("http_timeout_sec"))
@@ -797,6 +841,9 @@ def run_once(now: float | None = None) -> dict:
                         # 200일선 상/하 — 내부 축적 전용 (알림 무노출, 사용자 확정)
                         if _pd["ma200"] and current:
                             _snap_ma200_above = 1 if current >= _pd["ma200"] else 0
+                        # MTF 정렬 점수 — 내부 축적 전용 (알림 무노출). 일봉 RSI +
+                        # MA200 방향 일치도 — fetch_position_data 를 공유해 추가 콜 0.
+                        _snap_mtf = upbit.derive_mtf_alignment(_pd, current)
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
@@ -874,11 +921,18 @@ def run_once(now: float | None = None) -> dict:
                             if _oi_base:
                                 _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
                         _mctx = _market_context()
+                        _macro = _macro_context()
+                        _sent = _sentiment()
+                        _opt_ctx = _mctx.get("options")
                         _snap_supply = binance.derive_supply_verdict(
                             _snap_funding, _oi_chg, _pchg,
                             cvd_ratio=_snap_cvd, bid_ask_ratio=_snap_obi,
-                            options_ctx=_mctx.get("options"),
-                            liq_ctx=_mctx.get("liq"))
+                            options_ctx=_opt_ctx,
+                            liq_ctx=_mctx.get("liq"),
+                            dxy=_macro["dxy"],
+                            usdt_dominance=_sent.get("usdt_dominance") if _sent else None,
+                            dvol=_opt_ctx.get("dvol") if _opt_ctx else None,
+                            macro_event=_macro["event"])
                         if _snap_supply[0] is None:
                             _snap_supply = None
                     except Exception as e:  # noqa: BLE001
@@ -887,6 +941,15 @@ def run_once(now: float | None = None) -> dict:
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
+                    # 토큰 언락 경고 조회 — 내부 축적 전용 (알림 무노출).
+                    # _unlock_data() 는 회차 캐시라 코인 수와 무관하게 API 1콜.
+                    _snap_unlock_warn = None
+                    try:
+                        _unlocks = _unlock_data()
+                        if _unlocks:
+                            _snap_unlock_warn = _unlocks.get(coin.upper())
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 언락 경고 조회 실패(무시): %s", coin, e)
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
@@ -912,6 +975,8 @@ def run_once(now: float | None = None) -> dict:
                         # ma200_above (08-08): 내부 축적 전용 — 알림 무노출.
                         if touched:
                             _sc_mcap = (_snap_sentiment or {}).get("stablecoin_mcap_b")
+                            _unlock_pct = (_snap_unlock_warn or {}).get("pct")
+                            _mtf_sc = (_snap_mtf or {}).get("score")
                             db.record_touch_verdicts(conn, ids, _snap_supply,
                                                      _snap_position,
                                                      ma200_above=_snap_ma200_above,
@@ -921,7 +986,9 @@ def run_once(now: float | None = None) -> dict:
                                                      long_short_ratio=_snap_ls_ratio,
                                                      top_trader_ratio=_snap_top_trader,
                                                      taker_buy_sell_ratio=_snap_taker_ratio,
-                                                     stablecoin_mcap_b=_sc_mcap)
+                                                     stablecoin_mcap_b=_sc_mcap,
+                                                     mtf_score=_mtf_sc,
+                                                     token_unlock_pct=_unlock_pct)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1
@@ -1012,6 +1079,17 @@ def run_once(now: float | None = None) -> dict:
                                 ticker, cfg_get("http_timeout_sec"))
                         except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                             logger.warning("[체크] %s 호가 기록 실패(무시): %s", ticker, e)
+                    # 토큰 언락 경고 관찰집계 — send_ok 무관, 터치 기준.
+                    # _unlock_data() 는 캐시라 억제 터치에 추가 API 0콜.
+                    if _snap_unlock_warn is None:
+                        try:
+                            _unlocks = _unlock_data()
+                            if _unlocks:
+                                _snap_unlock_warn = _unlocks.get(coin.upper())
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if _snap_unlock_warn:
+                        obs["token_unlock_warned"] = obs.get("token_unlock_warned", 0) + 1
 
                 if touched:
                     # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기

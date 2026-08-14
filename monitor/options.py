@@ -105,18 +105,44 @@ def _calc_max_pain(instruments: list) -> Optional[float]:
     return max_pain_strike
 
 
+def _fetch_dvol(timeout: float) -> Optional[float]:
+    """Deribit DVOL(30일 내재변동성 지수). 무인증 공개 API.
+    40 이하=평상시, 60~80=경계, 80+=위기."""
+    try:
+        r = requests.get(
+            f"{_DERIBIT_BASE}/public/get_volatility_index_data",
+            params={"currency": "BTC", "resolution": 3600,
+                    "start_timestamp": int((time.time() - 7200) * 1000),
+                    "end_timestamp": int(time.time() * 1000)},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            logger.warning("[options] DVOL HTTP %s", r.status_code)
+            return None
+        data = r.json().get("result", {}).get("data", [])
+        if data:
+            return data[-1][4]  # index 4 = close
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[options] DVOL 요청 실패: %s", e)
+        return None
+
+
 def fetch_btc_options_context(timeout: float = 10.0) -> Optional[dict]:
     """BTC 옵션 컨텍스트 반환. TTL 캐시 적용.
 
-    반환: {"pc_ratio": float, "max_pain": float} 또는 None.
+    반환: {"pc_ratio": float, "max_pain": float, "dvol": float|None} 또는 None.
     pc_ratio: Put OI / Call OI (전 만기 합산)
     max_pain: Max Pain 행사가(USD)
+    dvol: DVOL 30일 내재변동성 지수
     """
     now = time.time()
     if _cache["data"] is not None and now - _cache["ts"] < _CACHE_TTL_SEC:
         return _cache["data"]
 
     instruments = _fetch_raw(timeout)
+    dvol = _fetch_dvol(timeout)
+
     if not instruments:
         return _cache.get("data")  # 실패 시 이전 캐시 반환
 
@@ -125,7 +151,7 @@ def fetch_btc_options_context(timeout: float = 10.0) -> Optional[dict]:
     if pc is None:
         return _cache.get("data")
 
-    result = {"pc_ratio": pc, "max_pain": mp}
+    result = {"pc_ratio": pc, "max_pain": mp, "dvol": dvol}
     _cache["ts"] = now
     _cache["data"] = result
     return result

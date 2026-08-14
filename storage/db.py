@@ -283,6 +283,14 @@ _OUTCOME_COLUMNS = {
     # 초기 반응(4h)과 중기 추세(12h) 포착. 1h는 2분 폴링 대비 오차 과대로 제외.
     "ret_4h": "REAL",
     "ret_12h": "REAL",
+    # 터치 시점 MTF 정렬 점수 (2026-08-14) — derive_mtf_alignment 결과.
+    # -2(완전 약세)~+2(완전 강세). 내부 전용 로깅 — 멀티타임프레임 일치도별
+    # outcome 상관 사후 분석용 원천 데이터.
+    "touch_mtf_score": "INTEGER",
+    # 터치 시점 토큰 언락 경고 비율(%) (2026-08-14) — DeFiLlama.
+    # 7일 내 5%+ 유통량 언락 예정 시 해당 비율. 내부 전용 로깅 —
+    # 대량 언락 시기의 알림 성과 사후 분석용 원천 데이터.
+    "touch_token_unlock_pct": "REAL",
     # MFE/MAE — 터치 후 최대유리·최대불리 이동폭(%) (2026-08-14).
     # Freqtrade max_rate/min_rate 패턴. 판정 종결 시 1회 기록.
     # Edge Ratio(MFE/|MAE|), Capture Ratio(실현이익/MFE) 도출의 원천 데이터.
@@ -1457,6 +1465,16 @@ def count_alerts_today(conn, coin_symbol: str, day_kst: str, kind: Optional[str]
     return conn.execute(q, params).fetchone()["n"]
 
 
+def count_all_alerts_today(conn, day_kst: str, kind: Optional[str] = None) -> int:
+    """전체 코인 합산 하루 알림 건수 — 글로벌 일일 상한(alert_max_global_per_day) 판정용."""
+    q = "SELECT COUNT(*) AS n FROM alerts_log WHERE day_kst=?"
+    params: list = [day_kst]
+    if kind:
+        q += " AND kind=?"
+        params.append(kind)
+    return conn.execute(q, params).fetchone()["n"]
+
+
 def recent_alert_exists(conn, coin_symbol: str, kind: str, level_ids: list,
                         since: float) -> bool:
     """같은 (코인, 종류, 레벨묶음) 알림이 since 이후에 이미 나갔는가 — 재발송 차단용.
@@ -1558,7 +1576,9 @@ def record_touch_verdicts(conn, level_ids: list, supply, position,
                           funding_rate=None, oi_pct=None,
                           long_short_ratio=None, top_trader_ratio=None,
                           taker_buy_sell_ratio=None,
-                          stablecoin_mcap_b=None) -> None:
+                          stablecoin_mcap_b=None,
+                          mtf_score=None,
+                          token_unlock_pct=None) -> None:
     """터치 시점 내부 축적 데이터 일괄 기록. 모든 파라미터 None이면 해당 컬럼 미기록.
     최초 기록 우선(IS NULL 조건) — 재발송·경합에도 첫 표시값 보존."""
     if not level_ids:
@@ -1604,13 +1624,20 @@ def record_touch_verdicts(conn, level_ids: list, supply, position,
     for col, val in (("touch_long_short_ratio", long_short_ratio),
                      ("touch_top_trader_ratio", top_trader_ratio),
                      ("touch_taker_buy_sell_ratio", taker_buy_sell_ratio),
-                     ("touch_stablecoin_mcap_b", stablecoin_mcap_b)):
+                     ("touch_stablecoin_mcap_b", stablecoin_mcap_b),
+                     ("touch_token_unlock_pct", token_unlock_pct)):
         if val is not None:
             conn.execute(
                 f"UPDATE levels SET {col}=? "
                 f"WHERE id IN ({ph}) AND {col} IS NULL",
                 (float(val), *level_ids),
             )
+    if mtf_score is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_mtf_score=? "
+            f"WHERE id IN ({ph}) AND touch_mtf_score IS NULL",
+            (int(mtf_score), *level_ids),
+        )
 
 
 def get_verdict_stats(conn) -> dict:
@@ -1708,7 +1735,8 @@ def stats(conn) -> dict:
 # 무관하게 매 가격체크 회차(monitor.price_check.run_once)가 하루 1행을 갱신한다.
 
 _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
-                     "suppressed_cap", "suppressed_dup", "suppressed_send_fail",
+                     "suppressed_cap", "suppressed_global_cap",
+                     "suppressed_dup", "suppressed_send_fail",
                      "suppressed_grade_tp_penalty_only", "suppressed_tp_too_close",
                      "preview_dwell",
                      # 동시터치(같은 1분봉에 TP·SL 동시 도달) 재검사 결과.
@@ -1722,7 +1750,9 @@ _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "ambiguous_skipped",
                      # TP 단계 알림이 본알림 무발송 게이트(M-2, 2026-08-01)로 차단된 건수.
                      "suppressed_tp_gate",
-                     "suppressed_timeframe")
+                     "suppressed_timeframe",
+                     # 토큰 언락 경고 해당 터치 건수 (2026-08-14).
+                     "token_unlock_warned")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:

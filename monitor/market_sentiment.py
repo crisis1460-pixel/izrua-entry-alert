@@ -40,6 +40,7 @@ def _cg_headers() -> dict:
 def _fetch_fresh(timeout: float) -> dict:
     result = {
         "btc_dominance": None,
+        "usdt_dominance": None,
         "fear_greed": None,
         "fear_greed_label": None,
         "altcoin_season_index": None,
@@ -50,11 +51,15 @@ def _fetch_fresh(timeout: float) -> dict:
         r = requests.get("https://api.coingecko.com/api/v3/global",
                          headers=_cg_headers(), timeout=timeout)
         if r.status_code == 200:
-            btc_d = r.json().get("data", {}).get("market_cap_percentage", {}).get("btc")
+            mcp = r.json().get("data", {}).get("market_cap_percentage", {})
+            btc_d = mcp.get("btc")
             if btc_d:
                 result["btc_dominance"] = round(btc_d, 1)
+            usdt_d = mcp.get("usdt")
+            if usdt_d:
+                result["usdt_dominance"] = round(usdt_d, 1)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[sentiment] BTC.D 조회 실패: %s", e)
+        logger.warning("[sentiment] BTC.D/USDT.D 조회 실패: %s", e)
 
     try:
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=timeout)
