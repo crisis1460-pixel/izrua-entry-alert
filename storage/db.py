@@ -279,6 +279,15 @@ _OUTCOME_COLUMNS = {
     # 터치 시점 스테이블코인 총 시총(십억 달러) (2026-08-13) — DeFiLlama.
     # 시장 대기 자금 규모 추세 사후 분석용.
     "touch_stablecoin_mcap_b": "REAL",
+    # 다구간 수익률 스냅샷 (2026-08-14) — 기존 24h/72h에 4h/12h 추가.
+    # 초기 반응(4h)과 중기 추세(12h) 포착. 1h는 2분 폴링 대비 오차 과대로 제외.
+    "ret_4h": "REAL",
+    "ret_12h": "REAL",
+    # MFE/MAE — 터치 후 최대유리·최대불리 이동폭(%) (2026-08-14).
+    # Freqtrade max_rate/min_rate 패턴. 판정 종결 시 1회 기록.
+    # Edge Ratio(MFE/|MAE|), Capture Ratio(실현이익/MFE) 도출의 원천 데이터.
+    "mfe_pct": "REAL",
+    "mae_pct": "REAL",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -660,10 +669,12 @@ def get_ret_pending(conn, now: Optional[float] = None) -> list:
     now = now if now is not None else time.time()
     return [dict(r) for r in conn.execute(
         "SELECT id, ticker, touched_at, touch_price_krw, touch_usdt_krw, entry_usd, "
-        "ret_24h, ret_72h FROM levels WHERE touched_at IS NOT NULL "
-        "AND ((ret_24h IS NULL AND touched_at >= ?) "
+        "ret_4h, ret_12h, ret_24h, ret_72h FROM levels WHERE touched_at IS NOT NULL "
+        "AND ((ret_4h IS NULL AND touched_at >= ?) "
+        "  OR (ret_12h IS NULL AND touched_at >= ?) "
+        "  OR (ret_24h IS NULL AND touched_at >= ?) "
         "  OR (ret_72h IS NULL AND touched_at >= ?))",
-        (now - 30 * 3600, now - 78 * 3600)
+        (now - 10 * 3600, now - 18 * 3600, now - 30 * 3600, now - 78 * 3600)
     ).fetchall()]
 
 
@@ -1354,15 +1365,23 @@ def get_author_deletion_stats(conn, author: Optional[str]) -> dict:
 
 
 def record_ret(conn, level_id: int, field: str, value: float) -> None:
-    """터치 후 24h/72h 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지).
+    """터치 후 수익률 1회 기록 (이미 있으면 보존 — 최초 도과 시점 값 유지).
 
     화이트리스트 검증(2026-08-03 R2 감사): field 는 하드코딩된 컬럼명이라야 안전한
     f-string SQL 이다. 예전엔 assert 로 검증했으나 python -O 에서 assert 가
     스트립되어 방어가 사라진다 — 명시 raise 로 교체."""
-    if field not in ("ret_24h", "ret_72h"):
+    if field not in ("ret_4h", "ret_12h", "ret_24h", "ret_72h"):
         raise ValueError(f"record_ret: invalid field name {field!r}")
     conn.execute(
         f"UPDATE levels SET {field}=? WHERE id=? AND {field} IS NULL", (value, level_id)
+    )
+
+
+def record_mfe_mae(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
+    """종결 시 MFE/MAE 1회 기록 (이미 있으면 보존)."""
+    conn.execute(
+        "UPDATE levels SET mfe_pct=?, mae_pct=? WHERE id=? AND mfe_pct IS NULL",
+        (mfe_pct, mae_pct, level_id),
     )
 
 

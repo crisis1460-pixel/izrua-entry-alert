@@ -283,6 +283,115 @@ _txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
 check("김프화살표: 델타 미전달 → 종전 표기", "김프 +2.15%" in _txt and "▲" not in _txt and "▼" not in _txt)
 
 
+# ─── derive_supply_verdict 옵션·청산 보정 (2026-08-14) ───────────────
+
+# 옵션 P/C 극단 → 경고
+v = derive_supply_verdict(0.005, 5.0, 2.0,
+                          options_ctx={"pc_ratio": 1.8, "max_pain": 100000})
+check("옵션보정: P/C 극단(1.8) → 우호가 중립으로", v[0] == "중립")
+
+# 옵션 P/C 정상 범위 → 보정 없음
+v = derive_supply_verdict(0.005, 5.0, 2.0,
+                          options_ctx={"pc_ratio": 1.0, "max_pain": 100000})
+check("옵션보정: P/C 정상(1.0) → 우호 유지", v[0] == "우호")
+
+# 청산 long_heavy → 경고
+v = derive_supply_verdict(0.005, 5.0, 2.0,
+                          liq_ctx={"pressure": 70, "direction": "long_heavy"})
+check("청산보정: long_heavy → 우호가 중립으로", v[0] == "중립")
+
+# 청산 short_heavy → 확인 (중립 + 확인2개 시 상향)
+v = derive_supply_verdict(0.005, None, None, cvd_ratio=0.2,
+                          liq_ctx={"pressure": 30, "direction": "short_heavy"})
+check("청산보정: short_heavy+CVD확인 → 중립이 우호로", v[0] == "우호")
+
+# 청산 neutral → 보정 없음
+v = derive_supply_verdict(0.005, 5.0, 2.0,
+                          liq_ctx={"pressure": 50, "direction": "neutral"})
+check("청산보정: neutral → 우호 유지", v[0] == "우호")
+
+# 옵션+청산 동시 경고 → 중립도 주의로
+v = derive_supply_verdict(0.005, None, None,
+                          options_ctx={"pc_ratio": 0.3, "max_pain": 100000},
+                          liq_ctx={"pressure": 70, "direction": "long_heavy"})
+check("옵션+청산 동시경고: 중립 → 주의", v[0] == "주의")
+
+# None 컨텍스트 → 기존 판정 유지
+v = derive_supply_verdict(0.005, 5.0, 2.0, options_ctx=None, liq_ctx=None)
+check("옵션·청산 None → 기존 판정 유지", v == ("우호", "자금 유입"))
+
+
+# ─── options.py 단위 테스트 (2026-08-14) ─────────────────────────────
+
+from monitor.options import _calc_pc_ratio, _calc_max_pain
+
+_mock_instruments = [
+    {"instrument_name": "BTC-28MAR26-50000-C", "open_interest": 1000},
+    {"instrument_name": "BTC-28MAR26-50000-P", "open_interest": 500},
+    {"instrument_name": "BTC-28MAR26-60000-C", "open_interest": 2000},
+    {"instrument_name": "BTC-28MAR26-60000-P", "open_interest": 1500},
+    {"instrument_name": "BTC-28MAR26-70000-C", "open_interest": 800},
+    {"instrument_name": "BTC-28MAR26-70000-P", "open_interest": 2000},
+]
+
+_pc = _calc_pc_ratio(_mock_instruments)
+check("P/C Ratio 계산: (500+1500+2000)/(1000+2000+800)", _pc is not None and abs(_pc - 4000/3800) < 0.01)
+
+_mp = _calc_max_pain(_mock_instruments)
+check("Max Pain 계산: 유효한 행사가 반환", _mp is not None and _mp in (50000, 60000, 70000))
+
+check("P/C Ratio: 빈 리스트 → None", _calc_pc_ratio([]) is None)
+check("Max Pain: 빈 리스트 → None", _calc_max_pain([]) is None)
+
+
+# ─── record_ret 확장 (ret_4h/ret_12h) ───────────────────────────────
+
+_rc = sqlite3.connect(":memory:")
+_rc.row_factory = sqlite3.Row
+_rc.execute("""
+    CREATE TABLE levels (
+        id INTEGER PRIMARY KEY, ret_4h REAL, ret_12h REAL, ret_24h REAL, ret_72h REAL
+    )
+""")
+_rc.execute("INSERT INTO levels (id) VALUES (1)")
+_rc.commit()
+
+db.record_ret(_rc, 1, "ret_4h", 2.5)
+check("record_ret: ret_4h 기록", _rc.execute("SELECT ret_4h FROM levels WHERE id=1").fetchone()[0] == 2.5)
+
+db.record_ret(_rc, 1, "ret_4h", 9.9)
+check("record_ret: ret_4h 재기록 방지", _rc.execute("SELECT ret_4h FROM levels WHERE id=1").fetchone()[0] == 2.5)
+
+db.record_ret(_rc, 1, "ret_12h", -1.3)
+check("record_ret: ret_12h 기록", _rc.execute("SELECT ret_12h FROM levels WHERE id=1").fetchone()[0] == -1.3)
+
+_bad_field = False
+try:
+    db.record_ret(_rc, 1, "ret_1h", 0.5)
+except ValueError:
+    _bad_field = True
+check("record_ret: 미허용 필드 거부", _bad_field)
+_rc.close()
+
+
+# ─── record_mfe_mae (2026-08-14) ────────────────────────────────────
+
+_mc = sqlite3.connect(":memory:")
+_mc.row_factory = sqlite3.Row
+_mc.execute("CREATE TABLE levels (id INTEGER PRIMARY KEY, mfe_pct REAL, mae_pct REAL)")
+_mc.execute("INSERT INTO levels (id) VALUES (1)")
+_mc.commit()
+
+db.record_mfe_mae(_mc, 1, 5.2, -3.1)
+_row = _mc.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=1").fetchone()
+check("MFE/MAE: 최초 기록", abs(_row[0] - 5.2) < 0.01 and abs(_row[1] - (-3.1)) < 0.01)
+
+db.record_mfe_mae(_mc, 1, 99.0, -99.0)
+_row = _mc.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=1").fetchone()
+check("MFE/MAE: 재기록 방지", abs(_row[0] - 5.2) < 0.01)
+_mc.close()
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

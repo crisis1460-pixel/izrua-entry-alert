@@ -492,6 +492,26 @@ def run_once(now: float | None = None) -> dict:
                 sentiment_cache["data"] = market_sentiment.get_sentiment(conn)
             return sentiment_cache["data"]
 
+        # BTC 옵션·청산 컨텍스트 — 발송 시 1회 조회, 전 코인 공유 (BTC 시장 컨텍스트)
+        _mkt_ctx = {"loaded": False, "options": None, "liq": None}
+
+        def _market_context():
+            if not _mkt_ctx["loaded"]:
+                _mkt_ctx["loaded"] = True
+                try:
+                    from monitor import options
+                    _mkt_ctx["options"] = options.fetch_btc_options_context(
+                        cfg_get("http_timeout_sec"))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] BTC 옵션 조회 실패(무시): %s", e)
+                try:
+                    from monitor import liquidation
+                    _mkt_ctx["liq"] = liquidation.fetch_btc_liq_context(
+                        cfg_get("http_timeout_sec"))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] BTC 청산 클러스터 조회 실패(무시): %s", e)
+            return _mkt_ctx
+
         # 거래량 순위도 발송 시에만 1회 조회해 이번 회차 알림들이 공유 (조회 시점 기준)
         vol_cache = {"loaded": False, "ranks": {}}
 
@@ -853,9 +873,12 @@ def run_once(now: float | None = None) -> dict:
                             _oi_base = db.get_oi_baseline(conn, coin, now)
                             if _oi_base:
                                 _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
+                        _mctx = _market_context()
                         _snap_supply = binance.derive_supply_verdict(
                             _snap_funding, _oi_chg, _pchg,
-                            cvd_ratio=_snap_cvd, bid_ask_ratio=_snap_obi)
+                            cvd_ratio=_snap_cvd, bid_ask_ratio=_snap_obi,
+                            options_ctx=_mctx.get("options"),
+                            liq_ctx=_mctx.get("liq"))
                         if _snap_supply[0] is None:
                             _snap_supply = None
                     except Exception as e:  # noqa: BLE001
@@ -1114,6 +1137,10 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         base_eff = base * (usdt_krw / t_rate) if (t_rate and usdt_krw) else base
         elapsed = now - lv["touched_at"]
         ret_pct = (current - base_eff) / base_eff * 100
+        if lv.get("ret_4h") is None and 4 * 3600 <= elapsed <= 10 * 3600:
+            db.record_ret(conn, lv["id"], "ret_4h", ret_pct)
+        if lv.get("ret_12h") is None and 12 * 3600 <= elapsed <= 18 * 3600:
+            db.record_ret(conn, lv["id"], "ret_12h", ret_pct)
         if lv.get("ret_24h") is None and 24 * 3600 <= elapsed <= 30 * 3600:
             db.record_ret(conn, lv["id"], "ret_24h", ret_pct)
         if lv.get("ret_72h") is None and 72 * 3600 <= elapsed <= 78 * 3600:
@@ -1218,12 +1245,22 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         outcome = None
         resolve_price = None
         ambiguous = False
+        _running_mfe = 0.0
+        _running_mae = 0.0
         candles = get_range(ticker, 40) or []
         for (c_start, c_end, c_high, c_low) in candles:
             # 진행 중 캔들(c_end>now)은 제외 — 터치 이전 가격이 남아 있을 수 있고
             # 15분봉 폴백에선 최대 15분치가 섞인다 (2026-07-26 감사 major2)
             if c_end <= lv["touched_at"] or c_end > now:
                 continue
+            # MFE/MAE 누적 (long 전용: high=유리, low=불리)
+            if base_eff > 0:
+                _h_pct = (c_high - base_eff) / base_eff * 100
+                _l_pct = (c_low - base_eff) / base_eff * 100
+                if _h_pct > _running_mfe:
+                    _running_mfe = _h_pct
+                if _l_pct < _running_mae:
+                    _running_mae = _l_pct
             tp_hit = tp_krw > 0 and c_high >= tp_krw
             sl_hit = sl_krw > 0 and c_low <= sl_krw
             if tp_hit and sl_hit:
@@ -1414,15 +1451,18 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     db.clear_pending_tp(conn, lv["id"])
                 db.resolve_outcome(conn, lv["id"], "hit", resolve_price, mode,
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
+                db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
                 resolved += 1
         elif outcome == "miss":
             db.resolve_outcome(conn, lv["id"], "miss", resolve_price, mode,
                                r_multiple=_r(resolve_price), ambiguous=ambiguous, now=now)
+            db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
         elif elapsed >= window_sec:
             oc = "timeboxed_win" if current >= base_eff else "timeboxed_loss"
             db.resolve_outcome(conn, lv["id"], oc, current, mode,
                                r_multiple=_r(current), now=now)
+            db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
 
     if resolved:

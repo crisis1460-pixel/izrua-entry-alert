@@ -136,24 +136,35 @@ SUPPLY_CVD_NEG = -0.15       # CVD 비율 이하 = 공격 매도 우위 (경고 
 SUPPLY_CVD_POS = 0.15        # CVD 비율 이상 = 공격 매수 우위 (확인 신호)
 SUPPLY_OBI_SELL_WALL = 0.67  # 호가 매수/매도 잔량비 이하 = 매도벽
 SUPPLY_OBI_BUY_WALL = 1.5    # 호가 매수/매도 잔량비 이상 = 매수벽
+# 옵션·청산 보정 경계 (2026-08-14 기획 확정 — BTC 전용 시장 컨텍스트,
+# 전 코인 알림에 적용. 수치 비노출, 판정 라벨 이동에만 사용).
+SUPPLY_PC_EXTREME_HIGH = 1.5   # P/C Ratio 이상 = 극단 풋 우위 (약세 경고)
+SUPPLY_PC_EXTREME_LOW = 0.5    # P/C Ratio 이하 = 극단 콜 우위 (과열 경고)
+SUPPLY_MAX_PAIN_DIST = 0.03    # Max Pain 거리(3%) 이상이면 보정 적용
+SUPPLY_LIQ_WARN = "long_heavy"   # 하방 롱 청산 집중 = 경고
+SUPPLY_LIQ_CONFIRM = "short_heavy"  # 상방 숏 청산 집중 = 확인
 
 
 def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
-                          cvd_ratio=None, bid_ask_ratio=None):
+                          cvd_ratio=None, bid_ask_ratio=None,
+                          options_ctx=None, liq_ctx=None):
     """펀딩 쏠림 × (OI 증감 + 가격 방향) → 매수 관점 판정.
 
     반환 (label, reason|None) — label ∈ '우호'/'주의'/'중립', reason 은 괄호
     근거(최대 5자, 모바일 한 줄 유지). 입력 전부 None 이면 (None, None) —
     호출부가 행을 생략한다. OI/가격이 없으면 펀딩 단독 판정으로 폴백.
 
-    CVD·호가 보정 (2026-08-14 사용자 확정): cvd_ratio(4h taker 불균형)와
-    bid_ask_ratio(호가 잔량비)는 **라벨 이동에만** 반영하고 근거 텍스트·수치는
-    알림에 노출하지 않는다(SL 과 동일한 내부 기준선 원칙). 좋은 판정을 더
+    CVD·호가·옵션·청산 보정: cvd_ratio, bid_ask_ratio, options_ctx(BTC 옵션
+    P/C Ratio·Max Pain), liq_ctx(BTC 청산 클러스터)는 **라벨 이동에만** 반영하고
+    근거 텍스트·수치는 알림에 노출하지 않는다(내부 기준선 원칙). 좋은 판정을 더
     올리는 것보다 나쁜 신호로 낮추는 쪽을 우선(허수 터치 경고가 목적):
       · 우호 + 경고신호 1개 이상 → 중립
       · 중립 + 경고신호 2개 → 주의
       · 중립 + 확인신호 2개 → 우호 (둘 다 갖춰야만 상향 — 보수 원칙)
-    '주의'는 보정으로 좋아지지 않는다."""
+    '주의'는 보정으로 좋아지지 않는다.
+
+    options_ctx (2026-08-14): {"pc_ratio": float, "max_pain": float} 또는 None.
+    liq_ctx (2026-08-14): {"pressure": float, "direction": str} 또는 None."""
     f_hot_long = funding_pct is not None and funding_pct > SUPPLY_FUNDING_HOT
     f_hot_short = funding_pct is not None and funding_pct < -SUPPLY_FUNDING_HOT
 
@@ -202,6 +213,24 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
         if bid_ask_ratio <= SUPPLY_OBI_SELL_WALL:
             warn += 1
         elif bid_ask_ratio >= SUPPLY_OBI_BUY_WALL:
+            confirm += 1
+    # 옵션 컨텍스트 보정 (BTC 전용 시장 컨텍스트 — 전 코인 적용)
+    if options_ctx is not None:
+        pc = options_ctx.get("pc_ratio")
+        mp = options_ctx.get("max_pain")
+        if pc is not None:
+            if pc >= SUPPLY_PC_EXTREME_HIGH or pc <= SUPPLY_PC_EXTREME_LOW:
+                warn += 1
+        if mp is not None and funding_pct is not None:
+            # Max Pain 대비 현재 BTC 가격 거리는 호출부가 제공할 수 없으므로
+            # P/C Ratio 극단만 보정에 사용 (Max Pain은 향후 가격 입력 추가 시 활용)
+            pass
+    # 청산 클러스터 보정 (BTC 전용 시장 컨텍스트 — 전 코인 적용)
+    if liq_ctx is not None:
+        liq_dir = liq_ctx.get("direction")
+        if liq_dir == SUPPLY_LIQ_WARN:
+            warn += 1
+        elif liq_dir == SUPPLY_LIQ_CONFIRM:
             confirm += 1
     if label == "우호" and warn >= 1:
         label = "중립"
