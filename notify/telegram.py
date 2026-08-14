@@ -554,15 +554,18 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     if _supply is None and funding_rate is not None:
         from monitor.binance import derive_supply_verdict
         _supply = derive_supply_verdict(funding_rate, None, None)
+    # 헤더 어휘 개편 (2026-08-14 사용자 확정): 수급→돈 흐름 — 초보자 직관.
     if _supply and _supply[0]:
         _sv, _sr = _supply
-        lines.append(f"🧭 수급: {_sv} ({_sr})" if _sr else f"🧭 수급: {_sv}")
+        lines.append(f"🧭 돈 흐름: {_sv} ({_sr})" if _sr else f"🧭 돈 흐름: {_sv}")
     # 펀딩 레짐 전환 (2026-08-03 스프린트08 사용자 결정): 30일+ 지속 음수 → 양수
     # 플립 감지 시 🔥 강조 배지. 등급 산식엔 영향 없음(배지만).
-    # 표기 짧게 (사용자 결정): "🔥 N일 음수→양수" — 숫자·화살표만.
+    # 표기 개편 (2026-08-14 사용자 확정 A안): "N일 음수→양수"는 방향성이
+    # 안 읽힌다는 피드백 → 펀딩이 실제로 말해주는 사실(매수 수요 복귀)을
+    # 그대로 — 과장("바닥 탈출") 없이 호재로 읽히는 표현.
     if funding_regime_flip and funding_regime_flip.get("flipped"):
         _nd = funding_regime_flip.get("neg_days") or 0
-        lines.append(f"🔥 {_nd:.0f}일 음수→양수")
+        lines.append(f"🔥 {_nd:.0f}일만에 매수세 복귀")
     if kimchi_pct is not None:
         # 급변 화살표 (2026-08-14 사용자 확정): ~6h 대비 ±0.5%p 이상 움직였을
         # 때만 화살표 1글자 — 평시 표기는 종전과 완전 동일(행 폭 유지).
@@ -579,8 +582,10 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         btc_d = sentiment.get("btc_dominance")
         alt_s = sentiment.get("altcoin_season_index")
         fng = sentiment.get("fear_greed")
+        # 헤더 어휘 개편 (2026-08-14 사용자 확정): BTC.D→비트 점유율,
+        # ALT.S→알트장, F&G→시장심리 — 영문 약어를 우리말로.
         if btc_d is not None:
-            lines.append(f"🌍 BTC.D: {btc_d}%")
+            lines.append(f"🌍 비트 점유율: {btc_d}%")
         if alt_s is not None:
             if alt_s >= 75:
                 alt_label = "알트 매수 권장"
@@ -590,11 +595,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 alt_label = "BTC 매수 고려"
             else:
                 alt_label = "BTC 매수 권장"
-            lines.append(f"🪙 ALT.S: {alt_s} ({alt_label})")
+            lines.append(f"🪙 알트장: {alt_s} ({alt_label})")
         if fng is not None:
             label_kr = _FNG_KR.get(sentiment.get("fear_greed_label", ""),
                                    sentiment.get("fear_greed_label", ""))
-            lines.append(f"😨 F&G: {fng} ({label_kr})")
+            lines.append(f"😨 시장심리: {fng} ({label_kr})")
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)

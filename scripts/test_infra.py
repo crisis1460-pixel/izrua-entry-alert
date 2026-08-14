@@ -225,7 +225,7 @@ check("수급보정: 중립+확인1 → 유지", v[0] == "중립")
 
 # 주의는 보정으로 좋아지지 않음
 v = derive_supply_verdict(0.02, 5.0, 2.0, cvd_ratio=0.5, bid_ask_ratio=3.0)
-check("수급보정: 주의는 상향 불가", v == ("주의", "롱 과열"))
+check("수급보정: 주의는 상향 불가", v == ("주의", "추격 위험"))
 
 # 임계 미만 보정값은 무시 (경계 안쪽)
 v = derive_supply_verdict(0.005, 5.0, 2.0, cvd_ratio=-0.1, bid_ask_ratio=0.8)

@@ -344,26 +344,35 @@ def _base_position_verdict(rsi_d, rsi_w, price=None,
         aligned_down = ma20 < ma60 < ma120
     support = _nearest_support(price, {20: ma20, 60: ma60, 120: ma120})
 
+    # 어휘 개편 (2026-08-14 사용자 확정): 초보자 직관 어휘로 교체하고
+    # 근거를 **2토큰 상한**으로 다이어트 — 종전 3토큰+4h(최장 44칼럼)가
+    # _MAX_LINE_COLS(32) 를 넘어 프로덕션에서 잘려 나가던 버그의 근본 수정.
+    # 교체표: 정배열→상승세, 역배열→하락세, 눌림목→조정중, 일NN→RSINN,
+    # 주NN→주RSINN. 토큰 우선순위: 4h경고 > N일지지 > 추세 > RSI숫자.
+    # 판정 라벨(최적~위험)은 불변 — 축적 통계(touch_position_verdict)의
+    # 라벨 연속성 유지, 근거 텍스트만 교체.
+
     # 주봉 극단 최우선 (기존 규칙 유지, 위험/우호 배치만 5단계로)
     if rsi_w is not None:
         if rsi_w >= 70:
-            return "위험", f"장기과열·주{rsi_w:.0f}"
+            return "위험", f"장기과열·주RSI{rsi_w:.0f}"
         if rsi_w <= 30 and rsi_d is not None and rsi_d <= RSI_PULLBACK_MAX:
-            return "우호", f"장기바닥·주{rsi_w:.0f}"
+            return "우호", f"장기바닥·주RSI{rsi_w:.0f}"
     if rsi_d is None:
         return None, None
 
     in_pullback = rsi_d <= RSI_PULLBACK_MAX     # 조정권 (바닥권 포함)
-    rsi_tag = "바닥권" if rsi_d <= 30 else "눌림목"
-    d_tok = f"일{rsi_d:.0f}"
+    rsi_tag = "바닥권" if rsi_d <= 30 else "조정중"
+    d_tok = f"RSI{rsi_d:.0f}"
 
-    # 역배열 강등 — 겉보기 눌림목/과열의 함정·위험 처리
+    # 하락세(역배열) 강등 — 겉보기 조정/과열의 함정·위험 처리.
+    # 과열 단어는 생략 — RSI 숫자와 '위험' 라벨이 이미 전달한다(2토큰 상한).
     if aligned_down:
         if rsi_d >= 70:
-            return "위험", f"역배열·과열·{d_tok}"
+            return "위험", f"하락세·{d_tok}"
         if in_pullback:
-            return "주의", f"역배열·{d_tok}"
-        return "중립", f"역배열·{d_tok}"
+            return "주의", f"하락세·{d_tok}"
+        return "중립", f"하락세·{d_tok}"
 
     if rsi_d >= 70:
         return "주의", f"과열·{d_tok}"
@@ -371,20 +380,20 @@ def _base_position_verdict(rsi_d, rsi_w, price=None,
     if in_pullback:
         sup_tok = f"{support[0]}일지지" if support else None
         if support and aligned_up:
-            return "최적", f"{sup_tok}·정배열·{d_tok}"
+            return "최적", f"{sup_tok}·상승세"   # RSI 생략 — 지지>추세>숫자
         if support:
             return "우호", f"{sup_tok}·{d_tok}"
         if aligned_up:
-            return "우호", f"{rsi_tag}·정배열·{d_tok}"
+            return "우호", f"상승세·{d_tok}"
         if rsi_d <= 30:
             return "우호", f"바닥권·{d_tok}"    # 과매도 단독은 강한 신호
-        return "중립", f"{rsi_tag}·{d_tok}"     # RSI 단독 눌림목 — 확인 부재
+        return "중립", f"{rsi_tag}·{d_tok}"     # RSI 단독 조정 — 확인 부재
     if rsi_d < 60:
         if support:
             return "중립", f"{support[0]}일지지·{d_tok}"
         return "중립", d_tok
-    _al = "·정배열" if aligned_up else ""
-    return "중립", f"상승중{_al}·{d_tok}"
+    # 상승세 = 이평 정배열 동반, 상승중 = RSI 상승권 단독
+    return "중립", f"{'상승세' if aligned_up else '상승중'}·{d_tok}"
 
 
 # 4h RSI 오버레이 (2026-08-08 사용자 결정: "극단값만 경고로 개입") — 일/주봉
@@ -421,12 +430,22 @@ def derive_position_verdict(rsi_d, rsi_w, price=None,
     label, reason = _base_position_verdict(rsi_d, rsi_w, price, ma20, ma60, ma120)
     if label is None or rsi_4h is None:
         return label, reason
+
+    def _cap2(base: str, tag: str) -> str:
+        # 2토큰 상한 (2026-08-14): 4h 경고가 최우선이라 기존 근거의 마지막
+        # (최하위) 토큰을 밀어내고 붙는다 — 3토큰 초과분이 32칼럼을 넘겨
+        # 잘리던 종전 문제 방지.
+        toks = base.split("·") if base else []
+        if len(toks) >= 2:
+            toks = toks[:-1]
+        return "·".join(toks + [tag]) if toks else tag
+
     if rsi_4h >= RSI_4H_HOT:
         if label in ("최적", "우호"):
             label = _TIER_ORDER[_TIER_ORDER.index(label) + 1]
-        reason = f"{reason}·4h과열" if reason else "4h과열"
+        reason = _cap2(reason, "4h과열")
     elif rsi_4h <= RSI_4H_COLD:
-        reason = f"{reason}·4h급락" if reason else "4h급락"
+        reason = _cap2(reason, "4h급락")
     return label, reason
 
 

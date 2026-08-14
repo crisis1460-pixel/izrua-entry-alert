@@ -163,14 +163,18 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
         oi_up = oi_change_pct > 0
         px_up = price_change_pct >= SUPPLY_PRICE_MIN_PCT
         px_down = price_change_pct <= -SUPPLY_PRICE_MIN_PCT
+        # 근거 어휘 개편 (2026-08-14 사용자 확정 — 초보자 직관 어휘):
+        # 숏 몰림→반등 연료, 숏 유입→하락 베팅, 롱 과열→추격 위험,
+        # 청산 반등→속임 반등, 숏 과열→반등 여지. 라벨(우호/중립/주의)은
+        # 불변 — 축적 통계(touch_supply_verdict) 라벨 연속성 유지.
         if oi_up and px_down:
             # 신규 숏 유입 — 숏 과열까지 겹치면 스퀴즈 연료
-            label, reason = ("우호", "숏 몰림") if f_hot_short else ("중립", "숏 유입")
+            label, reason = ("우호", "반등 연료") if f_hot_short else ("중립", "하락 베팅")
         elif oi_up and px_up:
             # 신규 매수 유입 — 롱 과열이면 추격 위험
-            label, reason = ("주의", "롱 과열") if f_hot_long else ("우호", "자금 유입")
+            label, reason = ("주의", "추격 위험") if f_hot_long else ("우호", "자금 유입")
         elif (not oi_up) and px_up:
-            label, reason = ("주의", "청산 반등")   # 새 돈 없는 반등
+            label, reason = ("주의", "속임 반등")   # 새 돈 없는 반등
         elif (not oi_up) and px_down:
             label, reason = ("중립", "투매 진행")   # 롱 청산
         else:
@@ -178,9 +182,9 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
             label, reason = ("중립", None)
     # OI 미확보/보합 → 펀딩 단독 폴백 (기존 라벨 의미 유지)
     elif f_hot_short:
-        label, reason = "우호", "숏 과열"
+        label, reason = "우호", "반등 여지"
     elif f_hot_long:
-        label, reason = "주의", "롱 과열"
+        label, reason = "주의", "추격 위험"
     elif funding_pct is not None:
         label, reason = "중립", None
     else:

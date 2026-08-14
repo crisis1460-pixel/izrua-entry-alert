@@ -256,8 +256,8 @@ check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and 
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
 # 2026-08-08 최종 결정: 화이트리스트 ⭐⭐ 표시 숨김(거추장스럽다 - 다른 지표로 판단)
 check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" not in touch_msg)
-check("T4 시장심리 행", "BTC.D: 56.6%" in touch_msg and "ALT.S: 32 (BTC 매수 고려)" in touch_msg
-      and "F&G: 31 (공포)" in touch_msg)
+check("T4 시장심리 행", "비트 점유율: 56.6%" in touch_msg and "알트장: 32 (BTC 매수 고려)" in touch_msg
+      and "시장심리: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
 check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not in touch_msg
       and "평균 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg)
@@ -429,15 +429,16 @@ _sl_short = dict(_sl_long, direction="short", sl_usd=105.0, tp_usd=90.0)
 msg_short_sl = tg.render_alert("touch", "BTC", [_sl_short], 100.0 * USDT_KRW, USDT_KRW)
 check("T14M 숏 SL 데이터 있어도 📐 SL 행 미표시",
       "📐" not in msg_short_sl and "R:R" not in msg_short_sl)
-# T14N: 펀딩 레짐 전환 배지 (스프린트08) — 감지 시 "🔥 N일 음수→양수" 짧게, 미감지 시 무.
+# T14N: 펀딩 레짐 전환 배지 (스프린트08, 2026-08-14 어휘 개편) — 감지 시
+# "🔥 N일만에 매수세 복귀", 미감지 시 무.
 _fund_lv = dict(_sl_long, author="FundAuth")
 _flip = {"flipped": True, "neg_days": 32.3, "latest": 0.0012}
 msg_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                            funding_rate=0.0012, funding_regime_flip=_flip)
 msg_noflip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                              funding_rate=0.0012, funding_regime_flip=None)
-check("T14N 레짐 전환 감지 시 '🔥 32일 음수→양수' 표시, 미감지 시 무",
-      "🔥 32일 음수→양수" in msg_flip and "🔥" not in msg_noflip)
+check("T14N 레짐 전환 감지 시 '🔥 32일만에 매수세 복귀' 표시, 미감지 시 무",
+      "🔥 32일만에 매수세 복귀" in msg_flip and "🔥" not in msg_noflip)
 # T14N2 (2026-08-03 R1 감사): 다른 시장심리 지표(sentiment/kimchi/funding_rate)가
 # 모두 없어도 레짐 배지만 있으면 세퍼레이터가 붙어야 한다 — 예전엔 배지가
 # 세퍼레이터 없이 목표가 행 바로 아래에 뜨는 렌더 이슈가 있었다.
@@ -445,7 +446,7 @@ _msg_only_flip = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, U
                                  sentiment=None, kimchi_pct=None,
                                  funding_rate=None, funding_regime_flip=_flip)
 check("T14N2 레짐 배지 단독 - 세퍼레이터 이후 렌더",
-      "🔥 32일 음수→양수" in _msg_only_flip
+      "🔥 32일만에 매수세 복귀" in _msg_only_flip
       and _msg_only_flip.find(tg._SEP + "\n🔥") >= 0)
 # T14O (2026-08-07 개편): 종전 "💰 펀딩 수치+라벨" 줄 → "🧭 수급" 판정 한 줄.
 # supply 미전달 구 호출부는 funding_rate 단독 폴백으로 같은 줄이 나와야 한다.
@@ -455,30 +456,30 @@ msg_cold = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KR
                            funding_rate=-0.05)
 msg_neutral = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                               funding_rate=0.001)
-check("T14O 수급 폴백: 롱과열→주의(롱 과열) / 숏과열→우호(숏 과열) / 그 외→중립",
-      "🧭 수급: 주의 (롱 과열)" in msg_hot
-      and "🧭 수급: 우호 (숏 과열)" in msg_cold
-      and "🧭 수급: 중립" in msg_neutral and "💰 펀딩" not in msg_neutral)
+check("T14O 수급 폴백: 롱과열→주의(추격 위험) / 숏과열→우호(반등 여지) / 그 외→중립",
+      "🧭 돈 흐름: 주의 (추격 위험)" in msg_hot
+      and "🧭 돈 흐름: 우호 (반등 여지)" in msg_cold
+      and "🧭 돈 흐름: 중립" in msg_neutral and "💰 펀딩" not in msg_neutral)
 # T14O2: supply 명시 전달 시 그대로 렌더 + 원시 펀딩 수치는 미노출.
 msg_sup = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
-                          funding_rate=-0.05, supply=("우호", "숏 몰림"))
+                          funding_rate=-0.05, supply=("우호", "반등 연료"))
 check("T14O2 수급 명시 전달 - 합성 판정 렌더·펀딩 수치 미노출",
-      "🧭 수급: 우호 (숏 몰림)" in msg_sup and "-0.05" not in msg_sup)
+      "🧭 돈 흐름: 우호 (반등 연료)" in msg_sup and "-0.05" not in msg_sup)
 
 # ── SV1~SV5: derive_supply_verdict 판정 매트릭스 (2026-08-07) ──────────────
 from monitor.binance import derive_supply_verdict as _sv
-check("SV1 숏 과열+신규 숏 유입 → 우호(숏 몰림) / 중립 펀딩이면 중립(숏 유입)",
-      _sv(-0.02, +8.0, -3.0) == ("우호", "숏 몰림")
-      and _sv(0.0, +8.0, -3.0) == ("중립", "숏 유입"))
+check("SV1 숏 과열+신규 숏 유입 → 우호(반등 연료) / 중립 펀딩이면 중립(하락 베팅)",
+      _sv(-0.02, +8.0, -3.0) == ("우호", "반등 연료")
+      and _sv(0.0, +8.0, -3.0) == ("중립", "하락 베팅"))
 check("SV2 신규 매수 유입 → 롱 과열이면 주의, 아니면 우호(자금 유입)",
-      _sv(+0.02, +8.0, +3.0) == ("주의", "롱 과열")
+      _sv(+0.02, +8.0, +3.0) == ("주의", "추격 위험")
       and _sv(0.0, +8.0, +3.0) == ("우호", "자금 유입"))
-check("SV3 OI 감소+가격 상승 → 주의(청산 반등) / +하락 → 중립(투매 진행)",
-      _sv(0.0, -8.0, +3.0) == ("주의", "청산 반등")
+check("SV3 OI 감소+가격 상승 → 주의(속임 반등) / +하락 → 중립(투매 진행)",
+      _sv(0.0, -8.0, +3.0) == ("주의", "속임 반등")
       and _sv(-0.02, -8.0, -3.0) == ("중립", "투매 진행"))
 check("SV4 OI 보합(<3%)/미확보 → 펀딩 단독 폴백",
-      _sv(-0.02, +1.0, -3.0) == ("우호", "숏 과열")
-      and _sv(+0.02, None, None) == ("주의", "롱 과열")
+      _sv(-0.02, +1.0, -3.0) == ("우호", "반등 여지")
+      and _sv(+0.02, None, None) == ("주의", "추격 위험")
       and _sv(0.001, None, None) == ("중립", None))
 check("SV5 전부 없음 → (None, None) - 행 생략",
       _sv(None, None, None) == (None, None))
@@ -502,71 +503,75 @@ check("RSI4 무변동 → 100 (division-safe)", _rsi([5.0] * 30) == 100.0)
 # RPV — 5단계 개편 (2026-08-08 MA 확장 + 기준값 검토):
 # 최적/우호/중립/주의/위험. RSI 단독 눌림목은 중립(Cardwell 정설 — 확인 부재),
 # 바닥권(<=30) 단독은 우호 유지. MA 미전달은 RSI 단독 폴백.
-check("RPV1 RSI 단독(MA 폴백): 바닥권 우호 / 눌림목 중립 강등 / 과열 주의",
-      _pv(27.0, 50.0) == ("우호", "바닥권·일27")
-      and _pv(38.0, 50.0) == ("중립", "눌림목·일38")
-      and _pv(48.0, 50.0) == ("중립", "눌림목·일48")  # 상한 45→50 확대
-      and _pv(52.0, 50.0) == ("중립", "일52")
-      and _pv(64.0, 50.0) == ("중립", "상승중·일64")
-      and _pv(74.0, 50.0) == ("주의", "과열·일74"))
+check("RPV1 RSI 단독(MA 폴백): 바닥권 우호 / 조정중 중립 강등 / 과열 주의",
+      _pv(27.0, 50.0) == ("우호", "바닥권·RSI27")
+      and _pv(38.0, 50.0) == ("중립", "조정중·RSI38")
+      and _pv(48.0, 50.0) == ("중립", "조정중·RSI48")  # 상한 45→50 확대
+      and _pv(52.0, 50.0) == ("중립", "RSI52")
+      and _pv(64.0, 50.0) == ("중립", "상승중·RSI64")
+      and _pv(74.0, 50.0) == ("주의", "과열·RSI74"))
 check("RPV2 주봉 극단: 주>=70 위험(일봉 무관) / 주<=30+일<=50 장기바닥 우호",
-      _pv(38.0, 72.0) == ("위험", "장기과열·주72")
-      and _pv(38.0, 28.0) == ("우호", "장기바닥·주28")
-      and _pv(60.0, 28.0) == ("중립", "상승중·일60"))
+      _pv(38.0, 72.0) == ("위험", "장기과열·주RSI72")
+      and _pv(38.0, 28.0) == ("우호", "장기바닥·주RSI28")
+      and _pv(60.0, 28.0) == ("중립", "상승중·RSI60"))
 check("RPV3 결측: 일봉 없으면 주봉 극단만 판정, 전부 없으면 (None,None)",
-      _pv(None, 72.0) == ("위험", "장기과열·주72")
+      _pv(None, 72.0) == ("위험", "장기과열·주RSI72")
       and _pv(None, 50.0) == (None, None)
       and _pv(None, None) == (None, None))
 # MA 케이스 — price/ma20/ma60/ma120 전달 시
 _MAS_UP = dict(ma20=110.0, ma60=100.0, ma120=90.0)     # 정배열
 _MAS_DOWN = dict(ma20=90.0, ma60=100.0, ma120=110.0)   # 역배열
 _MAS_MIX = dict(ma20=100.0, ma60=110.0, ma120=90.0)    # 혼조
-check("RPV5 최적 = 3박자(지지+정배열+조정권): 60일선 +2% 이내 터치",
-      _pv(38.0, 50.0, price=101.0, **_MAS_UP) == ("최적", "60일지지·정배열·일38"))
+# 2026-08-14 어휘 개편 + 2토큰 상한: 정배열→상승세, 역배열→하락세,
+# 눌림목→조정중, 일NN→RSINN, 주NN→주RSINN. 3박자 최적은 지지·추세만
+# 표기(RSI 생략), 4h 태그는 마지막 토큰을 밀어내고 붙는다 — 종전 3~4토큰이
+# 32칼럼을 넘어 프로덕션에서 잘리던 버그의 근본 수정.
+check("RPV5 최적 = 3박자(지지+상승세+조정권): 60일선 +2% 이내 터치",
+      _pv(38.0, 50.0, price=101.0, **_MAS_UP) == ("최적", "60일지지·상승세"))
 check("RPV5b 지지 밴드: 상단 +3% 이내 인정 / +3% 초과·하단 -1% 초과는 미인정",
       _pv(38.0, 50.0, price=102.9, **_MAS_UP)[0] == "최적"
-      and _pv(38.0, 50.0, price=103.2, **_MAS_UP) == ("우호", "눌림목·정배열·일38")
-      and _pv(38.0, 50.0, price=98.9, **_MAS_UP) == ("우호", "눌림목·정배열·일38"))
-check("RPV6 우호 = 2박자: 지지+조정권(혼조) / 정배열+조정권(지지 없음)",
-      _pv(38.0, 50.0, price=110.5, **_MAS_MIX) == ("우호", "60일지지·일38")
-      and _pv(44.0, 50.0, price=150.0, **_MAS_UP) == ("우호", "눌림목·정배열·일44"))
-check("RPV7 역배열 강등: 조정권 주의(함정) / 과열 위험 / 그 외 중립",
-      _pv(38.0, 50.0, price=150.0, **_MAS_DOWN) == ("주의", "역배열·일38")
-      and _pv(74.0, 50.0, price=150.0, **_MAS_DOWN) == ("위험", "역배열·과열·일74")
-      and _pv(64.0, 50.0, price=150.0, **_MAS_DOWN) == ("중립", "역배열·일64"))
-check("RPV8 중립대(50~60) 지지 근접은 정보만: 중립 (60일지지·일52)",
-      _pv(52.0, 50.0, price=110.5, **_MAS_MIX) == ("중립", "60일지지·일52")
-      and _pv(64.0, 50.0, price=150.0, **_MAS_UP) == ("중립", "상승중·정배열·일64"))
+      and _pv(38.0, 50.0, price=103.2, **_MAS_UP) == ("우호", "상승세·RSI38")
+      and _pv(38.0, 50.0, price=98.9, **_MAS_UP) == ("우호", "상승세·RSI38"))
+check("RPV6 우호 = 2박자: 지지+조정권(혼조) / 상승세+조정권(지지 없음)",
+      _pv(38.0, 50.0, price=110.5, **_MAS_MIX) == ("우호", "60일지지·RSI38")
+      and _pv(44.0, 50.0, price=150.0, **_MAS_UP) == ("우호", "상승세·RSI44"))
+check("RPV7 하락세 강등: 조정권 주의(함정) / 과열 위험 / 그 외 중립",
+      _pv(38.0, 50.0, price=150.0, **_MAS_DOWN) == ("주의", "하락세·RSI38")
+      and _pv(74.0, 50.0, price=150.0, **_MAS_DOWN) == ("위험", "하락세·RSI74")
+      and _pv(64.0, 50.0, price=150.0, **_MAS_DOWN) == ("중립", "하락세·RSI64"))
+check("RPV8 중립대(50~60) 지지 근접은 정보만: 중립 (60일지지·RSI52)",
+      _pv(52.0, 50.0, price=110.5, **_MAS_MIX) == ("중립", "60일지지·RSI52")
+      and _pv(64.0, 50.0, price=150.0, **_MAS_UP) == ("중립", "상승세·RSI64"))
 check("RPV9 가장 가까운 지지선 선택: 20일선이 60일선보다 가까우면 20일지지",
-      _pv(44.0, 50.0, price=110.5, **_MAS_UP) == ("최적", "20일지지·정배열·일44"))
+      _pv(44.0, 50.0, price=110.5, **_MAS_UP) == ("최적", "20일지지·상승세"))
 
 # ── RPV10~13: 4h RSI 극단 경고 오버레이 (2026-08-08 사용자 결정 - 극단값만 개입) ──
 check("RPV10 4h 과열(>=70) - 최적/우호 각각 한 단계 강등 + 태그 병기",
       _pv(38.0, 50.0, price=101.0, rsi_4h=74.0, **_MAS_UP)
-      == ("우호", "60일지지·정배열·일38·4h과열")
+      == ("우호", "60일지지·4h과열")
       and _pv(38.0, 50.0, price=110.5, rsi_4h=74.0, **_MAS_MIX)
-      == ("중립", "60일지지·일38·4h과열"))
+      == ("중립", "60일지지·4h과열"))
 check("RPV11 4h 과열이어도 이미 중립 이하면 등급 불변, 태그만 병기",
-      _pv(52.0, 50.0, price=150.0, rsi_4h=74.0, **_MAS_MIX) == ("중립", "일52·4h과열")
+      _pv(52.0, 50.0, price=150.0, rsi_4h=74.0, **_MAS_MIX) == ("중립", "RSI52·4h과열")
       and _pv(38.0, 50.0, price=150.0, rsi_4h=74.0, **_MAS_DOWN)
-      == ("주의", "역배열·일38·4h과열"))
+      == ("주의", "하락세·4h과열"))
 check("RPV12 4h 급락(<=30) - 등급은 그대로, 정보 태그만 추가",
       _pv(38.0, 50.0, price=101.0, rsi_4h=25.0, **_MAS_UP)
-      == ("최적", "60일지지·정배열·일38·4h급락"))
+      == ("최적", "60일지지·4h급락"))
 check("RPV13 4h 평범(30<x<70) 또는 미전달 - 태그 없음(기존 동작 그대로)",
       _pv(38.0, 50.0, price=101.0, rsi_4h=50.0, **_MAS_UP)
-      == ("최적", "60일지지·정배열·일38")
+      == ("최적", "60일지지·상승세")
       and _pv(38.0, 50.0, price=101.0, **_MAS_UP)
-      == ("최적", "60일지지·정배열·일38"))
+      == ("최적", "60일지지·상승세"))
 check("RPV14 base 판정이 (None,None)이면 4h 극단이어도 등급 생성 안 함",
       _pv(None, None, rsi_4h=74.0) == (None, None))
 
 # 렌더: 52주 블록 아래 자리 줄
 _msg_pos = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                            week52=(200.0 * USDT_KRW, 50.0 * USDT_KRW),
-                           position=("우호", "눌림목·일38"))
+                           position=("우호", "조정중·RSI38"))
 check("RPV4 렌더: 🌡️ 자리 줄이 52주 블록 뒤에 표시",
-      "🌡️ 자리: 우호 (눌림목·일38)" in _msg_pos
+      "🌡️ 자리: 우호 (조정중·RSI38)" in _msg_pos
       and _msg_pos.find("현재") < _msg_pos.find("🌡️"))
 
 # ── VR1~VR3: 판정 로깅 + 자가검증 집계 (2026-08-07) ─────────────────────────
@@ -584,8 +589,8 @@ with db.connect(_VR_DB) as conn:
             (f"vr-{i}", "VRC", "KRW-VRC", now - 1000, ret24, ret72))
         _vr_ids.append(conn.execute("SELECT last_insert_rowid() AS i").fetchone()[0])
     # 앞 2건 우호, 뒤 1건 주의로 기록
-    db.record_touch_verdicts(conn, _vr_ids[:2], ("우호", "숏 몰림"), ("우호", "눌림목·일38"))
-    db.record_touch_verdicts(conn, _vr_ids[2:], ("주의", "롱 과열"), None)
+    db.record_touch_verdicts(conn, _vr_ids[:2], ("우호", "반등 연료"), ("우호", "조정중·RSI38"))
+    db.record_touch_verdicts(conn, _vr_ids[2:], ("주의", "추격 위험"), None)
     # 재기록 시도(재발송 재현) — 최초 기록이 보존돼야 한다
     db.record_touch_verdicts(conn, _vr_ids[:1], ("중립", ""), ("중립", ""))
     _vr_first = conn.execute(
@@ -593,7 +598,7 @@ with db.connect(_VR_DB) as conn:
         "FROM levels WHERE id=?", (_vr_ids[0],)).fetchone()
     _vs = db.get_verdict_stats(conn)
 check("VR1 판정 기록 - 최초 기록 우선(재발송이 덮어쓰지 않음)",
-      _vr_first["s"] == "우호|숏 몰림" and _vr_first["p"] == "우호|눌림목·일38")
+      _vr_first["s"] == "우호|반등 연료" and _vr_first["p"] == "우호|조정중·RSI38")
 check("VR2 집계 - 라벨별 n·평균 24h/72h (position 미기록 건은 해당 축 제외)",
       _vs["supply"]["우호"]["n"] == 2 and abs(_vs["supply"]["우호"]["avg24"] - 2.0) < 1e-9
       and abs(_vs["supply"]["우호"]["avg72"] - 3.5) < 1e-9
