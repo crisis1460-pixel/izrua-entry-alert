@@ -884,12 +884,14 @@ with db.connect(TEST_DB_RC) as conn:
 check("수리9-R5: --symbols 는 순환 미적용(전체가 아닌 지정분만, meta 불변)",
       _fetched == ["R0"] and _off5 == "4")
 
-# R6: 페이싱 완충 + 지터(2026-08-02: 6~9s 랜덤)가 설정 소스에 반영돼 있다 — 이
-# 프로세스는 위에서 SETTINGS 를 0.0 으로 덮었으므로 소스 리터럴을 검사한다.
+# R6: 페이싱 완충 + 지터가 설정 소스에 반영돼 있다 — 이 프로세스는 위에서
+# SETTINGS 를 0.0 으로 덮었으므로 소스 리터럴을 검사한다.
+# 2026-08-14 24시간 슬로우 전환: 6~9s(주간)가 매 사이클 차단돼 검증된
+# 심야값 12~18s 로 통일 — 이 회귀 체크도 새 기본값을 고정한다.
 _settings_src = (_repo_root / "config" / "settings.py").read_text(encoding="utf-8")
-check("수리9-R6: tv_fetch_sleep 기본값 6.0~9.0 지터 (2026-08-02 403 완화)",
-      '"tv_fetch_sleep_sec": 6.0' in _settings_src
-      and '"tv_fetch_sleep_max_sec": 9.0' in _settings_src)
+check("수리9-R6: tv_fetch_sleep 기본값 12.0~18.0 지터 (2026-08-14 24h 슬로우)",
+      '"tv_fetch_sleep_sec": 12.0' in _settings_src
+      and '"tv_fetch_sleep_max_sec": 18.0' in _settings_src)
 
 
 # ══════════════════════════════════════════════════════════════════
