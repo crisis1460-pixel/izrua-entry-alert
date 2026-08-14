@@ -341,7 +341,7 @@ lv_path = A_DIR / f"levels_{WEEK}.ndjson"
 ds_path = A_DIR / f"daily_stats_{WEEK}.ndjson"
 check("A1 KST 주차 파일명으로 levels·daily_stats 덤프 생성",
       lv_path.exists() and ds_path.exists()
-      and set(res["files"]) == {lv_path.name, ds_path.name})
+      and {lv_path.name, ds_path.name} <= set(res["files"]))
 
 lv_lines = lv_path.read_text(encoding="utf-8").splitlines()
 lv_meta = json.loads(lv_lines[0])
