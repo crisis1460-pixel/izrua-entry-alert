@@ -43,6 +43,15 @@ SETTINGS = {
     # 흡수한다. 아래 값이 실제 주기 판정 기준이다(meta.last_collect_at 과 비교).
     "collect_interval_hours": 4,         # TradingView 수집 주기 (실효값)
     "collect_retry_minutes": 30,         # 수집 실패 후 재시도까지 백오프 (2분마다 재시도 방지)
+    # 수집 자체 시간 예산 (2026-08-15 수리). 24시간 슬로우 페이싱(12~18s) 전환 후
+    # 유니버스 완주에 ~20분이 걸려 **매 회차** run_cycle 의 12분 하드킬에 걸렸다 —
+    # 하드킬은 subprocess 실패라 last_collect_at(성공 마킹)이 영원히 안 찍혀
+    # "수집 단계 정지" 경고가 오탐으로 울렸고(08-14 20:20/08-15 00:05 실사고),
+    # 더 심각하게는 루프 '뒤'의 뒷정리(레벨 만료·재파싱·삭제감지 이월분)가 아예
+    # 실행되지 않았다. 이 예산 안에서 루프가 스스로 멈추고 순환 이월(offset)로
+    # 다음 회차에 이어받는다 — 하드킬(720s)보다 넉넉히 짧게 잡아 TG 소스·뒷정리
+    # (~1.5분 실측)까지 12분 안에 완주시킨다.
+    "collect_tv_deadline_sec": 570,      # TV 수집 루프 자체 마감 (9.5분)
     "max_post_age_hours": 168,           # 7일 이내 글만 수집
     "tv_fetch_sleep_sec": 12.0,          # 심볼당 요청 최소 간격. 이력: 3.0(2026-07-26,
                                           # 61번째 403 실측) → 5.0 → 6~9s 지터(08-02).
@@ -106,9 +115,17 @@ SETTINGS = {
     "cluster_band_pct": 1.0,             # 같은 코인 내 이 % 이내 entry 는 한 클러스터로 병합
     "level_expiry_hours": 168,           # 미터치 레벨 만료 (7일)
 
+    # ── 시장환경 필터 (2026-08-14 고도화) ─────────────────────────────
+    # 데이터 수집만 — 알림 메시지 양식 불변. 실패 시 무시(fail-safe).
+    "macro_dxy_enabled": True,           # DXY 달러인덱스 (Yahoo Finance, 무료)
+    "macro_fomc_cpi_enabled": True,      # FOMC/CPI 정적 캘린더 (API 0콜)
+    "macro_dvol_enabled": True,          # Deribit DVOL 변동성지수 (무료)
+    "token_unlock_enabled": True,        # DeFiLlama 토큰 언락 경고 (무료)
+
     # 알림 필터
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
     "alert_max_per_coin_per_day": 3,     # 코인당 하루 알림 상한
+    "alert_max_global_per_day": 15,      # 전체 코인 합산 하루 알림 상한 (알림 피로 방지)
     "alert_min_timeframe_hours": 4.0,    # 이 타임프레임 미만 아이디어는 알림 제외
                                           # (스캘핑/단타 필터). NULL(미명시)은 통과.
     # 최종(마지막) TP 가 진입가 대비 이 % 미만이면 알림 제외 (2026-08-03 사용자 결정:

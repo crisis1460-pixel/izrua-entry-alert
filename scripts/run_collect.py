@@ -430,6 +430,13 @@ def main() -> int:
     night_sleep_sec = settings.get("tv_night_sleep_sec") or sleep_sec
     night_sleep_max = max(night_sleep_sec, settings.get("tv_night_sleep_max_sec") or 0.0)
     max_age_h = settings.get("max_post_age_hours")
+    # 자체 시간 예산 (2026-08-15 수리) — 24시간 슬로우 페이싱(15s 평균)으로 완주가
+    # ~20분이 되면서 매 회차 run_cycle 12분 하드킬에 걸리던 문제. 하드킬은 실패
+    # 마킹이라 last_collect_at 이 안 찍혀 정지 경고 오탐 + 루프 뒤 뒷정리(만료·
+    # 재파싱·삭제감지) 전면 정지였다. 예산 소진 시 차단 이탈과 같은 정상 경로
+    # (stopped_at → 순환 이월)로 스스로 멈춘다. t0(프로세스 시작) 기준 — 하드킬
+    # 시계와 같은 기준점이라 유니버스 갱신·삭제감지가 오래 걸린 회차도 안전하다.
+    tv_deadline_sec = float(settings.get("collect_tv_deadline_sec") or 570)
 
     with db.connect(db_path) as conn:
         # ── 차단 쿨다운 복원 (2026-07-28 수리) ──────────────────────────────
@@ -514,6 +521,11 @@ def main() -> int:
 
         stopped_at = None
         for i, coin in enumerate(universe):
+            if time.time() - t0 > tv_deadline_sec:
+                stopped_at = i
+                logger.warning("수집 시간 예산(%.1f분) 소진 - 남은 %d개 심볼 다음 회차로 이월",
+                               tv_deadline_sec / 60, len(universe) - i)
+                break
             if tradingview.is_blocked():
                 stopped_at = i
                 logger.warning("차단 쿨다운 감지 - 남은 %d개 심볼 다음 회차로 이월",

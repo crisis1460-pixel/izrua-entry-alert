@@ -893,6 +893,28 @@ check("수리9-R6: tv_fetch_sleep 기본값 12.0~18.0 지터 (2026-08-14 24h 슬
       '"tv_fetch_sleep_sec": 12.0' in _settings_src
       and '"tv_fetch_sleep_max_sec": 18.0' in _settings_src)
 
+# R7 (2026-08-15): 수집 자체 시간 예산 < run_cycle 하드킬 여유 확보.
+# 24h 슬로우 전환(R6) 후 완주 ~20분 > 하드킬 12분이라 매 회차 TimeoutExpired →
+# last_collect_at 미갱신(정지 경고 오탐) + 루프 뒤 뒷정리 전면 정지였다.
+# 예산은 하드킬(720s)보다 최소 90초 짧아야 TG 소스·뒷정리가 완주한다.
+from scripts.run_cycle import COLLECT_TIMEOUT_SEC as _HARDKILL_SEC
+_deadline = settings.SETTINGS["collect_tv_deadline_sec"]
+check("수리9-R7: collect_tv_deadline_sec 이 하드킬보다 90초+ 짧다",
+      0 < _deadline <= _HARDKILL_SEC - 90)
+
+# R7b: 시간 예산 소진 시 차단 이탈과 동일한 순환 이월 경로를 탄다 —
+# 데드라인을 음수로 강제하면 첫 심볼도 방문하지 않고 offset 이 보존된다.
+# (R5 가 남긴 offset=4 그대로 시작 → 0개 처리 후 (4+0)%5=4 재저장 확인)
+settings.SETTINGS["collect_tv_deadline_sec"] = -1.0  # 즉시 소진(경과 0 > -1)
+tradingview.is_blocked = lambda: False
+_fetched.clear()
+_run_main(["run_collect.py"])
+with db.connect(TEST_DB_RC) as conn:
+    _off7 = db.get_meta(conn, run_collect._UNIVERSE_OFFSET_META, "-")
+check("수리9-R7b: 예산 소진 시 심볼 0개 방문 + offset 이월 보존",
+      _fetched == [] and _off7 == "4")
+settings.SETTINGS["collect_tv_deadline_sec"] = 570  # 원복
+
 
 # ══════════════════════════════════════════════════════════════════
 # 카드3: 적중 DB 해시체인 무결성 검증 (2026-07-27) — 정상체인/변조탐지/구세대
