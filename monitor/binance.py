@@ -138,8 +138,8 @@ SUPPLY_OBI_SELL_WALL = 0.67  # 호가 매수/매도 잔량비 이하 = 매도벽
 SUPPLY_OBI_BUY_WALL = 1.5    # 호가 매수/매도 잔량비 이상 = 매수벽
 # 옵션·청산 보정 경계 (2026-08-14 기획 확정 — BTC 전용 시장 컨텍스트,
 # 전 코인 알림에 적용. 수치 비노출, 판정 라벨 이동에만 사용).
-SUPPLY_PC_EXTREME_HIGH = 1.5   # P/C Ratio 이상 = 극단 풋 우위 (약세 경고)
-SUPPLY_PC_EXTREME_LOW = 0.5    # P/C Ratio 이하 = 극단 콜 우위 (과열 경고)
+SUPPLY_PC_EXTREME_HIGH = 1.0   # P/C ≥1.0 = 극단 풋 우위 (Deribit 3년 최고 0.84, >1.0은 공포 구간)
+SUPPLY_PC_EXTREME_LOW = 0.30   # P/C ≤0.3 = 극단 콜 과열 (정상 0.5~0.6, 역대 최저 0.38)
 SUPPLY_MAX_PAIN_DIST = 0.03    # Max Pain 거리(3%) 이상이면 보정 적용
 SUPPLY_LIQ_WARN = "long_heavy"   # 하방 롱 청산 집중 = 경고
 SUPPLY_LIQ_CONFIRM = "short_heavy"  # 상방 숏 청산 집중 = 확인

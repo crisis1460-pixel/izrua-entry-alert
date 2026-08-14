@@ -285,15 +285,20 @@ check("김프화살표: 델타 미전달 → 종전 표기", "김프 +2.15%" in 
 
 # ─── derive_supply_verdict 옵션·청산 보정 (2026-08-14) ───────────────
 
-# 옵션 P/C 극단 → 경고
+# 옵션 P/C 극단 HIGH (≥1.0) → 경고
 v = derive_supply_verdict(0.005, 5.0, 2.0,
-                          options_ctx={"pc_ratio": 1.8, "max_pain": 100000})
-check("옵션보정: P/C 극단(1.8) → 우호가 중립으로", v[0] == "중립")
+                          options_ctx={"pc_ratio": 1.2, "max_pain": 100000})
+check("옵션보정: P/C 극단HIGH(1.2) → 우호가 중립으로", v[0] == "중립")
 
-# 옵션 P/C 정상 범위 → 보정 없음
+# 옵션 P/C 극단 LOW (≤0.30) → 경고
 v = derive_supply_verdict(0.005, 5.0, 2.0,
-                          options_ctx={"pc_ratio": 1.0, "max_pain": 100000})
-check("옵션보정: P/C 정상(1.0) → 우호 유지", v[0] == "우호")
+                          options_ctx={"pc_ratio": 0.25, "max_pain": 100000})
+check("옵션보정: P/C 극단LOW(0.25) → 우호가 중립으로", v[0] == "중립")
+
+# 옵션 P/C 정상 범위 (0.55) → 보정 없음
+v = derive_supply_verdict(0.005, 5.0, 2.0,
+                          options_ctx={"pc_ratio": 0.55, "max_pain": 100000})
+check("옵션보정: P/C 정상(0.55) → 우호 유지", v[0] == "우호")
 
 # 청산 long_heavy → 경고
 v = derive_supply_verdict(0.005, 5.0, 2.0,
@@ -312,7 +317,7 @@ check("청산보정: neutral → 우호 유지", v[0] == "우호")
 
 # 옵션+청산 동시 경고 → 중립도 주의로
 v = derive_supply_verdict(0.005, None, None,
-                          options_ctx={"pc_ratio": 0.3, "max_pain": 100000},
+                          options_ctx={"pc_ratio": 0.2, "max_pain": 100000},
                           liq_ctx={"pressure": 70, "direction": "long_heavy"})
 check("옵션+청산 동시경고: 중립 → 주의", v[0] == "주의")
 
