@@ -129,17 +129,35 @@ def fetch_deriv_snapshot(symbol: str, timeout: float) -> Optional[dict]:
 SUPPLY_FUNDING_HOT = 0.01    # % — 기존 펀딩 라벨과 동일 경계
 SUPPLY_OI_MIN_PCT = 3.0      # OI 24h 변화 유의미 경계 (미만은 보합)
 SUPPLY_PRICE_MIN_PCT = 1.0   # 가격 24h 방향 판별 경계
+# CVD·호가비율 보정 경계 (2026-08-14 기획 확정 — 알림에 수치 비노출,
+# 판정 라벨 이동에만 사용. 임계값 근거: taker 불균형 ±0.15 는 4h 누적으로
+# 유의미한 쏠림, 호가 0.67/1.5 는 매도벽/매수벽 관례 경계(1:1.5 비율)).
+SUPPLY_CVD_NEG = -0.15       # CVD 비율 이하 = 공격 매도 우위 (경고 신호)
+SUPPLY_CVD_POS = 0.15        # CVD 비율 이상 = 공격 매수 우위 (확인 신호)
+SUPPLY_OBI_SELL_WALL = 0.67  # 호가 매수/매도 잔량비 이하 = 매도벽
+SUPPLY_OBI_BUY_WALL = 1.5    # 호가 매수/매도 잔량비 이상 = 매수벽
 
 
-def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct):
+def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
+                          cvd_ratio=None, bid_ask_ratio=None):
     """펀딩 쏠림 × (OI 증감 + 가격 방향) → 매수 관점 판정.
 
     반환 (label, reason|None) — label ∈ '우호'/'주의'/'중립', reason 은 괄호
     근거(최대 5자, 모바일 한 줄 유지). 입력 전부 None 이면 (None, None) —
-    호출부가 행을 생략한다. OI/가격이 없으면 펀딩 단독 판정으로 폴백."""
+    호출부가 행을 생략한다. OI/가격이 없으면 펀딩 단독 판정으로 폴백.
+
+    CVD·호가 보정 (2026-08-14 사용자 확정): cvd_ratio(4h taker 불균형)와
+    bid_ask_ratio(호가 잔량비)는 **라벨 이동에만** 반영하고 근거 텍스트·수치는
+    알림에 노출하지 않는다(SL 과 동일한 내부 기준선 원칙). 좋은 판정을 더
+    올리는 것보다 나쁜 신호로 낮추는 쪽을 우선(허수 터치 경고가 목적):
+      · 우호 + 경고신호 1개 이상 → 중립
+      · 중립 + 경고신호 2개 → 주의
+      · 중립 + 확인신호 2개 → 우호 (둘 다 갖춰야만 상향 — 보수 원칙)
+    '주의'는 보정으로 좋아지지 않는다."""
     f_hot_long = funding_pct is not None and funding_pct > SUPPLY_FUNDING_HOT
     f_hot_short = funding_pct is not None and funding_pct < -SUPPLY_FUNDING_HOT
 
+    label, reason = None, None
     oi_valid = oi_change_pct is not None and price_change_pct is not None
     if oi_valid and abs(oi_change_pct) >= SUPPLY_OI_MIN_PCT:
         oi_up = oi_change_pct > 0
@@ -147,25 +165,47 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct):
         px_down = price_change_pct <= -SUPPLY_PRICE_MIN_PCT
         if oi_up and px_down:
             # 신규 숏 유입 — 숏 과열까지 겹치면 스퀴즈 연료
-            return ("우호", "숏 몰림") if f_hot_short else ("중립", "숏 유입")
-        if oi_up and px_up:
+            label, reason = ("우호", "숏 몰림") if f_hot_short else ("중립", "숏 유입")
+        elif oi_up and px_up:
             # 신규 매수 유입 — 롱 과열이면 추격 위험
-            return ("주의", "롱 과열") if f_hot_long else ("우호", "자금 유입")
-        if (not oi_up) and px_up:
-            return ("주의", "청산 반등")   # 새 돈 없는 반등
-        if (not oi_up) and px_down:
-            return ("중립", "투매 진행")   # 롱 청산
-        # 가격 보합(±1% 미만) + OI 유의미 변화 — 방향 판단 보류
-        return ("중립", None)
-
+            label, reason = ("주의", "롱 과열") if f_hot_long else ("우호", "자금 유입")
+        elif (not oi_up) and px_up:
+            label, reason = ("주의", "청산 반등")   # 새 돈 없는 반등
+        elif (not oi_up) and px_down:
+            label, reason = ("중립", "투매 진행")   # 롱 청산
+        else:
+            # 가격 보합(±1% 미만) + OI 유의미 변화 — 방향 판단 보류
+            label, reason = ("중립", None)
     # OI 미확보/보합 → 펀딩 단독 폴백 (기존 라벨 의미 유지)
-    if f_hot_short:
-        return "우호", "숏 과열"
-    if f_hot_long:
-        return "주의", "롱 과열"
-    if funding_pct is not None:
-        return "중립", None
-    return None, None
+    elif f_hot_short:
+        label, reason = "우호", "숏 과열"
+    elif f_hot_long:
+        label, reason = "주의", "롱 과열"
+    elif funding_pct is not None:
+        label, reason = "중립", None
+    else:
+        return None, None
+
+    # ── CVD·호가 라벨 보정 (표기 없음 — 라벨만 이동, reason 유지) ──
+    warn = 0
+    confirm = 0
+    if cvd_ratio is not None:
+        if cvd_ratio <= SUPPLY_CVD_NEG:
+            warn += 1
+        elif cvd_ratio >= SUPPLY_CVD_POS:
+            confirm += 1
+    if bid_ask_ratio is not None:
+        if bid_ask_ratio <= SUPPLY_OBI_SELL_WALL:
+            warn += 1
+        elif bid_ask_ratio >= SUPPLY_OBI_BUY_WALL:
+            confirm += 1
+    if label == "우호" and warn >= 1:
+        label = "중립"
+    elif label == "중립" and warn >= 2:
+        label = "주의"
+    elif label == "중립" and confirm >= 2:
+        label = "우호"
+    return label, reason
 
 
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
@@ -362,9 +402,10 @@ def detect_funding_regime_flip(history: Optional[list],
 def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[float]:
     """CVD(누적 거래량 델타) 비율 — 최근 N시간 taker 매수-매도 불균형 (2026-08-11).
 
-    **내부 축적 전용** (touch_cvd_ratio 컬럼) — 알림·필터·등급 어디에도 안 쓴다.
-    나중에 outcome 과의 상관을 사후 분석하기 위한 원천 데이터(touch_bid_ask_ratio·
-    touch_ma200_above 와 동일 성격).
+    축적(touch_cvd_ratio 컬럼) + 수급 판정 보정 입력(2026-08-14 승격).
+    수치 자체는 알림·필터·등급에 노출하지 않고 derive_supply_verdict 의
+    라벨 이동에만 관여한다. outcome 상관 사후 분석용 원천 데이터 역할은
+    유지(touch_bid_ask_ratio·touch_ma200_above 와 동일 성격).
 
     계산: aggTrades 페이징 대신 klines 1콜 — 캔들의 takerBuyBaseVolume(인덱스 9)과
     총 volume(인덱스 5)으로 캔들별 delta = 2×takerBuy − total 을 합산, 총량으로

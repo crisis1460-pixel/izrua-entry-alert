@@ -176,7 +176,9 @@ def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:
     실측 `Remaining-Req` 헤더가 `group=orderbook; min=600; sec=9` 로 ticker/캔들과
     레이트리밋 그룹이 분리돼 있어 판정용 예산을 전혀 갉아먹지 않는다.
 
-    **기록 전용** — 이 값은 알림 본문·필터·등급 어디에도 반영하지 않는다."""
+    2026-08-14 승격: 기록 + 수급 판정 보정 입력. 수치 자체는 여전히 알림
+    본문·필터·등급에 노출하지 않고, derive_supply_verdict 의 라벨 이동에만
+    관여한다(내부 기준선 원칙)."""
     try:
         resp = requests.get(
             f"{_BASE}/orderbook", params={"markets": market}, timeout=timeout

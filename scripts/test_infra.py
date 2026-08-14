@@ -195,6 +195,94 @@ with tempfile.TemporaryDirectory() as td:
     check("_save_cache: 내용 일치", loaded["universe"] == universe)
 
 
+# ─── derive_supply_verdict CVD·호가 보정 (2026-08-14) ────────────────
+
+from monitor.binance import derive_supply_verdict
+
+# 기준: 보정 입력 없으면 종전 판정 그대로
+v = derive_supply_verdict(0.005, 5.0, 2.0)
+check("수급보정: 기본(자금 유입=우호)", v == ("우호", "자금 유입"))
+
+# 우호 + CVD 매도 우위 → 중립 강등 (reason 유지)
+v = derive_supply_verdict(0.005, 5.0, 2.0, cvd_ratio=-0.2)
+check("수급보정: 우호+CVD매도 → 중립", v == ("중립", "자금 유입"))
+
+# 우호 + 매도벽 → 중립 강등
+v = derive_supply_verdict(0.005, 5.0, 2.0, bid_ask_ratio=0.5)
+check("수급보정: 우호+매도벽 → 중립", v == ("중립", "자금 유입"))
+
+# 중립 + 경고 2개 → 주의 강등
+v = derive_supply_verdict(0.005, 5.0, -2.0, cvd_ratio=-0.2, bid_ask_ratio=0.5)
+check("수급보정: 중립+경고2 → 주의", v[0] == "주의")
+
+# 중립 + 확인 2개 → 우호 상향 (둘 다 필요)
+v = derive_supply_verdict(0.005, None, None, cvd_ratio=0.2, bid_ask_ratio=2.0)
+check("수급보정: 중립+확인2 → 우호", v[0] == "우호")
+
+# 중립 + 확인 1개만 → 상향 없음 (보수 원칙)
+v = derive_supply_verdict(0.005, None, None, cvd_ratio=0.2)
+check("수급보정: 중립+확인1 → 유지", v[0] == "중립")
+
+# 주의는 보정으로 좋아지지 않음
+v = derive_supply_verdict(0.02, 5.0, 2.0, cvd_ratio=0.5, bid_ask_ratio=3.0)
+check("수급보정: 주의는 상향 불가", v == ("주의", "롱 과열"))
+
+# 임계 미만 보정값은 무시 (경계 안쪽)
+v = derive_supply_verdict(0.005, 5.0, 2.0, cvd_ratio=-0.1, bid_ask_ratio=0.8)
+check("수급보정: 임계 미만은 무시", v == ("우호", "자금 유입"))
+
+# 전부 None 이면 종전대로 (None, None)
+v = derive_supply_verdict(None, None, None, cvd_ratio=0.5, bid_ask_ratio=2.0)
+check("수급보정: 본판정 없으면 보정도 없음", v == (None, None))
+
+
+# ─── push_kimchi_history (2026-08-14) ────────────────────────────────
+
+_kc = sqlite3.connect(":memory:")
+_kc.row_factory = sqlite3.Row
+_kc.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+_now0 = time.time()
+
+d = db.push_kimchi_history(_kc, _now0 - 6 * 3600, 2.0)
+check("김프이력: 첫 기록 → 델타 None", d is None)
+
+d = db.push_kimchi_history(_kc, _now0, 2.8)
+check("김프이력: 6h 전 대비 +0.8 델타", d is not None and abs(d - 0.8) < 0.001)
+
+# 창 밖(13h 전) 기록만 있으면 델타 없음 + prune 확인
+_kc2 = sqlite3.connect(":memory:")
+_kc2.row_factory = sqlite3.Row
+_kc2.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+db.push_kimchi_history(_kc2, _now0 - 13 * 3600, 1.0)
+d = db.push_kimchi_history(_kc2, _now0, 3.0)
+check("김프이력: 13h 전 기록은 창 밖 → None", d is None)
+hist = json.loads(db.get_meta(_kc2, "kimchi_hist"))
+check("김프이력: 12h 초과분 prune", len(hist) == 1)
+_kc.close()
+_kc2.close()
+
+
+# ─── render_alert 김프 화살표 (2026-08-14) ──────────────────────────
+
+_cluster = [{"coin_symbol": "BTC", "entry_usd": 100.0, "score": 50,
+             "grade": "B", "author": "tester"}]
+_txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
+                       kimchi_pct=2.15, kimchi_delta=0.8)
+check("김프화살표: 급변 시 ▲ 표시", "김프 +2.15% ▲" in _txt)
+
+_txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
+                       kimchi_pct=2.15, kimchi_delta=-0.7)
+check("김프화살표: 급락 시 ▼ 표시", "김프 +2.15% ▼" in _txt)
+
+_txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
+                       kimchi_pct=2.15, kimchi_delta=0.3)
+check("김프화살표: 임계 미만 → 없음", "김프 +2.15%\n" in _txt or _txt.rstrip().endswith("김프 +2.15%") or ("김프 +2.15%" in _txt and "▲" not in _txt))
+
+_txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
+                       kimchi_pct=2.15)
+check("김프화살표: 델타 미전달 → 종전 표기", "김프 +2.15%" in _txt and "▲" not in _txt and "▼" not in _txt)
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

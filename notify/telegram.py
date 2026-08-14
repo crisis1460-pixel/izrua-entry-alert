@@ -197,6 +197,11 @@ def _retry_after_sec(resp) -> float:
 
 _TG_MAX_LEN = 4096
 
+# 김프 급변 화살표 임계 (%p, ~6h 대비) — 2026-08-14. 0.5%p 는 평시 김프
+# 변동폭(시간당 0.1%p 미만) 대비 뚜렷한 이동으로, 국내 FOMO/리스크오프
+# 전환 감지 관례 수준.
+_KIMCHI_DELTA_TH = 0.5
+
 
 def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
     """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
@@ -423,7 +428,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  kimchi_pct: float = None, volume_rank: int = None,
                  rep: dict = None, funding_rate: float = None,
                  funding_regime_flip: dict = None, supply: tuple = None,
-                 position: tuple = None) -> str:
+                 position: tuple = None, kimchi_delta: float = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -559,12 +564,17 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         _nd = funding_regime_flip.get("neg_days") or 0
         lines.append(f"🔥 {_nd:.0f}일 음수→양수")
     if kimchi_pct is not None:
+        # 급변 화살표 (2026-08-14 사용자 확정): ~6h 대비 ±0.5%p 이상 움직였을
+        # 때만 화살표 1글자 — 평시 표기는 종전과 완전 동일(행 폭 유지).
+        _arrow = ""
+        if kimchi_delta is not None and abs(kimchi_delta) >= _KIMCHI_DELTA_TH:
+            _arrow = " ▲" if kimchi_delta > 0 else " ▼"
         if abs(kimchi_pct) < 0.01:
-            lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%)")
+            lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%){_arrow}")
         elif kimchi_pct > 0:
-            lines.append(f"🌶️ 김프 {kimchi_pct:+.2f}%")
+            lines.append(f"🌶️ 김프 {kimchi_pct:+.2f}%{_arrow}")
         else:
-            lines.append(f"❄️ 김프 {kimchi_pct:+.2f}%")
+            lines.append(f"❄️ 김프 {kimchi_pct:+.2f}%{_arrow}")
     if sentiment:
         btc_d = sentiment.get("btc_dominance")
         alt_s = sentiment.get("altcoin_season_index")

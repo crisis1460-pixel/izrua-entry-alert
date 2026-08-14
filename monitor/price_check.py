@@ -717,6 +717,7 @@ def run_once(now: float | None = None) -> dict:
                 _snap_sentiment = None
                 _snap_kimchi = None
                 _snap_volume_rank = None
+                _snap_obi = None  # 호가 잔량비 — 발송/억제 양쪽 기록 경로 공용
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -780,10 +781,18 @@ def run_once(now: float | None = None) -> dict:
                         logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
                     kimchi = None
+                    _snap_kimchi_delta = None
                     usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
                     if usd_global and usd_global > 0 and usdt_krw:
                         effective = current / usd_global
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
+                        # 김프 급변 표기 (2026-08-14): 이력 축적 + ~6h 전 대비 델타.
+                        # 실패해도 화살표만 생략 — 발송 경로는 계속.
+                        try:
+                            _snap_kimchi_delta = db.push_kimchi_history(
+                                conn, now, kimchi)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s 김프 이력 실패(무시): %s", coin, e)
                     _snap_funding = None
                     _snap_funding_flip = None
                     _snap_supply = None
@@ -798,28 +807,10 @@ def run_once(now: float | None = None) -> dict:
                             _hist, min_neg_days=30)
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 펀딩 조회 실패(무시): %s", coin, e)
-                    # 수급 판정 (2026-08-07 사용자 결정): 펀딩+OI 를 결론 한 줄로.
-                    # OI 24h 변화율은 자체 스냅샷(oi_history) 대비 — 기준 없으면
-                    # (배포 후 첫 24h/미상장) derive 가 펀딩 단독으로 폴백한다.
-                    _oi_chg = None
-                    try:
-                        _deriv = binance.fetch_deriv_snapshot(coin, cfg_get("http_timeout_sec"))
-                        _pchg = (_deriv or {}).get("pchg")
-                        _oi_now = (_deriv or {}).get("oi")
-                        if _oi_now:
-                            _oi_base = db.get_oi_baseline(conn, coin, now)
-                            if _oi_base:
-                                _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
-                        _snap_supply = binance.derive_supply_verdict(
-                            _snap_funding, _oi_chg, _pchg)
-                        if _snap_supply[0] is None:
-                            _snap_supply = None
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("[체크] %s 수급 판정 실패(무시): %s", coin, e)
-                        _snap_supply = None
-                    # CVD 비율 (2026-08-11) — 내부 축적 전용(알림 무노출),
-                    # touch_ma200_above 와 동일 성격. 터치 확정건에만 1콜
-                    # (예고 경로는 기록 자체가 없어 조회도 생략 — 콜 낭비 방지).
+                    # CVD 비율 (2026-08-11) — 터치 확정건에만 1콜 (예고 경로는
+                    # 기록 자체가 없어 조회도 생략 — 콜 낭비 방지).
+                    # 2026-08-14 승격: 축적 전용 → 수급 판정 보정 입력으로도 사용
+                    # (수치는 여전히 알림 무노출 — 라벨 이동에만 관여).
                     _snap_cvd = None
                     _snap_ls_ratio = None
                     _snap_top_trader = None
@@ -830,6 +821,15 @@ def run_once(now: float | None = None) -> dict:
                                 coin, cfg_get("http_timeout_sec"), hours=4)
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s CVD 조회 실패(무시): %s", coin, e)
+                        # 호가 잔량비 — 종전 mark_touched 기록 시점(아래)에서 이리로
+                        # 상향 이동(2026-08-14): 수급 판정 보정에 쓰려면 렌더 전에
+                        # 필요하다. 아래 기록 경로는 이 값을 재사용(중복 콜 0).
+                        if cfg_get("orderbook_pressure_enabled"):
+                            try:
+                                _snap_obi = upbit.fetch_orderbook_ratio(
+                                    ticker, cfg_get("http_timeout_sec"))
+                            except Exception as e:  # noqa: BLE001
+                                logger.warning("[체크] %s 호가 조회 실패(무시): %s", ticker, e)
                         try:
                             _snap_ls_ratio = binance.fetch_long_short_ratio(
                                 coin, cfg_get("http_timeout_sec"))
@@ -839,12 +839,35 @@ def run_once(now: float | None = None) -> dict:
                                 coin, cfg_get("http_timeout_sec"))
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s 선물 포지션 조회 실패(무시): %s", coin, e)
+                    # 수급 판정 (2026-08-07 사용자 결정): 펀딩+OI 를 결론 한 줄로.
+                    # OI 24h 변화율은 자체 스냅샷(oi_history) 대비 — 기준 없으면
+                    # (배포 후 첫 24h/미상장) derive 가 펀딩 단독으로 폴백한다.
+                    # CVD·호가 보정(2026-08-14): 터치 경로만 값이 있고 예고 경로는
+                    # None 전달 → 보정 없이 종전과 동일 판정.
+                    _oi_chg = None
+                    try:
+                        _deriv = binance.fetch_deriv_snapshot(coin, cfg_get("http_timeout_sec"))
+                        _pchg = (_deriv or {}).get("pchg")
+                        _oi_now = (_deriv or {}).get("oi")
+                        if _oi_now:
+                            _oi_base = db.get_oi_baseline(conn, coin, now)
+                            if _oi_base:
+                                _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
+                        _snap_supply = binance.derive_supply_verdict(
+                            _snap_funding, _oi_chg, _pchg,
+                            cvd_ratio=_snap_cvd, bid_ask_ratio=_snap_obi)
+                        if _snap_supply[0] is None:
+                            _snap_supply = None
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 수급 판정 실패(무시): %s", coin, e)
+                        _snap_supply = None
                     _snap_sentiment = _sentiment()
                     _snap_kimchi = kimchi
                     _snap_volume_rank = _volume_ranks().get(ticker)
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
+                                                 kimchi_delta=_snap_kimchi_delta,
                                                  volume_rank=_snap_volume_rank,
                                                  rep=rep,
                                                  funding_rate=_snap_funding,
@@ -958,6 +981,14 @@ def run_once(now: float | None = None) -> dict:
                                 _snap_kimchi = (current / _usd_g - usdt_krw) / usdt_krw * 100
                         except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
                             logger.warning("[체크] %s 김프 스냅 실패(무시): %s", ticker, e)
+                    # 억제 터치도 호가 스냅샷 기록 유지 (2026-08-14 — 종전 기록
+                    # 경로가 send_ok 무관하게 조회하던 동작 보존, 김프 m-8 과 동일)
+                    if _snap_obi is None and cfg_get("orderbook_pressure_enabled"):
+                        try:
+                            _snap_obi = upbit.fetch_orderbook_ratio(
+                                ticker, cfg_get("http_timeout_sec"))
+                        except Exception as e:  # noqa: BLE001 - 기록 실패 격리
+                            logger.warning("[체크] %s 호가 기록 실패(무시): %s", ticker, e)
 
                 if touched:
                     # 자기 엔트리에 실제 도달한 레벨만 판정 대상 터치 (기준가 = 자기
@@ -979,17 +1010,10 @@ def run_once(now: float | None = None) -> dict:
                                     t_anchor = c[1]
                                     break
                         touches.append((lv["id"], e_krw if reached else None, t_anchor))
-                    # 호가 매수/매도 압력 스냅샷 (카드 #19) — 실제 도달 터치가 있을
-                    # 때만 1콜. 순수 기록용이라 실패해도 그냥 NULL 로 남기고 진행한다
-                    # (알림·필터·판정에는 이 값이 어디에도 쓰이지 않는다).
-                    ratio = None
-                    if cfg_get("orderbook_pressure_enabled") and \
-                            any(p is not None for _id, p, _t in touches):
-                        try:
-                            ratio = upbit.fetch_orderbook_ratio(
-                                ticker, cfg_get("http_timeout_sec"))
-                        except Exception as e:  # noqa: BLE001 - 기록 실패 격리
-                            logger.warning("[체크] %s 호가 기록 실패(무시): %s", ticker, e)
+                    # 호가 매수/매도 압력 스냅샷 (카드 #19) — 2026-08-14 부터
+                    # 위 발송 경로에서 이미 조회한 _snap_obi 를 재사용한다
+                    # (수급 판정 보정 겸용 — 같은 회차 중복 콜 0).
+                    ratio = _snap_obi
                     _sent = _snap_sentiment or {}
                     db.mark_touched(conn, touches, now, usdt_krw=usdt_krw,
                                     bid_ask_ratio=ratio,

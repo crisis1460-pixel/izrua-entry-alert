@@ -199,16 +199,17 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | Profit Factor | `db.get_author_advanced_stats()` | 조회형 (DB 직접 쿼리) |
 | R-Expectancy | 동일 | 동일 |
 | Consistency Score | 동일 | 동일 |
-| CVD 비율 (2026-08-11) | `binance.fetch_cvd_ratio()` — 터치 시점 4h taker 매수-매도 불균형 [-1,+1] | `levels.touch_cvd_ratio` (터치 확정건만) |
+| CVD 비율 (2026-08-11) | `binance.fetch_cvd_ratio()` — 터치 시점 4h taker 매수-매도 불균형 [-1,+1]. 2026-08-14 승격: 수급 판정 라벨 보정 입력 겸용(수치 알림 비노출) | `levels.touch_cvd_ratio` (터치 확정건만) |
 | 펀딩비 (2026-08-13) | `binance.fetch_funding_rate()` — 터치 시점 무기한 선물 펀딩비(%) | `levels.touch_funding_rate` (터치 확정건만) |
 | OI 변화율 (2026-08-13) | 터치 시점 OI 24h 변화율(%) | `levels.touch_oi_pct` (터치 확정건만) |
 | 롱/숏 비율 (2026-08-13) | `binance.fetch_long_short_ratio()` — 전체 계정 롱 비율 (0~1) | `levels.touch_long_short_ratio` (터치 확정건만) |
 | 탑 트레이더 비율 (2026-08-13) | `binance.fetch_top_trader_position_ratio()` — 상위 20% 트레이더 롱 비율 | `levels.touch_top_trader_ratio` (터치 확정건만) |
 | 선물 테이커 비율 (2026-08-13) | `binance.fetch_taker_buy_sell_ratio()` — 선물 매수/매도 비율 | `levels.touch_taker_buy_sell_ratio` (터치 확정건만) |
 | 스테이블코인 시총 (2026-08-13) | DeFiLlama — 전체 스테이블코인 유통량 (십억$) | `levels.touch_stablecoin_mcap_b` (터치 확정건만) |
-| 호가 매수/매도 압력 | 터치 시점 스냅샷 | `levels.touch_bid_ask_ratio` |
+| 호가 매수/매도 압력 | 터치 시점 스냅샷. 2026-08-14 승격: 수급 판정 라벨 보정 입력 겸용(수치 알림 비노출) | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
-| 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시) | `levels.touch_supply_verdict` / `touch_position_verdict` |
+| 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시). 2026-08-14: CVD·호가로 수급 라벨 보정 — 우호+경고1→중립, 중립+경고2→주의, 중립+확인2→우호, 주의는 상향 불가 (`SUPPLY_CVD_NEG=-0.15/POS=0.15`, `SUPPLY_OBI_SELL_WALL=0.67/BUY_WALL=1.5`) | `levels.touch_supply_verdict` / `touch_position_verdict` |
+| 김프 급변 화살표 (2026-08-14) | `db.push_kimchi_history()` — 알림 시점 김프 이력 축적(meta, 12h 보존), ~6h 전 대비 ±0.5%p 이상이면 김프 행 끝 ▲/▼ 1글자 (`telegram._KIMCHI_DELTA_TH`) | `meta.kimchi_hist` (JSON) |
 | 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
 
 ---

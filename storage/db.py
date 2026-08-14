@@ -1498,6 +1498,32 @@ def set_meta(conn, key: str, value: str) -> None:
     )
 
 
+def push_kimchi_history(conn, now: float, kimchi_pct: float,
+                        window_hours: float = 6.0) -> Optional[float]:
+    """김프 이력(meta JSON) 에 현재값 append 후 ~N시간 전 대비 델타(%p) 반환.
+
+    2026-08-14 김프 급변 표기용. 추가 API 0콜 원칙 — 알림 발송 시점에만
+    호출돼 이력이 쌓이므로, 비교 기준점은 [N-3h, N+2h] 창에서 N시간 전에
+    가장 가까운 항목을 고른다(알림 간격이 성기면 창에 없음 → None → 화살표
+    생략). 이력은 12시간 초과분을 잘라 meta 한 행으로 유지한다."""
+    key = "kimchi_hist"
+    try:
+        hist = json.loads(get_meta(conn, key) or "[]")
+    except (ValueError, TypeError):
+        hist = []
+    hist = [(ts, v) for ts, v in hist if now - ts <= 12 * 3600]
+    target = now - window_hours * 3600
+    lo, hi = target - 3 * 3600, target + 2 * 3600
+    candidates = [(ts, v) for ts, v in hist if lo <= ts <= hi]
+    delta = None
+    if candidates:
+        base_ts, base_v = min(candidates, key=lambda p: abs(p[0] - target))
+        delta = kimchi_pct - base_v
+    hist.append((now, kimchi_pct))
+    set_meta(conn, key, json.dumps(hist))
+    return delta
+
+
 def meta_float(conn, key: str) -> float:
     """meta 값을 float 로 읽는다. 미존재/손상값은 0.0(run_cycle·audit_dump 공용
     주기 판정에서 "이력 없음"과 동일 취급하는 관례를 그대로 따른다)."""
