@@ -19,22 +19,26 @@ import requests
 
 logger = logging.getLogger("alert.liquidation")
 
-_API_BASE = "https://api.bykaranteli.com"
+_API_BASE = "https://bykaranteli.com"
 _CACHE_TTL_SEC = 300.0  # 5분 — API 캐시와 동기화
 _cache: dict = {"ts": 0.0, "data": None}
 
-_PRESSURE_CACHE_TTL_SEC = 300.0
-_pressure_cache: dict = {"ts": 0.0, "data": None}
+_REGIME_MAP = {
+    "LONG_CROWDED": "long_heavy",
+    "LONG_FLUSH": "long_heavy",
+    "SHORT_RAMP": "short_heavy",
+    "SHORT_SQUEEZE": "short_heavy",
+}
 
 
 def fetch_btc_liq_context(timeout: float = 10.0) -> Optional[dict]:
     """BTC 청산 클러스터 컨텍스트. TTL 캐시 적용.
 
     반환: {"pressure": float, "direction": str} 또는 None.
-    pressure: 파생상품 압력 점수 (0~100, 50 중립)
+    pressure: 파생상품 압력 점수 (0~100)
     direction: "long_heavy" | "short_heavy" | "neutral"
-      - long_heavy: 하방 롱 청산 물량 집중 → 추가 하락 위험 (경고)
-      - short_heavy: 상방 숏 청산 물량 집중 → 숏 스퀴즈 가능 (확인)
+      - long_heavy: 롱 과밀/플러시 리스크 → 추가 하락 위험 (경고)
+      - short_heavy: 숏 과밀/스퀴즈 리스크 → 숏 스퀴즈 가능 (확인)
     """
     now = time.time()
     if _cache["data"] is not None and now - _cache["ts"] < _CACHE_TTL_SEC:
@@ -61,30 +65,27 @@ def _fetch_pressure(timeout: float) -> Optional[dict]:
         if not data:
             return _try_liqmap_fallback(timeout)
 
-        pressure = data.get("pressure") or data.get("score")
-        if pressure is None:
+        score = data.get("score")
+        if score is None:
             return _try_liqmap_fallback(timeout)
 
-        pressure = float(pressure)
-        if pressure >= 65:
-            direction = "long_heavy"
-        elif pressure <= 35:
-            direction = "short_heavy"
-        else:
-            direction = "neutral"
+        regime = (data.get("regime") or "").upper()
+        direction = _REGIME_MAP.get(regime, "neutral")
 
-        return {"pressure": pressure, "direction": direction}
+        return {"pressure": float(score), "direction": direction}
     except Exception as e:  # noqa: BLE001
         logger.warning("[liq] ByKaranteli pressure 실패: %s", e)
         return _try_liqmap_fallback(timeout)
 
 
 def _try_liqmap_fallback(timeout: float) -> Optional[dict]:
-    """liqmap/public 엔드포인트 폴백 — pressure 실패 시."""
+    """liqmap/public 엔드포인트 폴백 — pressure 실패 시.
+
+    stats.long_short_ratio + stats.bias_label 로 방향 판정."""
     try:
         r = requests.get(
             f"{_API_BASE}/api/liqmap/public",
-            params={"symbol": "BTCUSDT"},
+            params={"symbol": "BTC"},
             timeout=timeout,
         )
         if r.status_code != 200:
@@ -93,21 +94,24 @@ def _try_liqmap_fallback(timeout: float) -> Optional[dict]:
         data = r.json()
         if not data:
             return None
-        longs = data.get("longLiquidations") or data.get("long_liquidations", 0)
-        shorts = data.get("shortLiquidations") or data.get("short_liquidations", 0)
-        longs = float(longs) if longs else 0
-        shorts = float(shorts) if shorts else 0
-        total = longs + shorts
-        if total <= 0:
-            return {"pressure": 50.0, "direction": "neutral"}
-        long_pct = longs / total * 100
-        if long_pct >= 65:
+
+        stats = data.get("stats") or {}
+        ls_ratio = stats.get("long_short_ratio")
+        if ls_ratio is None:
+            return None
+
+        ls_ratio = float(ls_ratio)
+        bias = (stats.get("bias_label") or "").lower()
+
+        if ls_ratio >= 2.0 or "long flush" in bias or "long crowded" in bias:
             direction = "long_heavy"
-        elif long_pct <= 35:
+        elif ls_ratio <= 0.5 or "short squeeze" in bias or "short ramp" in bias:
             direction = "short_heavy"
         else:
             direction = "neutral"
-        return {"pressure": long_pct, "direction": direction}
+
+        pressure = min(ls_ratio / 3.0 * 100, 100.0)
+        return {"pressure": pressure, "direction": direction}
     except Exception as e:  # noqa: BLE001
         logger.warning("[liq] ByKaranteli liqmap 실패: %s", e)
         return None
