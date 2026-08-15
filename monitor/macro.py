@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from storage import db
+from utils.time_kst import day_kst
 
 logger = logging.getLogger("alert.macro")
 
@@ -70,6 +71,94 @@ def _fetch_dxy_fresh(timeout: float) -> Optional[float]:
     except Exception as e:  # noqa: BLE001
         logger.warning("[macro] DXY 조회 실패: %s", e)
         return None
+
+
+# ── BTC 레짐 (200일선 ± 3일 히스테리시스) ────────────────────────────────
+# (2026-08-16 Tier2 스프린트 — research_2026-08-15_sharpening_synthesis.md #8)
+# **기록 전용** — 터치 스냅샷 도장(touch_btc_regime)에만 쓰이고 알림·필터·등급·
+# 판정 어디에도 관여하지 않는다. 레짐별 게이팅은 표본 n≈100 도달 후 별도 결정.
+_BTC_REGIME_KEY = "btc_regime_state"
+_BTC_REGIME_TTL_SEC = 3600.0   # 1시간 캐시 — 시간당 업비트 BTC 일봉 1콜이 상한
+_REGIME_HYST_DAYS = 3          # 반대 조건이 3 KST일 연속이어야 상태 전환
+
+
+def _btc_ma200_raw(timeout: float) -> Optional[str]:
+    """원시 조건 1회 판정 — KRW-BTC 일봉 200개 1콜, 마지막 종가 vs SMA200.
+    "above"|"below", 실패/표본부족 시 None."""
+    try:
+        from monitor import upbit  # 지연 로드 — macro 는 다른 잡도 임포트한다
+        closes = upbit._fetch_closes("KRW-BTC", "days", 200, timeout)
+        if not closes or len(closes) < 200:
+            return None
+        sma = sum(closes[-200:]) / 200
+        return "above" if closes[-1] >= sma else "below"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[macro] BTC 레짐 원시 조건 조회 실패: %s", e)
+        return None
+
+
+def _kst_days_inclusive(since: str, today: str) -> int:
+    """후보 시작일~오늘의 KST 날짜 수(양끝 포함). 파싱 실패 시 1(카운트 재시작
+    취급 — 오염된 날짜로 조기 전환하는 것보다 보수적)."""
+    try:
+        d0 = datetime.strptime(since, "%Y-%m-%d").date()
+        d1 = datetime.strptime(today, "%Y-%m-%d").date()
+        return max((d1 - d0).days, 0) + 1
+    except (ValueError, TypeError):
+        return 1
+
+
+def get_btc_regime(conn, timeout: float = 10.0,
+                   now: Optional[float] = None) -> Optional[str]:
+    """BTC 레짐 도장 — "above"|"below"(BTC vs 200일선), 3일 히스테리시스.
+
+    히스테리시스: 원시 조건이 저장 상태와 어긋나면 즉시 뒤집지 않고 후보(cand)로
+    두고, 같은 반대 조건이 3 KST일 연속(양끝 포함) 관측돼야 상태를 전환한다 —
+    200일선 걸침 구간의 일중 왕복이 레짐 라벨을 매일 뒤집는 노이즈 제거
+    (Golden Cross 류 지표의 확인 대기 관례). 조건이 상태와 재일치하면 후보 리셋
+    (연속성 요건). 최초 호출은 원시 조건으로 즉시 초기화(히스테리시스 없음 —
+    비교할 저장 상태가 없다).
+
+    상태는 meta JSON 하나에 영속: {"state","cand","cand_since","at"}.
+    "at" 이 1시간 캐시를 겸해 시간당 업비트 일봉 1콜이 상한(사용자 승인 예산).
+    전 경로 실패 허용 — 원시 조건 조회 실패 시 저장 상태(스테일)를 그대로
+    반환하고 "at" 은 갱신하지 않아 다음 회차가 재시도한다. now 인자는 테스트
+    주입용(기본 현재 시각)."""
+    now = now if now is not None else time.time()
+    st = {}
+    try:
+        raw_meta = db.get_meta(conn, _BTC_REGIME_KEY)
+        if raw_meta:
+            st = json.loads(raw_meta) or {}
+    except Exception:  # noqa: BLE001 — 오염 메타는 미초기화 취급
+        st = {}
+    state = st.get("state") if st.get("state") in ("above", "below") else None
+    if state and now - (st.get("at") or 0) <= _BTC_REGIME_TTL_SEC:
+        return state  # 1h 캐시 히트 — API 콜 0
+
+    raw = _btc_ma200_raw(timeout)
+    if raw is None:
+        return state  # fail-safe: 스테일 상태 반환, 메타 미갱신(다음 회차 재시도)
+
+    today = day_kst(now)
+    if state is None:
+        # 최초 호출(또는 오염 복구) — 원시 조건으로 즉시 초기화
+        new = {"state": raw, "cand": None, "cand_since": None, "at": now}
+    elif raw == state:
+        new = {"state": state, "cand": None, "cand_since": None, "at": now}  # 후보 리셋
+    else:
+        since = st.get("cand_since")
+        if st.get("cand") != raw or not since:
+            since = today  # 새 반대 조건 관측 시작 — 카운트 재시작
+        if _kst_days_inclusive(since, today) >= _REGIME_HYST_DAYS:
+            new = {"state": raw, "cand": None, "cand_since": None, "at": now}  # 전환
+        else:
+            new = {"state": state, "cand": raw, "cand_since": since, "at": now}
+    try:
+        db.set_meta(conn, _BTC_REGIME_KEY, json.dumps(new))
+    except Exception:  # noqa: BLE001 — 메타 기록 실패해도 이번 회차 값은 반환
+        pass
+    return new["state"]
 
 
 # ── 매크로 이벤트 캘린더 ─────────────────────────────────────────────────

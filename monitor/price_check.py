@@ -299,6 +299,24 @@ def _touch_quality(candles, collected_at: float, trigger_krw: float):
     return None, None
 
 
+def _post_age_hours(lv: dict, touched_at) -> Optional[float]:
+    """글 발행→터치 경과 시간(h) — (2026-08-16 Tier2) **기록 전용** 비정규화 값.
+
+    = (터치시각 - 수집시각)/3600 + (수집 시점 글 나이 post_age_minutes)/60.
+    collected_at 은 봇이 글을 발견한 시각일 뿐이라, 발행 기준 나이는 수집 시점에
+    이미 흘러 있던 post_age_minutes 를 더해야 나온다. 신선도 창(168h) 조이기의
+    근거 데이터(시들음 분석) — 알림·필터·판정 어디에도 쓰지 않는다.
+    수집 시각이 없으면 None (계산 불능 — fail-safe). 터치 시각은 호출부의 회차
+    시각(now) — 캔들 앵커와의 오차는 분 단위라 시간 단위 분석에 무의미."""
+    col = lv.get("collected_at")
+    if not col or not touched_at:
+        return None
+    try:
+        return (touched_at - col) / 3600.0 + (lv.get("post_age_minutes") or 0) / 60.0
+    except (TypeError, ValueError):
+        return None
+
+
 def _touch_sound_urgency(rep_grade, cfg_get) -> str:
     """터치 본알림 유/무음 결정 (2026-08-15 C등급 무음 푸시 — 사용자 승인 Tier1).
 
@@ -550,8 +568,25 @@ def run_once(now: float | None = None) -> dict:
                     logger.warning("[체크] BTC 청산 클러스터 조회 실패(무시): %s", e)
             return _mkt_ctx
 
-        # 매크로 환경 (DXY·FOMC/CPI·Hash Ribbons) — 발송 시 1회 조회, 전 코인 공유
-        _macro_ctx = {"loaded": False, "dxy": None, "event": None, "hash_ribbons": None}
+        # 매크로 환경 (DXY·FOMC/CPI·Hash Ribbons·BTC 레짐) — 발송 시 1회 조회, 전 코인 공유
+        _macro_ctx = {"loaded": False, "dxy": None, "event": None, "hash_ribbons": None,
+                      "regime_loaded": False, "btc_regime": None}
+
+        # BTC 레짐 도장 (2026-08-16 Tier2 — 기록 전용). _macro_ctx 안에 살되 지연
+        # 로드 플래그를 분리한 이유: 억제 터치의 스냅샷 기록에도 필요해서, 이것
+        # 때문에 _macro_context() 전체(DXY·Hash Ribbons)를 깨우면 억제-전용 회차에
+        # 부가 조회가 딸려온다(추가 API 콜 0 원칙). 레짐 자체는 meta 1h 캐시라
+        # 시간당 업비트 BTC 일봉 1콜이 상한(승인된 예산). 실패는 None(fail-safe).
+        def _btc_regime():
+            if not _macro_ctx["regime_loaded"]:
+                _macro_ctx["regime_loaded"] = True
+                try:
+                    from monitor import macro
+                    _macro_ctx["btc_regime"] = macro.get_btc_regime(
+                        conn, cfg_get("http_timeout_sec"))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] BTC 레짐 조회 실패(무시): %s", e)
+            return _macro_ctx["btc_regime"]
 
         def _macro_context():
             if not _macro_ctx["loaded"]:
@@ -569,6 +604,7 @@ def run_once(now: float | None = None) -> dict:
                             conn, cfg_get("http_timeout_sec"))
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[체크] Hash Ribbons 조회 실패(무시): %s", e)
+                _btc_regime()  # 레짐도 회차 1회 함께 로드 (이미 로드됐으면 no-op)
             return _macro_ctx
 
         # 거래량 순위도 발송 시에만 1회 조회해 이번 회차 알림들이 공유 (조회 시점 기준)
@@ -821,6 +857,9 @@ def run_once(now: float | None = None) -> dict:
                 _snap_obi = None  # 호가 잔량비 — 발송/억제 양쪽 기록 경로 공용
                 _snap_unlock_warn = None  # 토큰 언락 경고 — 내부 축적 전용
                 _snap_mtf = None          # MTF 정렬 점수 — 내부 축적 전용
+                _snap_atr = None          # ATR20%(일봉) — vol-스케일 라벨용 내부 축적 전용
+                                          # (발송 경로 fetch_position_data 공유 시만 값,
+                                          #  억제 터치는 None — 추가 API 콜 0 원칙)
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -884,6 +923,9 @@ def run_once(now: float | None = None) -> dict:
                         # MTF 정렬 점수 — 내부 축적 전용 (알림 무노출). 일봉 RSI +
                         # MA200 방향 일치도 — fetch_position_data 를 공유해 추가 콜 0.
                         _snap_mtf = upbit.derive_mtf_alignment(_pd, current)
+                        # ATR20% (2026-08-16 Tier2) — 같은 일봉 응답 공유(추가 콜 0),
+                        # 터치 스냅샷 기록 전용. 조회 실패 시 위 except 가 잡아 None.
+                        _snap_atr = _pd.get("atr20_pct")
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
@@ -1185,12 +1227,23 @@ def run_once(now: float | None = None) -> dict:
                     try:
                         _pen_pct, _closed_below = _touch_quality(
                             candles, cluster[0].get("collected_at") or 0, top_krw)
+                        # 레짐 도장 (2026-08-16 Tier2) — 회차 캐시 지연 로더.
+                        # DVOL 은 이미 로드된 옵션 컨텍스트만 재사용 — 억제 터치
+                        # 때문에 새 조회를 하지 않는다(추가 API 콜 0 원칙). 즉
+                        # 억제 터치는 dvol/atr NULL, 레짐만 항상 값이 있다.
+                        _dvol = (_mkt_ctx["options"].get("dvol")
+                                 if _mkt_ctx["loaded"] and _mkt_ctx["options"]
+                                 else None)
                         db.record_touch_snapshot(
                             conn,
                             [(lv["id"], lv.get("grade"), lv.get("score"),
-                              lv.get("tp_usd")) for lv in cluster],
+                              lv.get("tp_usd"), _post_age_hours(lv, now))
+                             for lv in cluster],
                             penetration_pct=_pen_pct,
-                            closed_below=_closed_below)
+                            closed_below=_closed_below,
+                            atr_pct=_snap_atr,
+                            btc_regime=_btc_regime(),
+                            dvol=_dvol)
                     except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                         logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
                                        coin, e)

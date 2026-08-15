@@ -258,8 +258,13 @@ def _wilder_rsi(closes: list, period: int = RSI_PERIOD) -> Optional[float]:
     return 100.0 - 100.0 / (1.0 + rs)
 
 
-def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optional[list]:
-    """캔들 종가(과거→최신). unit: 'days'|'weeks'. 실패 시 None."""
+def _fetch_ohlc(market: str, unit: str, count: int, timeout: float) -> Optional[list]:
+    """캔들 (고가, 저가, 종가) 튜플 목록(과거→최신). unit: 'days'|'weeks'. 실패 시 None.
+
+    (2026-08-16 Tier2) 종전 _fetch_closes 의 요청·페이싱 경로를 그대로 흡수한
+    분리다 — ATR 은 OHLC 가 필요한데, 같은 1콜 응답에 종가(RSI/MA용)와 고저가가
+    함께 들어 있으므로 일봉을 두 번 부르지 않고 여기서 한 번에 얻는다
+    (_fetch_closes 는 아래에서 이 함수에 위임 — API 콜 수 종전과 동일)."""
     try:
         resp = requests.get(
             f"{_BASE}/candles/{unit}",
@@ -272,7 +277,8 @@ def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optiona
         if not candles:
             return None
         # 업비트 응답은 최신→과거 순 → 뒤집어 시간순으로
-        return [float(c["trade_price"]) for c in reversed(candles)]
+        return [(float(c["high_price"]), float(c["low_price"]),
+                 float(c["trade_price"])) for c in reversed(candles)]
     except Exception as e:  # noqa: BLE001
         # 2026-08-08 재검토: 예외 경로도 페이싱(fetch_rvol_1h 관례 통일) — RSI/MA
         # 4콜(일·주·4h·MA)이 이 함수를 공유해 실패 연쇄 시 무페이싱 연사 위험이
@@ -280,6 +286,13 @@ def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optiona
         time.sleep(_CANDLE_PACE_SEC)
         logger.warning("[upbit] %s %s 캔들 조회 실패: %s", market, unit, e)
         return None
+
+
+def _fetch_closes(market: str, unit: str, count: int, timeout: float) -> Optional[list]:
+    """캔들 종가(과거→최신). unit: 'days'|'weeks'. 실패 시 None.
+    _fetch_ohlc 1콜에 위임 — 요청·페이싱·예외 경로의 출처를 하나로 유지."""
+    ohlc = _fetch_ohlc(market, unit, count, timeout)
+    return [c[2] for c in ohlc] if ohlc else None
 
 
 
@@ -290,12 +303,49 @@ def _sma(closes: list, period: int) -> Optional[float]:
     return sum(closes[-period:]) / period
 
 
+ATR_PERIOD = 20
+
+
+def atr20_pct(ohlc) -> Optional[float]:
+    """Wilder ATR(20) — 마지막 종가 대비 % (2026-08-16 Tier2, **기록 전용**).
+
+    ohlc: _fetch_ohlc 반환 형태((고,저,종) 튜플, 과거→최신).
+    TR = max(고-저, |고-전일종가|, |저-전일종가|). 첫 ATR 은 처음 20개 TR 의
+    단순평균, 이후 atr = (prev*(20-1) + tr) / 20 — _wilder_rsi 와 동일한
+    Wilder 평활 방식(방식이 갈리면 값이 갈리므로 주석 고정).
+    반환은 절대값이 아니라 마지막 종가 대비 %(코인 간 비교 가능한 단위) —
+    나중에 vol-스케일 병행 라벨(MFE >= k×ATR20)의 분모로 쓸 원천 데이터.
+    표본 < 21(TR 20개 확보 불능)이거나 마지막 종가 <= 0 이면 None (fail-safe)."""
+    if not ohlc or len(ohlc) < ATR_PERIOD + 1:
+        return None
+    try:
+        trs = []
+        for i in range(1, len(ohlc)):
+            h, l, _c = ohlc[i]
+            pc = ohlc[i - 1][2]
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        atr = sum(trs[:ATR_PERIOD]) / ATR_PERIOD
+        for tr in trs[ATR_PERIOD:]:
+            atr = (atr * (ATR_PERIOD - 1) + tr) / ATR_PERIOD
+        last_close = ohlc[-1][2]
+        if not last_close or last_close <= 0:
+            return None
+        return atr / last_close * 100.0
+    except (TypeError, ValueError, IndexError):  # 이형 페이로드 방어 — 기록 전용이라 None
+        return None
+
+
 def fetch_position_data(market: str, timeout: float) -> dict:
     """자리 판정 입력 일괄 조회 — RSI(일/주/4h) + SMA(20/60/120/200).
     일봉 1콜을 RSI 와 MA 가 공유(2026-08-08 MA 확장 — 추가 API 콜 0).
     4h RSI(2026-08-08, 극단 경고 오버레이용)는 별도 콜 — 회당 3콜(일/주/4h),
-    52주 조회와 동일하게 발송 확정건에만 부른다. 각 값은 실패/표본부족 시 None."""
-    d = _fetch_closes(market, "days", 200, timeout)
+    52주 조회와 동일하게 발송 확정건에만 부른다. 각 값은 실패/표본부족 시 None.
+
+    atr20_pct(2026-08-16 Tier2): 일봉 1콜 응답을 OHLC 로 받아 RSI/MA(종가)와
+    ATR(고저종)이 공유 — ATR 때문에 추가 API 콜을 만들지 않는다. **기록 전용**
+    (터치 스냅샷 touch_atr_pct) — 알림·필터·등급·판정 어디에도 쓰지 않는다."""
+    d_ohlc = _fetch_ohlc(market, "days", 200, timeout)
+    d = [c[2] for c in d_ohlc] if d_ohlc else None
     w = _fetch_closes(market, "weeks", 200, timeout)
     # RSI(14) 최소 표본(15개) 확보용 여유(100개) — 업비트 4h(240분) 캔들 1콜 상한
     # 200 안에서 넉넉히, 일/주봉처럼 최대치를 쓸 필요는 없다(추세 아닌 순간 경고용).
@@ -306,6 +356,7 @@ def fetch_position_data(market: str, timeout: float) -> dict:
         "rsi_4h": _wilder_rsi(h4) if h4 else None,
         "ma20": _sma(d, 20), "ma60": _sma(d, 60),
         "ma120": _sma(d, 120), "ma200": _sma(d, 200),
+        "atr20_pct": atr20_pct(d_ohlc),
     }
 
 

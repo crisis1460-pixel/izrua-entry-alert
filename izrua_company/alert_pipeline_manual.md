@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-15 2차 (Tier1 예리화: 산식 v5 사다리 감점, 터치 스냅샷 5종, C등급 무음, purged IC 검증, 작성자 삭제율)  
+> 마지막 업데이트: 2026-08-16 (Tier2 예리화: ATR·BTC레짐·글나이 스냅샷, misses 자동분류, 피드백 Wilson 집계, 터치품질 분석기)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -257,6 +257,10 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 시간대·요일별 성과 (2026-08-14, 08-15 배선) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률, best/worst 요약만 표시(n≥5). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py` |
 | Hash Ribbons (2026-08-15) | `hash_ribbons.fetch_hash_ribbons()` — mempool.space 무료 해시레이트 90일, SMA30/SMA60. 항복(30<60)=warn+1, 회복 크로스 14일 내=confirm+1 (수급 보정 입력). 6h DB 캐시. `hash_ribbons_enabled` 스위치 | `monitor/hash_ribbons.py` (내부 보정 전용) |
 | 터치 스냅샷 5종 (2026-08-15 Tier1) | 발송·억제 무관 전 터치에 첫 기록 우선 저장: 재채점 등급/점수(`touch_grade`/`touch_score` — 캘리브레이션 축 교정), 터치 품질(`touch_penetration_pct` 침투 깊이, `touch_closed_below` 종가이탈 여부 — 꼬리털기 vs 진성 이탈 구분), TP 동결(`touch_tp_usd` — 작성자 사후 목표가 수정 감지). `db.record_touch_snapshot()` | `monitor/price_check.py` → `storage/db.py` (기록 전용) |
+| 터치 스냅샷 Tier2 4종 (2026-08-16) | `touch_atr_pct` — Wilder ATR(20)% (일봉 1콜 공유, vol-스케일 라벨 `MFE≥k×ATR` 기반), `touch_btc_regime` — BTC vs 200일선 above/below (3 KST일 히스테리시스, meta 상태 영속, 시간당 BTC 일봉 1콜 상한), `touch_dvol` — DVOL 수치(옵션 컨텍스트 재사용), `touch_post_age_hours` — 글 발행→터치 경과시간(만료 조이기 근거 데이터) | `monitor/upbit.py`·`macro.py`·`price_check.py` → `storage/db.py` (기록 전용) |
+| 주간 감사 misses 섹션 (2026-08-16) | grade_stats JSON `misses` — 최근 7일 실패 신호별 MFE/MAE·소요시간·터치 판정·자동 분류(즉시반전 MFE<1% / 이익반납 ≥2% / 중간 / 판정불가), 상한 30 + class_counts. `post_age_stats` — 글 나이 버킷별 적중률 (<24h/24-72h/72-120h/120h+) | `storage/audit_dump.py` (내부 전용) |
+| 피드백 Wilson 집계 (2026-08-16) | show_status "알림 피드백 (시험)" — 전체·등급별·작성자별(상위 10) up율 + Wilson 80% 하한. 10표 미만 판단 보류, 자동조치는 30표+ 정책 (표기 전용) | `scripts/show_status.py` |
+| 터치 품질 분석기 (2026-08-16) | `analyze_touch_quality.py` — 꼬리터치 vs 종가이탈 그룹별 + 침투 깊이 3버킷별 승률·ret_24h·MFE/MAE (그룹당 n≥20 도달 시 판정 — 첫 터치 vs 재확인 알림 전환의 자체 근거). 읽기 전용 CLI | `scripts/analyze_touch_quality.py` |
 | 캔들 종가 보존 (2026-08-15) | `upbit.fetch_range_since` 반환 튜플 4→5원소 `(start, end, high, low, close)` — 뒤에 붙여 기존 인덱스 소비자 무영향. 터치 품질 판정 입력 | `monitor/upbit.py` |
 | purged IC 검증 (2026-08-15) | `scripts/validate_ic.py` — 시간순 3-fold, ±168h purge + 168h embargo, `--feature COL` 로 임의 컬럼 IC 감사 가능. 첫 실측: 시간외 평균 +0.193 vs 인샘플 +0.202 → 유지 판정 | `scripts/validate_ic.py` (읽기 전용 CLI) |
 | 작성자 삭제율 (2026-08-15) | 주간 감사 JSON `author_deletion_rates` — post_url 기준, 5건+ 작성자, 상위 20. "패배 글 삭제" 작성자 감지 (안티게이밍) | `storage/audit_dump.py` (내부 전용) |

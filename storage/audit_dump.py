@@ -287,6 +287,132 @@ def _compute_author_deletion_stats(conn, min_posts: int = 5, top_n: int = 20) ->
     return stats[:top_n]
 
 
+def _compute_misses_stats(conn, since_epoch: float, cap: int = 30) -> dict:
+    """감사 창(최근 7일) 내 종결된 패배 신호의 실패 분류 (2026-08-15 Tier2 #9).
+
+    프롭 데스크의 3버킷 포스트모템 관행(연구: research_2026-08-15_alert_quality.md
+    §6 권고 6-A)을 자동 태깅으로 옮긴 것 — MFE 로 "애초에 안 갔나 / 갔다가
+    반납했나"를 가르면 고칠 대상(진입 논리 vs 지속성·타이밍)이 달라진다:
+      · 즉시반전: mfe_pct < 1.0  — 터치 후 한 번도 못 감 (진입 논리 약함)
+      · 이익반납: mfe_pct >= 2.0 — 올랐다가 다 돌려줌 (지속성·타이밍 문제)
+      · 중간    : 1.0 <= mfe_pct < 2.0
+      · 판정불가: mfe_pct 없음 (MFE 기록 도입 이전 행 등)
+
+    내부 통계 전용 — 알림/텔레그램 미출력. class_counts 는 창 내 **전체** 패배건
+    기준, signals 목록만 최근 cap 건으로 자른다(요약은 온전히, 상세는 상한).
+
+    옵션 컬럼(touch_btc_regime 등)은 스키마가 ALTER 로 자라는 중이라 PRAGMA 로
+    존재 확인 후 없으면 NULL 로 눕힌다 — 구버전 DB 에서도 덤프가 죽지 않는다."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+
+    def _col(name):
+        return name if name in have else f"NULL AS {name}"
+
+    def _prefer(primary, fallback, alias):
+        # 터치 시점 스냅샷(touch_*)이 있으면 그걸, 없으면 수집 시점 값으로 폴백
+        if primary in have and fallback in have:
+            return f"COALESCE({primary}, {fallback}) AS {alias}"
+        if primary in have:
+            return f"{primary} AS {alias}"
+        if fallback in have:
+            return f"{fallback} AS {alias}"
+        return f"NULL AS {alias}"
+
+    sel = ", ".join([
+        "coin_symbol", "author", "outcome", "touched_at", "resolved_at",
+        _prefer("touch_grade", "grade", "grade"),
+        _prefer("touch_score", "score", "score"),
+        _col("mfe_pct"), _col("mae_pct"),
+        _col("touch_supply_verdict"), _col("touch_position_verdict"),
+        _col("touch_btc_regime"),
+    ])
+    rows = conn.execute(
+        f"""SELECT {sel} FROM levels
+            WHERE outcome IN ('miss','timeboxed_loss')
+              AND resolved_at IS NOT NULL AND resolved_at >= ?
+            ORDER BY resolved_at DESC, id DESC""",
+        (since_epoch,)).fetchall()
+
+    def _fail_class(mfe):
+        if mfe is None:
+            return "판정불가"
+        if mfe < 1.0:
+            return "즉시반전"
+        if mfe >= 2.0:
+            return "이익반납"
+        return "중간"
+
+    class_counts: dict = {}
+    signals = []
+    for r in rows:
+        cls = _fail_class(r["mfe_pct"])
+        class_counts[cls] = class_counts.get(cls, 0) + 1
+        if len(signals) >= cap:
+            continue    # 목록만 상한 — 요약(class_counts)은 전건 집계
+        ttf = None
+        if r["resolved_at"] is not None and r["touched_at"] is not None:
+            ttf = round((r["resolved_at"] - r["touched_at"]) / 3600.0, 1)
+        signals.append({
+            "coin": r["coin_symbol"], "author": r["author"],
+            "outcome": r["outcome"],
+            "grade": r["grade"], "score": r["score"],
+            "mfe_pct": r["mfe_pct"], "mae_pct": r["mae_pct"],
+            "time_to_fail_h": ttf,
+            "supply_verdict": r["touch_supply_verdict"],
+            "position_verdict": r["touch_position_verdict"],
+            "btc_regime": r["touch_btc_regime"],
+            "failure_class": cls,
+        })
+    return {"total": len(rows), "class_counts": class_counts, "signals": signals}
+
+
+# 글 나이 버킷 경계(시간). 168h 만료 상한 대비 "글이 이미 얼마나 묵은 채 터치됐나"
+_POST_AGE_LABELS = ("<24h", "24-72h", "72-120h", "120h+")
+
+
+def _compute_post_age_stats(conn) -> dict:
+    """터치 시점 글 나이(수집→터치 경과 + 수집 당시 이미 묵은 나이) 버킷별 적중률
+    (2026-08-15 Tier2 #10 분석 절반).
+
+    목적: 168h 만료를 96-120h 로 조일지 판단할 **근거 데이터 축적** — 계산만 하고
+    동작(만료·필터)은 아무것도 바꾸지 않는다. 글이 묵을수록 적중률이 꺾이는
+    구간이 실측으로 보이면 그 지점이 새 만료 상한의 후보가 된다.
+
+    age_at_touch_h = (touched_at - collected_at)/3600 + post_age_minutes/60
+    — collected_at 은 봇이 글을 수집한 시각이지 글이 쓰인 시각이 아니므로,
+    수집 시점에 이미 지나 있던 나이(post_age_minutes)를 더해야 진짜 글 나이다."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+    age_expr = "(touched_at - collected_at) / 3600.0"
+    if "post_age_minutes" in have:
+        age_expr += " + COALESCE(post_age_minutes, 0) / 60.0"
+    rows = conn.execute(
+        f"""SELECT {age_expr} AS age_h, outcome FROM levels
+            WHERE touched_at IS NOT NULL AND collected_at IS NOT NULL
+              AND outcome IN ('hit','timeboxed_win','miss','timeboxed_loss')"""
+    ).fetchall()
+
+    def _bucket(h):
+        if h < 24:
+            return "<24h"
+        if h < 72:
+            return "24-72h"
+        if h < 120:
+            return "72-120h"
+        return "120h+"
+
+    agg = {k: [0, 0] for k in _POST_AGE_LABELS}
+    for r in rows:
+        n_w = agg[_bucket(r["age_h"])]
+        n_w[0] += 1
+        if r["outcome"] in ("hit", "timeboxed_win"):
+            n_w[1] += 1
+    # 빈 버킷도 n=0 으로 남긴다 — 주차 파일 diff 시 "표본이 아예 없는 구간"이
+    # 자기기술적으로 보여야 만료 조이기 논의에서 오독이 없다.
+    return {k: {"n": v[0], "wins": v[1],
+                "win_rate": round(v[1] / v[0], 2) if v[0] else None}
+            for k, v in agg.items()}
+
+
 def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     """덤프 → (성공 시) raw_text 정리 → 오래된 덤프 정리. 반환: 요약 dict.
 
@@ -318,6 +444,8 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
         touch_time_stats = _compute_touch_time_stats(conn)
         signal_quality_stats = _compute_signal_quality_stats(conn)
         author_deletion_rates = _compute_author_deletion_stats(conn)
+        misses_stats = _compute_misses_stats(conn, since_epoch=now - 7 * 86400)
+        post_age_stats = _compute_post_age_stats(conn)
         stats_path = out_dir / f"grade_stats_{week}.json"
         stats_tmp = out_dir / f".grade_stats_{week}.json.tmp"
         with open(stats_tmp, "w", encoding="utf-8", newline="\n") as fp:
@@ -330,6 +458,8 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                 "touch_time_analysis": touch_time_stats,
                 "signal_quality": signal_quality_stats,
                 "author_deletion_rates": author_deletion_rates,
+                "misses": misses_stats,
+                "post_age_stats": post_age_stats,
             }, fp, ensure_ascii=False, indent=2)
         os.replace(stats_tmp, stats_path)
         files.append(stats_path.name)

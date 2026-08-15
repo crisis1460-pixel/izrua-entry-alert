@@ -322,6 +322,25 @@ _OUTCOME_COLUMNS = {
     # 터치 시점 TP 동결 (안티게이밍) — 각 레벨 자신의 tp_usd 를 터치 순간 스냅샷.
     # 사후 재파싱 값과 비교하면 작성자의 목표가 소급 수정(골대 이동)이 드러난다.
     "touch_tp_usd": "REAL",
+    # ── 터치 시점 기록 4종 2차 (2026-08-16 Tier2 스프린트 — 동 리서치 문서
+    # 항목 7·8·10). 전부 **기록 전용**, record_touch_snapshot 경유(발송·억제
+    # 무관 모든 실터치), 최초 기록 우선(IS NULL 가드) — 위 Tier1 4종과 동일 관례.
+    # ATR20%(일봉 Wilder, 마지막 종가 대비 %) — vol-스케일 병행 라벨
+    # (MFE >= k×ATR20, k=1·2)의 분모. 코인별 TP 난이도 편차를 제거한 라벨을
+    # 나중에 만들 원천 데이터. 발송 경로(fetch_position_data 일봉 공유)에서만
+    # 값이 있고 억제 터치는 NULL(추가 API 콜 0 원칙).
+    "touch_atr_pct": "REAL",
+    # BTC 레짐 도장 "above"|"below" — BTC vs 200일선 + 3일 히스테리시스
+    # (monitor/macro.get_btc_regime, 시간당 BTC 일봉 1콜 상한). 레짐별 표본
+    # n≈100 도달 후 게이팅 검토용 — 지금은 도장만.
+    "touch_btc_regime": "TEXT",
+    # DVOL(Deribit 30일 내재변동성 지수) 레벨 — 고/저변동 국면별 성과 분리용.
+    # 발송 경로에서 이미 로드된 옵션 컨텍스트만 재사용 — 억제 터치는 NULL.
+    "touch_dvol": "REAL",
+    # 글 발행→터치 경과 시간(h) 비정규화 = (터치시각-수집시각)/3600 +
+    # 수집시점 글나이(post_age_minutes)/60. 신선도 창(168h→96-120h) 조이기
+    # 근거 데이터(시들음 분석) — 레벨별 값(post_age_minutes 가 레벨마다 다름).
+    "touch_post_age_hours": "REAL",
     # MFE/MAE — 터치 후 최대유리·최대불리 이동폭(%) (2026-08-14).
     # Freqtrade max_rate/min_rate 패턴. 판정 종결 시 1회 기록.
     # Edge Ratio(MFE/|MAE|), Capture Ratio(실현이익/MFE) 도출의 원천 데이터.
@@ -688,20 +707,26 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
 
 
 def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = None,
-                          closed_below: Optional[int] = None) -> None:
-    """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 스프린트) — **기록 전용**.
+                          closed_below: Optional[int] = None,
+                          atr_pct: Optional[float] = None,
+                          btc_regime: Optional[str] = None,
+                          dvol: Optional[float] = None) -> None:
+    """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 + 08-16 Tier2) — **기록 전용**.
 
-    rows: [(level_id, grade, score, tp_usd), ...] — 각 레벨 **자신의** 터치 시점
-    재채점 등급/점수(regrade_current 가 in-place 갱신해 둔 값)와 자신의 TP 동결값.
+    rows: [(level_id, grade, score, tp_usd, post_age_hours), ...] — 각 레벨
+    **자신의** 터치 시점 재채점 등급/점수(regrade_current 가 in-place 갱신해 둔
+    값)·자신의 TP 동결값·자신의 글나이(h — post_age_minutes 가 레벨마다 달라
+    레벨별 값이다).
     penetration_pct/closed_below 는 클러스터 공통값(트리거가 상단 엔트리 하나라
-    터치 캔들도 하나) — 전달된 전 행에 동일하게 기록한다.
+    터치 캔들도 하나), atr_pct(코인 일봉)/btc_regime/dvol(시장 전역)도 클러스터
+    공통 — 전달된 전 행에 동일하게 기록한다.
 
     record_touch_verdicts(발송 성공건만 — "표시된 것만 기록" 불변식)와 달리 이
     함수는 mark_touched 옆에서 불려 발송·억제 무관 **모든 실터치**에 남는다 —
     등급 필터가 억제한 터치의 등급 분포가 바로 이 데이터의 존재 이유다.
     전 컬럼 최초 기록 우선(IS NULL 가드) — 재발송·경합에도 첫 값 보존."""
     ids = []
-    for lid, grade, score, tp_usd in rows:
+    for lid, grade, score, tp_usd, post_age_hours in rows:
         ids.append(lid)
         if grade is not None:
             conn.execute(
@@ -717,6 +742,11 @@ def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = N
             conn.execute(
                 "UPDATE levels SET touch_tp_usd=? WHERE id=? AND touch_tp_usd IS NULL",
                 (float(tp_usd), lid))
+        if post_age_hours is not None:
+            conn.execute(
+                "UPDATE levels SET touch_post_age_hours=? "
+                "WHERE id=? AND touch_post_age_hours IS NULL",
+                (float(post_age_hours), lid))
     if not ids:
         return
     ph = ",".join("?" * len(ids))
@@ -730,6 +760,21 @@ def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = N
             f"UPDATE levels SET touch_closed_below=? "
             f"WHERE id IN ({ph}) AND touch_closed_below IS NULL",
             (1 if closed_below else 0, *ids))
+    if atr_pct is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_atr_pct=? "
+            f"WHERE id IN ({ph}) AND touch_atr_pct IS NULL",
+            (float(atr_pct), *ids))
+    if btc_regime is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_btc_regime=? "
+            f"WHERE id IN ({ph}) AND touch_btc_regime IS NULL",
+            (str(btc_regime), *ids))
+    if dvol is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_dvol=? "
+            f"WHERE id IN ({ph}) AND touch_dvol IS NULL",
+            (float(dvol), *ids))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────
