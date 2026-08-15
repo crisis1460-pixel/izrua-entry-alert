@@ -150,7 +150,7 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
                           options_ctx=None, liq_ctx=None,
                           # 새 시장환경 입력 (2026-08-14)
                           dxy=None, usdt_dominance=None, dvol=None,
-                          macro_event=None):
+                          macro_event=None, hash_ribbons=None):
     """펀딩 쏠림 × (OI 증감 + 가격 방향) → 매수 관점 판정.
 
     반환 (label, reason|None) — label ∈ '우호'/'주의'/'중립', reason 은 괄호
@@ -264,6 +264,15 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
     # FOMC/CPI 24h 이내: 경고(warn) — 고영향 이벤트 전후 방향성 불확실
     if macro_event is not None:
         warn += 1
+
+    # Hash Ribbons (2026-08-15) — 채굴자 항복=스트레스 구간(warn),
+    # 회복 크로스 후 14일=역사적 매집 구간(confirm)
+    if hash_ribbons is not None:
+        state = hash_ribbons.get("state")
+        if state == "capitulation":
+            warn += 1
+        elif state == "recovery":
+            confirm += 1
 
     if label == "우호" and warn >= 1:
         label = "중립"

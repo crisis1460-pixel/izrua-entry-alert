@@ -189,6 +189,19 @@ CREATE TABLE IF NOT EXISTS oi_spike_state (
     coin_symbol   TEXT PRIMARY KEY,
     last_alert_at REAL NOT NULL
 );
+
+-- 알림 반응 피드백 (2026-08-15 시험 운용) — 터치 본알림의 👍/👎 인라인 버튼
+-- 콜백을 notify/feedback_poll.py 가 getUpdates 폴링으로 수거해 여기 쌓는다.
+-- **내부 축적 전용** — 알림·필터·등급 어디에도 영향 없음. ref = callback_data 에
+-- 실린 대표 레벨 id 참조. 같은 (ref, 유저) 재투표는 UPDATE(마지막 의견이 남는다).
+CREATE TABLE IF NOT EXISTS alert_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref TEXT NOT NULL,            -- callback_data 의 레벨 id 참조
+    vote TEXT NOT NULL,           -- 'up' | 'down'
+    tg_user_id TEXT,              -- 누른 사람 (중복 방지 키)
+    created_at REAL NOT NULL,
+    UNIQUE(ref, tg_user_id)       -- 알림당 유저당 1표 — 재투표는 갱신
+);
 """
 
 
@@ -1519,6 +1532,20 @@ def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: st
     conn.execute(
         "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
         (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)), now if now is not None else time.time(), day_kst),
+    )
+
+
+def record_feedback(conn, ref: str, vote: str, tg_user_id: Optional[str],
+                    now: Optional[float] = None) -> None:
+    """알림 반응 피드백 1건 기록 (2026-08-15 시험 운용). 같은 (ref, 유저)의
+    재투표는 UPDATE — 사용자가 의견을 바꿀 수 있다(마지막 표가 남는다).
+    내부 축적 전용 — 알림·필터·등급 어디에도 되먹임되지 않는다."""
+    conn.execute(
+        """INSERT INTO alert_feedback (ref, vote, tg_user_id, created_at)
+           VALUES (?,?,?,?)
+           ON CONFLICT(ref, tg_user_id) DO UPDATE SET
+             vote=excluded.vote, created_at=excluded.created_at""",
+        (ref, vote, tg_user_id, now if now is not None else time.time()),
     )
 
 

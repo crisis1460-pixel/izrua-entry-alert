@@ -306,6 +306,92 @@ def print_pipeline_status(conn, now: float) -> None:
     print(f"  마지막 주간리포트  : {_fmt_ago(last_report, now)}  {report_note}")
 
 
+# ── ②-b 신호 품질 (IC/ICIR·시간대) ─────────────────────────────────
+#
+# analytics/signal_quality.py 는 "프로젝트 모듈 import 0" 원칙이라 행 공급은
+# 호출부 몫이다 — 여기서 conn.execute 로 직접 뽑아 넘긴다(_grade_distribution 패턴).
+# 표기 전용: 등급 산식·필터·알림 양식에는 절대 반영하지 않는다.
+
+def print_signal_quality(conn) -> None:
+    print()
+    print(_SEP)
+    print("🧭 신호 품질 (IC/ICIR·시간대)")
+    print(_SEP)
+    try:
+        from analytics import signal_quality as sq
+        from utils.time_kst import KST as _KST
+
+        ph = ",".join("?" * len(sq.CLOSED_OUTCOMES))
+        rows = conn.execute(
+            f"SELECT score, ret_24h, outcome, touched_at FROM levels "
+            f"WHERE touched_at IS NOT NULL AND outcome IN ({ph})",
+            sq.CLOSED_OUTCOMES).fetchall()
+
+        # IC — score·ret_24h 둘 다 있는 종결 표본 전체
+        ic_rows = [{"score": r["score"], "ret_24h": r["ret_24h"]}
+                   for r in rows
+                   if r["score"] is not None and r["ret_24h"] is not None]
+        ic_res = sq.compute_ic(ic_rows)
+        if ic_res["ic"] is not None:
+            v = "역상관" if ic_res["ic"] < 0 else ("유효" if ic_res["ic"] >= 0.05 else "약함")
+            print(f"  IC(점수↔ret24h): {ic_res['ic']:.4f} (n={ic_res['n']}) — {v}")
+        else:
+            print(f"  IC(점수↔ret24h): 표본 부족 (n={ic_res['n']} < 5)")
+
+        # ICIR — KST ISO 주차별 IC (주당 n<5 는 제외) 의 평균/표준편차 비
+        weekly: dict = {}
+        for r in rows:
+            if r["score"] is None or r["ret_24h"] is None or r["touched_at"] is None:
+                continue
+            iso = datetime.fromtimestamp(float(r["touched_at"]), _KST).isocalendar()
+            weekly.setdefault((iso[0], iso[1]), []).append(
+                {"score": r["score"], "ret_24h": r["ret_24h"]})
+        weekly_ics = []
+        for wk in sorted(weekly):
+            w_ic = sq.compute_ic(weekly[wk])["ic"]
+            if w_ic is not None:
+                weekly_ics.append(w_ic)
+        icir = sq.compute_icir(weekly_ics)
+        if icir["icir"] is not None:
+            print(f"  ICIR: {icir['icir']:.3f} (mean IC {icir['mean_ic']:.4f} "
+                  f"· σ {icir['std_ic']:.4f} · {icir['weeks']}주)")
+        else:
+            print(f"  ICIR: 주차 표본 부족({len(weekly_ics)}주 < 4)")
+
+        # 시간대·요일 — touched_at 에서 KST 시각/요일 파생, 요약만 출력(24+7 표 생략)
+        t_rows = []
+        for r in rows:
+            if r["touched_at"] is None:
+                continue
+            dt = datetime.fromtimestamp(float(r["touched_at"]), _KST)
+            t_rows.append({"touched_hour_kst": dt.hour,
+                           "touched_weekday": dt.weekday(),
+                           "outcome": r["outcome"]})
+        summary = sq.summarize_best_worst(
+            sq.compute_hourly_performance(t_rows),
+            sq.compute_weekday_performance(t_rows), min_n=5)
+
+        def _fb(b, kind):
+            label = f"{b['hour']:02d}시" if kind == "hour" else f"{b['label']}요일"
+            return f"{label} {b['rate'] * 100:.0f}%({b['hits']}/{b['n']})"
+
+        if any(summary.values()):
+            parts = []
+            if summary["best_hour"]:
+                parts.append(f"시간대 최고 {_fb(summary['best_hour'], 'hour')}"
+                             f" · 최저 {_fb(summary['worst_hour'], 'hour')}")
+            if summary["best_day"]:
+                parts.append(f"요일 최고 {_fb(summary['best_day'], 'day')}"
+                             f" · 최저 {_fb(summary['worst_day'], 'day')}")
+            for p in parts:
+                print(f"  {p}")
+            print("  (구간당 n≥5 만 판정 — 표기 전용, 산식·필터 미반영)")
+        else:
+            print("  시간대·요일: 표본 부족 (n≥5 구간 없음)")
+    except Exception as e:  # noqa: BLE001 - 표기 전용 섹션이 현황판을 죽이면 안 된다
+        print(f"  ⚠ 신호 품질 계산 실패: {type(e).__name__}: {e}")
+
+
 # ── ③ 작성자 성적 ──────────────────────────────────────────────────
 
 def _rows_by_author(conn) -> dict:
@@ -731,6 +817,7 @@ def run(db_path: str, days: int, show_report: bool, now: float = None) -> int:
             print_approaching_levels(conn, live)
             print_active_positions(conn, live, now)
         print_pipeline_status(conn, now)
+        print_signal_quality(conn)
         print_author_performance(conn, now)
         print_health(conn, now)
         if show_report:

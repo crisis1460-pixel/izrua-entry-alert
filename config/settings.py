@@ -121,6 +121,22 @@ SETTINGS = {
     "macro_fomc_cpi_enabled": True,      # FOMC/CPI 정적 캘린더 (API 0콜)
     "macro_dvol_enabled": True,          # Deribit DVOL 변동성지수 (무료)
     "token_unlock_enabled": True,        # DeFiLlama 토큰 언락 경고 (무료)
+    # Hash Ribbons (2026-08-15) — mempool.space 무료 해시레이트, 채굴자 항복/회복
+    # 감지. 수급 판정 내부 보정 전용(알림 무노출).
+    "hash_ribbons_enabled": True,
+
+    # ── 모닝 브리핑 (2026-08-15 사용자 확정: "모닝브리핑은 좋아") ──────────
+    # 하루 1회, KST 아침 시간창에 시장환경 요약 1통. 엔트리 알림 양식과 무관한
+    # 별도 메시지 종류 — 주간리포트와 같은 meta 주기 판정 패턴(외부 크론 불필요).
+    "morning_brief_enabled": True,
+    "morning_brief_kst_hour_from": 8,    # 이 시각(포함)부터 발송 창
+    "morning_brief_kst_hour_to": 10,     # 이 시각(미만)까지 — 놓치면 그날 생략
+
+    # ── 알림 반응 피드백 (2026-08-15 시험 도입, 사용자: "써본 다음 유지 결정") ──
+    # 터치 본알림에 인라인 버튼(👍/👎) 부착, 2분 회차마다 getUpdates 폴링으로
+    # 수거해 DB 축적. 웹훅 불필요(서버리스 유지). 내부 축적 전용.
+    # 끄는 법: 이 값만 False — 버튼 미부착·폴링 중단, 기존 알림 영향 0.
+    "alert_feedback_enabled": True,
 
     # 알림 필터
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)

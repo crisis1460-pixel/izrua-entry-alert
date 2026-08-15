@@ -517,8 +517,8 @@ def run_once(now: float | None = None) -> dict:
                     logger.warning("[체크] BTC 청산 클러스터 조회 실패(무시): %s", e)
             return _mkt_ctx
 
-        # 매크로 환경 (DXY·FOMC/CPI) — 발송 시 1회 조회, 전 코인 공유
-        _macro_ctx = {"loaded": False, "dxy": None, "event": None}
+        # 매크로 환경 (DXY·FOMC/CPI·Hash Ribbons) — 발송 시 1회 조회, 전 코인 공유
+        _macro_ctx = {"loaded": False, "dxy": None, "event": None, "hash_ribbons": None}
 
         def _macro_context():
             if not _macro_ctx["loaded"]:
@@ -529,6 +529,13 @@ def run_once(now: float | None = None) -> dict:
                     _macro_ctx["event"] = macro.get_nearby_macro_event()
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[체크] 매크로 조회 실패(무시): %s", e)
+                try:
+                    from monitor import hash_ribbons
+                    if cfg_get("hash_ribbons_enabled"):
+                        _macro_ctx["hash_ribbons"] = hash_ribbons.fetch_hash_ribbons(
+                            conn, cfg_get("http_timeout_sec"))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] Hash Ribbons 조회 실패(무시): %s", e)
             return _macro_ctx
 
         # 거래량 순위도 발송 시에만 1회 조회해 이번 회차 알림들이 공유 (조회 시점 기준)
@@ -932,7 +939,8 @@ def run_once(now: float | None = None) -> dict:
                             dxy=_macro["dxy"],
                             usdt_dominance=_sent.get("usdt_dominance") if _sent else None,
                             dvol=_opt_ctx.get("dvol") if _opt_ctx else None,
-                            macro_event=_macro["event"])
+                            macro_event=_macro["event"],
+                            hash_ribbons=_macro["hash_ribbons"])
                         if _snap_supply[0] is None:
                             _snap_supply = None
                     except Exception as e:  # noqa: BLE001
@@ -965,7 +973,14 @@ def run_once(now: float | None = None) -> dict:
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
                     # 보낸다. 알림 개수·필터·양식은 그대로이고 방해 강도만 낮추는 변경이라
                     # 관찰 데이터(daily_stats)에는 영향이 없다.
-                    if telegram.send(text, urgency="high" if touched else "low"):
+                    # 피드백 버튼 (2026-08-15 시험 운용): 터치 본알림에만 👍/👎 인라인
+                    # 버튼 부착 — 버튼은 본문 밖이라 알림 양식(텍스트) 동결 원칙 유지.
+                    # ref 는 대표 첫 레벨 id (callback_data 64바이트 상한). 예고 불변.
+                    _fb_markup = None
+                    if kind == "touch" and cfg_get("alert_feedback_enabled"):
+                        _fb_markup = telegram.feedback_keyboard(str(ids[0]))
+                    if telegram.send(text, urgency="high" if touched else "low",
+                                     reply_markup=_fb_markup):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
@@ -1138,6 +1153,16 @@ def run_once(now: float | None = None) -> dict:
         db.bump_daily_stats(conn, day, **obs)
         db.prune_daily_stats(conn, now)
         db.prune_alerts_log(conn)
+
+        # 알림 반응 피드백 폴링 (2026-08-15 시험 운용) — getUpdates 1콜/회차로
+        # 👍/👎 버튼 콜백 수거. 이 기능의 예외가 2분 주기 핫패스를 죽이면 절대
+        # 안 되므로 통째로 격리한다(해시체인 검증 등과 동일 원칙).
+        if cfg_get("alert_feedback_enabled"):
+            try:
+                from notify import feedback_poll
+                feedback_poll.poll_feedback(conn, cfg_get("http_timeout_sec"))
+            except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+                logger.warning("[체크] 피드백 폴링 실패(무시): %s", e)
 
         # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의
         # 버그/예외가 2분 주기 핫패스를 죽이면 절대 안 되므로 통째로 격리한다

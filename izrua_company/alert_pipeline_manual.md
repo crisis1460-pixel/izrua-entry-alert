@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-14 (고도화 일괄 — 시장환경필터 5종, 토큰 언락, MTF 정렬, IC/ICIR, 글로벌 알림 상한, 섹터 집중도 placeholder)  
+> 마지막 업데이트: 2026-08-15 (모닝 브리핑, 피드백 버튼 시험, Hash Ribbons, IC/ICIR 배선, 수집 시간 예산 수리)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -248,8 +248,9 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 토큰 언락 경고 (2026-08-14) | `token_events.get_unlock_warning(conn, symbol)` — DeFiLlama 무료 API, 7일 내 유통량 5%+ 언락 예정 코인 감지. 6시간 DB 캐시. 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_token_unlock_pct` |
 | MTF 정렬 점수 (2026-08-14) | `upbit.derive_mtf_alignment(pos_data, price)` — 일봉RSI>50(+1)·MA200 위(+1) = -2~+2 점수. fetch_position_data() 재사용 (추가 콜 0). 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_mtf_score` |
 | 섹터 집중도 (2026-08-14) | `risk_checks.check_sector_concentration()` — placeholder. 향후 CoinGecko 카테고리 데이터 축적 후 활성화 | `monitor/risk_checks.py` |
-| IC/ICIR 신호 품질 (2026-08-14) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. 표기 전용 | `analytics/signal_quality.py` |
-| 시간대·요일별 성과 (2026-08-14) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률. 표기 전용 | `analytics/signal_quality.py` |
+| IC/ICIR 신호 품질 (2026-08-14, 08-15 배선) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. show_status "신호 품질" 섹션 + 주간 감사덤프 grade_stats JSON에 연결. 첫 실측(08-15): IC 0.2072(n=167) 유효, ICIR 1.615(4주). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py`, `storage/audit_dump.py` |
+| 시간대·요일별 성과 (2026-08-14, 08-15 배선) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률, best/worst 요약만 표시(n≥5). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py` |
+| Hash Ribbons (2026-08-15) | `hash_ribbons.fetch_hash_ribbons()` — mempool.space 무료 해시레이트 90일, SMA30/SMA60. 항복(30<60)=warn+1, 회복 크로스 14일 내=confirm+1 (수급 보정 입력). 6h DB 캐시. `hash_ribbons_enabled` 스위치 | `monitor/hash_ribbons.py` (내부 보정 전용) |
 
 ---
 
@@ -273,6 +274,17 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | meta_float 통합 | `storage/db.py` | `run_cycle.py`·`audit_dump.py` 중복 헬퍼 → DB 모듈 단일 정의 |
 | GH Actions 정리 | `price-check.yml` | 구버전 마이그레이션 스텝·`actions:read` 권한 제거 |
 | 수집 ingest 오류집계 | `scripts/run_collect.py` | 개별 ingest 실패 건수 로그 출력 |
+
+---
+
+## 부가 메시지·상호작용 (2026-08-15)
+
+엔트리 알림 양식(동결)과 무관한 별도 기능들.
+
+| 항목 | 파일 | 내용 |
+|------|------|------|
+| 모닝 브리핑 | `notify/morning_brief.py` → `scripts/run_cycle.py` | 하루 1회, KST 8~10시 창(`morning_brief_kst_hour_from/to`)에 시장환경 요약 1통 (~11줄): BTC 가격·김프·F&G·BTC.D/USDT.D·DXY/DVOL·매크로 D-day(7일 전망)·어제 터치 수·대기 레벨 수. meta `last_morning_brief_date` 게이트 — 발송 성공 시에만 날짜 마킹(실패 시 창 내 재시도). 데이터 None인 줄은 생략. 끄기: `morning_brief_enabled=False` |
+| 알림 반응 피드백 (시험) | `notify/telegram.py`(버튼) + `notify/feedback_poll.py`(수거) + `storage/db.py`(`alert_feedback` 테이블) | 터치 본알림에만 👍도움됨/👎별로 인라인 버튼(`fb:<level_id>:<up\|down>`, 본문 텍스트 불변). 2분 회차마다 getUpdates 폴링(meta `feedback_update_offset`), 웹훅 불필요. 유저당 1표(재투표=갱신), UNIQUE(ref, tg_user_id). 내부 축적 전용. 끄기: `alert_feedback_enabled=False` — 버튼 미부착·폴링 중단 |
 
 ---
 

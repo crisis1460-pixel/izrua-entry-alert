@@ -55,7 +55,7 @@ except Exception:
     pass
 
 from config import settings
-from notify import telegram
+from notify import morning_brief, telegram
 from storage import db
 
 logger = logging.getLogger("alert.cycle")
@@ -653,20 +653,28 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
         enabled=report_enabled and (settings.get("weekly_report_auto_send") or force_report),
         report_runner=report_runner)
 
+    # 모닝 브리핑 — 하루 1회 KST 아침 창(settings.morning_brief_*) 발송.
+    # report_due 와 같은 meta 판정 패턴이지만 게이트는 날짜 문자열(하루 1회 의미
+    # 그대로)이고, 발송 성공 후에만 날짜를 기록해 실패 시 다음 회차가 창 안에서
+    # 재시도한다. 어떤 실패도 예외를 던지지 않는다(다른 maybe_* 와 동일 격리).
+    brief_status = morning_brief.maybe_send_brief(db_path, now=now)
+
     # 감사 덤프 정체 감시 — collect_stale 과 동일 패턴
     _check_audit_dump_stale(db_path, now)
 
     # 데드맨 스위치 핑 — 회차 완료 시 외부 서비스에 생존 신호 전송
     _deadman_ping()
 
-    logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 역신호=%s 주간리포트=%s",
+    logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 역신호=%s 주간리포트=%s "
+                "모닝브리핑=%s",
                 price_status, collect_status, collect_stale_status, snapshot_status,
-                reverse_status, report_status)
+                reverse_status, report_status, brief_status)
     return {"price_check": price_status, "collect": collect_status,
             "collect_stale_alert": collect_stale_status,
             "author_snapshot": snapshot_status,
             "reverse_check": reverse_status,
-            "weekly_report": report_status, "summary": price_summary}
+            "weekly_report": report_status,
+            "morning_brief": brief_status, "summary": price_summary}
 
 
 def _env_flag(name: str) -> bool:

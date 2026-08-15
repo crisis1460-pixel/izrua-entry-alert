@@ -219,6 +219,41 @@ def _compute_touch_time_stats(conn) -> dict:
             "by_grade": {g: _fmt(d) for g, d in by_grade.items() if any(v[0] for v in d.values())}}
 
 
+def _compute_signal_quality_stats(conn) -> dict:
+    """IC(점수↔ret24h)·ICIR 주간 기록 (2026-08-15, 내부 통계 전용 — 알림 미출력).
+
+    scripts/show_status.py 의 '신호 품질' 섹션과 같은 계산을 JSON 으로도 남긴다 —
+    주차 파일이 쌓이면 IC 추이를 git 이력으로 되짚을 수 있다. analytics 모듈은
+    "프로젝트 모듈 import 0" 원칙이라 행 공급은 여기(호출부)가 한다."""
+    from datetime import datetime
+
+    from analytics import signal_quality as sq
+    from utils.time_kst import KST
+
+    ph = ",".join("?" * len(sq.CLOSED_OUTCOMES))
+    rows = conn.execute(
+        f"""SELECT score, ret_24h, touched_at FROM levels
+            WHERE touched_at IS NOT NULL AND score IS NOT NULL
+              AND ret_24h IS NOT NULL AND outcome IN ({ph})""",
+        sq.CLOSED_OUTCOMES).fetchall()
+
+    ic = sq.compute_ic([{"score": r["score"], "ret_24h": r["ret_24h"]} for r in rows])
+
+    weekly: dict = {}
+    for r in rows:
+        iso = datetime.fromtimestamp(float(r["touched_at"]), KST).isocalendar()
+        weekly.setdefault(f"{iso[0]}-W{iso[1]:02d}", []).append(
+            {"score": r["score"], "ret_24h": r["ret_24h"]})
+    weekly_ics = {}
+    for wk in sorted(weekly):
+        w_ic = sq.compute_ic(weekly[wk])["ic"]
+        if w_ic is not None:   # 주당 n<5 는 제외 (compute_ic 가 None 반환)
+            weekly_ics[wk] = w_ic
+    icir = sq.compute_icir(list(weekly_ics.values()))
+
+    return {"ic": ic, "icir": icir, "weekly_ics": weekly_ics}
+
+
 def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     """덤프 → (성공 시) raw_text 정리 → 오래된 덤프 정리. 반환: 요약 dict.
 
@@ -248,6 +283,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
         ).fetchall()]
         author_advanced = {a: db.get_author_advanced_stats(conn, a) for a in authors}
         touch_time_stats = _compute_touch_time_stats(conn)
+        signal_quality_stats = _compute_signal_quality_stats(conn)
         stats_path = out_dir / f"grade_stats_{week}.json"
         stats_tmp = out_dir / f".grade_stats_{week}.json.tmp"
         with open(stats_tmp, "w", encoding="utf-8", newline="\n") as fp:
@@ -258,6 +294,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                 "grade_ret_distribution": grade_ret_stats,
                 "author_advanced": author_advanced,
                 "touch_time_analysis": touch_time_stats,
+                "signal_quality": signal_quality_stats,
             }, fp, ensure_ascii=False, indent=2)
         os.replace(stats_tmp, stats_path)
         files.append(stats_path.name)
