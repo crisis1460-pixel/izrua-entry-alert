@@ -33,6 +33,15 @@ settings.SETTINGS["announcement_alert_enabled"] = False
 # (True 면 기존 동작 그대로임의 증명이기도 하다)을 보존하고, False 동작은 전용
 # 블록(PV*)에서 검증한다.
 settings.SETTINGS["preview_alert_enabled"] = True
+# 2026-08-15 v5 사다리 감점 중립화 — 이 파일의 T1~T35 손계산(점수 절대값·억제
+# 카운터 연쇄)은 전부 v4 배점 기준으로 짜여 있고, 검증 대상은 파이프라인 역학
+# (클러스터·소급·상한·재발송·집계)이지 배점표가 아니다. v5 의 -3 이 켜지면 경계
+# (40점) 근처 픽스처가 D 로 밀려 suppressed_* 손계산이 연쇄로 어긋난다(실측 7건:
+# T22·T26d/e·T27b/c/e·T28c). 사다리 감점 자체의 검증은 test_grading.py G14~G14f
+# 가 전담한다. LADDER_PENALTY 는 함수 본문에서 모듈 전역으로 참조되므로 여기서
+# 0 으로 덮으면 이 프로세스 안에서만 무효화된다(운영 코드 불변).
+from collector import grading as _grading_neutralize  # noqa: E402
+_grading_neutralize.LADDER_PENALTY = 0
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 # 발송 원장(2026-07-28)은 DB 밖 파일이라 DB 를 지워도 남는다 — 안 지우면 직전
@@ -89,8 +98,12 @@ def _fake_range(m, mins, t):
     if fake["low"] is None and fake["high"] is None:
         return None
     # 기본: 직전 1~2분 사이의 캔들 1개 (end 가 최근이라 터치 이후 판정에 포함됨)
+    # 5-튜플(2026-08-15 종가 확장) — 실물 fetch_range_since 와 형태 동기화.
+    # 종가=현재가(꼬리 스침 모델). fake["candles"] 로 넘기는 명시 목록은 일부러
+    # 4-튜플을 유지한다 — 구 형태 하위호환의 살아있는 회귀 증거.
     return [(now - 120, now - 60,
-             fake["high"] or fake["price"], fake["low"] or fake["price"])]
+             fake["high"] or fake["price"], fake["low"] or fake["price"],
+             fake["price"])]
 upbit.fetch_range_since = _fake_range
 _real_fetch_trades_window = upbit.fetch_trades_window  # BM-U1~ 에서 실물 로직 검증용
 
@@ -149,7 +162,10 @@ def _iso(ts):
 
 
 def _candle(ts, unit, high, low):
-    return {"candle_date_time_utc": _iso(ts), "high_price": high, "low_price": low}
+    # trade_price(종가) 포함 — 2026-08-15 5-튜플 확장 후 실물 파서가 읽는 필드.
+    # U1~U4 검증 대상(시간창·페이지네이션)과는 무관, 실응답 형태만 맞춘다.
+    return {"candle_date_time_utc": _iso(ts), "high_price": high, "low_price": low,
+            "trade_price": (high + low) / 2}
 
 
 upbit._CANDLE_PACE_SEC = 0.0  # 테스트 속도 - 실제 페이싱 로직 검증과 무관

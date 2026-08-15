@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-15 (모닝 브리핑, 피드백 버튼 시험, Hash Ribbons, IC/ICIR 배선, 수집 시간 예산 수리)  
+> 마지막 업데이트: 2026-08-15 2차 (Tier1 예리화: 산식 v5 사다리 감점, 터치 스냅샷 5종, C등급 무음, purged IC 검증, 작성자 삭제율)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -81,7 +81,7 @@
 
 **파일:** `collector/grading.py`  
 **시점:** 수집 직후 (저장 전), 가격 터치 시 재채점 (regrade)  
-**산식 버전:** `grade_formula_ver = "v4"`
+**산식 버전:** `grade_formula_ver = "v5"` (2026-08-15)
 
 ### 3-1. 점수 구성 요소
 
@@ -92,6 +92,7 @@
 | 목표가 거리 | +12 | 5~15%=+12, 15~25%=+8, 25~40%=+4, 3~5%=-2, 2~3%=-4, 0~2%=-6 |
 | 데이터 완성도 | 23점 | 진입+목표=20, 추가 SL=+3; 하나만=8, 둘다없음=2 |
 | 작성자 실적 | 15점 | Wilson 80% 하한 기준 TP1 적중률: ≥55%=+15, ≥40%=+10, ≥25%=+5 (최소 5건 필요) |
+| TP 사다리 (v5) | -3 | `tp_ladder_count` 0~1단(NULL 포함)=-3, 2단+=0. 실측 근거: 2단+ 48.2% vs 0~1단 31.7% (+16.5%p, n=189 — research_2026-08-15_db_signal_analysis.md). score_breakdown 키 "ladder" |
 
 **총 만점: 약 95점** (항목별 조합에 따라 다름)
 
@@ -148,6 +149,10 @@
 등급 ≥ C    (alert_min_grade = "C")
 ```
 터치 시점에 현재가로 **재채점** 후 판정 (가격 근접도 점수 변동).
+2026-08-15: 재채점된 `touch_grade`/`touch_score` 를 DB 에 저장(첫 기록 우선,
+발송·억제 무관 전 터치) — 이전엔 수집 시점 등급만 남아 캘리브레이션 축이
+어긋났음(터치까지 등급 변동 35%). 소리 게이트 분리: `alert_sound_min_grade="B"`
+— B 미만 터치는 무음 발송(disable_notification, 내용·양식 동일).
 
 ### 게이트 2: 타임프레임 필터
 ```
@@ -251,6 +256,10 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | IC/ICIR 신호 품질 (2026-08-14, 08-15 배선) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. show_status "신호 품질" 섹션 + 주간 감사덤프 grade_stats JSON에 연결. 첫 실측(08-15): IC 0.2072(n=167) 유효, ICIR 1.615(4주). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py`, `storage/audit_dump.py` |
 | 시간대·요일별 성과 (2026-08-14, 08-15 배선) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률, best/worst 요약만 표시(n≥5). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py` |
 | Hash Ribbons (2026-08-15) | `hash_ribbons.fetch_hash_ribbons()` — mempool.space 무료 해시레이트 90일, SMA30/SMA60. 항복(30<60)=warn+1, 회복 크로스 14일 내=confirm+1 (수급 보정 입력). 6h DB 캐시. `hash_ribbons_enabled` 스위치 | `monitor/hash_ribbons.py` (내부 보정 전용) |
+| 터치 스냅샷 5종 (2026-08-15 Tier1) | 발송·억제 무관 전 터치에 첫 기록 우선 저장: 재채점 등급/점수(`touch_grade`/`touch_score` — 캘리브레이션 축 교정), 터치 품질(`touch_penetration_pct` 침투 깊이, `touch_closed_below` 종가이탈 여부 — 꼬리털기 vs 진성 이탈 구분), TP 동결(`touch_tp_usd` — 작성자 사후 목표가 수정 감지). `db.record_touch_snapshot()` | `monitor/price_check.py` → `storage/db.py` (기록 전용) |
+| 캔들 종가 보존 (2026-08-15) | `upbit.fetch_range_since` 반환 튜플 4→5원소 `(start, end, high, low, close)` — 뒤에 붙여 기존 인덱스 소비자 무영향. 터치 품질 판정 입력 | `monitor/upbit.py` |
+| purged IC 검증 (2026-08-15) | `scripts/validate_ic.py` — 시간순 3-fold, ±168h purge + 168h embargo, `--feature COL` 로 임의 컬럼 IC 감사 가능. 첫 실측: 시간외 평균 +0.193 vs 인샘플 +0.202 → 유지 판정 | `scripts/validate_ic.py` (읽기 전용 CLI) |
+| 작성자 삭제율 (2026-08-15) | 주간 감사 JSON `author_deletion_rates` — post_url 기준, 5건+ 작성자, 상위 20. "패배 글 삭제" 작성자 감지 (안티게이밍) | `storage/audit_dump.py` (내부 전용) |
 
 ---
 

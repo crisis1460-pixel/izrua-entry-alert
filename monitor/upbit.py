@@ -493,7 +493,14 @@ _RANGE_MAX_PAGES = 3  # 안전판 — 정상 유동성 마켓은 1페이지(1콜
 
 
 def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[list]:
-    """최근 minutes 분간의 분봉 목록 [(시작epoch, 종료epoch, high, low), ...] 시간 오름차순.
+    """최근 minutes 분간의 분봉 목록 [(시작epoch, 종료epoch, high, low, close), ...] 시간 오름차순.
+
+    close(2026-08-15 Tier1 스프린트): 종가(trade_price)를 5번째 원소로 **뒤에 붙였다**
+    — 기존 소비처는 전부 c[0]~c[3] 위치 인덱스 접근이라 무수정 하위호환이고, 추가
+    API 콜도 0 이다(응답에 이미 실려 오던 값을 버리지 않는 것뿐). 용도는 터치 품질
+    기록(touch_closed_below — 꼬리 스침 vs 종가 안착 구분, 기록 전용). 응답에
+    trade_price 가 없는 비정상 케이스는 None 으로 채워 파싱 자체는 죽지 않는다.
+    새 소비처는 len(c) > 4 가드 후 c[4] 를 읽을 것(구 4-튜플 스텁 호환).
 
     2026-07-24 감사 수정: 예전엔 max(high)/min(low)로 뭉개서 반환했는데, 그러면
     ① 터치 이전 가격이 적중판정에 섞이고(가짜 hit) ② TP→SL 도달 순서를 알 수 있는
@@ -547,7 +554,11 @@ def fetch_range_since(market: str, minutes: int, timeout: float) -> Optional[lis
             oldest_start = start if oldest_start is None else min(oldest_start, start)
             if start >= target_start:
                 out[start] = (start, start + unit * 60,
-                              float(c["high_price"]), float(c["low_price"]))
+                              float(c["high_price"]), float(c["low_price"]),
+                              # 종가 — 5번째 원소로 추가(위 docstring). 결측 방어:
+                              # 기록 전용 값이라 None 폴백이 옳다(파싱 생존 우선).
+                              (float(c["trade_price"])
+                               if c.get("trade_price") is not None else None))
 
         if oldest_start is None or oldest_start <= target_start:
             break  # 이번 페이지가 이미 목표 시각까지 닿았다 - 추가 페이지 불필요

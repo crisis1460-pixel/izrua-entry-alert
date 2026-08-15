@@ -304,6 +304,24 @@ _OUTCOME_COLUMNS = {
     # 7일 내 5%+ 유통량 언락 예정 시 해당 비율. 내부 전용 로깅 —
     # 대량 언락 시기의 알림 성과 사후 분석용 원천 데이터.
     "touch_token_unlock_pct": "REAL",
+    # ── 터치 시점 기록 4종 (2026-08-15 Tier1 스프린트 — research_2026-08-15_
+    # sharpening_synthesis.md). 전부 **기록 전용**(알림·필터·등급·판정 무관),
+    # 발송·억제 무관 모든 실터치에 record_touch_snapshot 이 기록, 최초 기록
+    # 우선(IS NULL 가드 — touch_mtf_score 관례).
+    # 터치 시점 재채점 등급/점수 — 필터(min_grade)가 그 순간 실제로 본 값의 영구
+    # 보존. grade/score 원본 컬럼은 이후 재수집·재채점으로 계속 변해서, "터치
+    # 순간의 등급"은 여기에만 남는다(억제 사유 사후 분석의 원천).
+    "touch_grade": "TEXT",
+    "touch_score": "INTEGER",
+    # 터치 품질 — 관통 깊이(%: (트리거-저가)/트리거×100, 클러스터 상단 엔트리
+    # 기준)와 터치 캔들의 종가 이탈 여부(1=종가도 트리거 이하). 꼬리 스침 vs
+    # 종가 안착 구분의 원천 데이터. 캔들 없이 현재가 단독으로 감지된 터치는
+    # 둘 다 NULL, 구 4-튜플 캔들(종가 없음)이면 closed_below 만 NULL.
+    "touch_penetration_pct": "REAL",
+    "touch_closed_below": "INTEGER",
+    # 터치 시점 TP 동결 (안티게이밍) — 각 레벨 자신의 tp_usd 를 터치 순간 스냅샷.
+    # 사후 재파싱 값과 비교하면 작성자의 목표가 소급 수정(골대 이동)이 드러난다.
+    "touch_tp_usd": "REAL",
     # MFE/MAE — 터치 후 최대유리·최대불리 이동폭(%) (2026-08-14).
     # Freqtrade max_rate/min_rate 패턴. 판정 종결 시 1회 기록.
     # Edge Ratio(MFE/|MAE|), Capture Ratio(실현이익/MFE) 도출의 원천 데이터.
@@ -667,6 +685,51 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
                 "WHERE id=? AND status IN ('watching','previewed')",
                 (t_anchor or now, price, usdt_krw, bid_ask_ratio,
                  fear_greed, kimchi_pct, btc_dominance, volume_rank, lid))
+
+
+def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = None,
+                          closed_below: Optional[int] = None) -> None:
+    """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 스프린트) — **기록 전용**.
+
+    rows: [(level_id, grade, score, tp_usd), ...] — 각 레벨 **자신의** 터치 시점
+    재채점 등급/점수(regrade_current 가 in-place 갱신해 둔 값)와 자신의 TP 동결값.
+    penetration_pct/closed_below 는 클러스터 공통값(트리거가 상단 엔트리 하나라
+    터치 캔들도 하나) — 전달된 전 행에 동일하게 기록한다.
+
+    record_touch_verdicts(발송 성공건만 — "표시된 것만 기록" 불변식)와 달리 이
+    함수는 mark_touched 옆에서 불려 발송·억제 무관 **모든 실터치**에 남는다 —
+    등급 필터가 억제한 터치의 등급 분포가 바로 이 데이터의 존재 이유다.
+    전 컬럼 최초 기록 우선(IS NULL 가드) — 재발송·경합에도 첫 값 보존."""
+    ids = []
+    for lid, grade, score, tp_usd in rows:
+        ids.append(lid)
+        if grade is not None:
+            conn.execute(
+                "UPDATE levels SET touch_grade=? WHERE id=? AND touch_grade IS NULL",
+                (grade, lid))
+        if score is not None:
+            # 컬럼 선언이 INTEGER — 재채점 점수(float)는 반올림 저장(등급 경계
+            # 판정은 이미 touch_grade 가 담당, 점수는 분포 분석용이라 1점 해상도면 충분)
+            conn.execute(
+                "UPDATE levels SET touch_score=? WHERE id=? AND touch_score IS NULL",
+                (int(round(float(score))), lid))
+        if tp_usd is not None:
+            conn.execute(
+                "UPDATE levels SET touch_tp_usd=? WHERE id=? AND touch_tp_usd IS NULL",
+                (float(tp_usd), lid))
+    if not ids:
+        return
+    ph = ",".join("?" * len(ids))
+    if penetration_pct is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_penetration_pct=? "
+            f"WHERE id IN ({ph}) AND touch_penetration_pct IS NULL",
+            (float(penetration_pct), *ids))
+    if closed_below is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_closed_below=? "
+            f"WHERE id IN ({ph}) AND touch_closed_below IS NULL",
+            (1 if closed_below else 0, *ids))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────

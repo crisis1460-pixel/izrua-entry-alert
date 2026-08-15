@@ -254,6 +254,39 @@ def _compute_signal_quality_stats(conn) -> dict:
     return {"ic": ic, "icir": icir, "weekly_ics": weekly_ics}
 
 
+def _compute_author_deletion_stats(conn, min_posts: int = 5, top_n: int = 20) -> list:
+    """작성자별 글 삭제율 (안티게이밍, 2026-08-15 — 내부 통계 전용, 알림 미출력).
+
+    ACCURACY_DB_PLAN 의 "삭제 건수 자체가 신뢰도 신호" 원칙의 집계면 — 틀린 예측
+    글을 지워 실적을 세탁하는 작성자를 주간 JSON 에서 사후 추적할 수 있게 한다.
+    삭제 판정 원천은 run_collect._check_deletions 가 찍는 levels.deleted(0/1) 플래그.
+
+    집계 단위는 **글(post_url distinct)** — 한 글에서 레벨(코인+엔트리)이 여러 개
+    나오므로 레벨 단위로 세면 다단계 셋업 작성자의 분모·분자가 함께 부풀어
+    삭제율이 왜곡된다. checked 는 생존 확인이 한 번이라도 수행된 글 수(참고용) —
+    total 대비 checked 가 작으면 rate 는 하한 추정치라는 맥락을 준다.
+
+    반환: [{"author", "total", "checked", "deleted", "rate"}, ...]
+          수집 글 min_posts 건 이상 작성자만, rate 내림차순 top_n."""
+    rows = conn.execute(
+        """SELECT author,
+                  COUNT(DISTINCT post_url) AS total,
+                  COUNT(DISTINCT CASE WHEN deleted_checked_at IS NOT NULL
+                                      THEN post_url END) AS checked,
+                  COUNT(DISTINCT CASE WHEN deleted = 1 THEN post_url END) AS deleted
+           FROM levels
+           WHERE author IS NOT NULL AND post_url IS NOT NULL
+           GROUP BY author
+           HAVING COUNT(DISTINCT post_url) >= ?""",
+        (min_posts,)).fetchall()
+    stats = [{"author": r["author"], "total": r["total"], "checked": r["checked"],
+              "deleted": r["deleted"],
+              "rate": round(r["deleted"] / r["total"], 4) if r["total"] else 0.0}
+             for r in rows]
+    stats.sort(key=lambda s: (-s["rate"], -s["total"], s["author"]))
+    return stats[:top_n]
+
+
 def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
     """덤프 → (성공 시) raw_text 정리 → 오래된 덤프 정리. 반환: 요약 dict.
 
@@ -284,6 +317,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
         author_advanced = {a: db.get_author_advanced_stats(conn, a) for a in authors}
         touch_time_stats = _compute_touch_time_stats(conn)
         signal_quality_stats = _compute_signal_quality_stats(conn)
+        author_deletion_rates = _compute_author_deletion_stats(conn)
         stats_path = out_dir / f"grade_stats_{week}.json"
         stats_tmp = out_dir / f".grade_stats_{week}.json.tmp"
         with open(stats_tmp, "w", encoding="utf-8", newline="\n") as fp:
@@ -295,6 +329,7 @@ def run_weekly_audit(conn, db_path, now: float = None, out_dir=None) -> dict:
                 "author_advanced": author_advanced,
                 "touch_time_analysis": touch_time_stats,
                 "signal_quality": signal_quality_stats,
+                "author_deletion_rates": author_deletion_rates,
             }, fp, ensure_ascii=False, indent=2)
         os.replace(stats_tmp, stats_path)
         files.append(stats_path.name)

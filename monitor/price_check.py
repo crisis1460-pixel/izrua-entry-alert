@@ -279,6 +279,39 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def _touch_quality(candles, collected_at: float, trigger_krw: float):
+    """터치 캔들의 관통 깊이(%)·종가 이탈(0/1) — (2026-08-15 Tier1) **기록 전용**.
+
+    터치 캔들 = 수집(collected_at) 이후 시작한 첫 캔들 중 저가가 트리거(클러스터
+    상단 엔트리 KRW) 이하인 것 — 터치 검출(_eff_low)과 동일한 수집 이후 원칙.
+    반환 (penetration_pct, closed_below). 캔들이 없거나(현재가 단독 감지) 터치
+    캔들을 못 찾으면 (None, None). 종가는 fetch_range_since 5-튜플 확장 이후에만
+    존재 — 구 4-튜플(테스트 스텁 등)이면 closed_below 만 None(len 가드).
+    필터·알림·판정 어디에도 쓰지 않는다 — 꼬리 스침 vs 종가 안착 사후 분석용."""
+    if not candles or not trigger_krw or trigger_krw <= 0:
+        return None, None
+    for c in candles:
+        if c[0] >= (collected_at or 0) and c[3] <= trigger_krw:
+            pen = (trigger_krw - c[3]) / trigger_krw * 100
+            close = c[4] if len(c) > 4 else None
+            closed = None if close is None else (1 if close <= trigger_krw else 0)
+            return pen, closed
+    return None, None
+
+
+def _touch_sound_urgency(rep_grade, cfg_get) -> str:
+    """터치 본알림 유/무음 결정 (2026-08-15 C등급 무음 푸시 — 사용자 승인 Tier1).
+
+    대표 레벨의 **재채점** 등급(min_grade 필터가 실제로 본 그 값)이
+    alert_sound_min_grade 이상이면 유음("high"), 미만이면 무음("low" →
+    telegram.send 가 disable_notification=true). 메시지 내용·양식·발송 여부는
+    전부 불변 — 소리만 갈린다. 예고는 이 함수와 무관하게 종전대로 무음.
+    근거(research_2026-08-15_alert_quality.md): 유음 푸시 예산을 B급 이상에만."""
+    from collector.grading import meets_min_grade  # 순환 import 방지 지연 로드
+    return "high" if meets_min_grade(
+        rep_grade or "D", cfg_get("alert_sound_min_grade")) else "low"
+
+
 def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
                     band_pct: float, since: float) -> bool:
     """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
@@ -979,7 +1012,13 @@ def run_once(now: float | None = None) -> dict:
                     _fb_markup = None
                     if kind == "touch" and cfg_get("alert_feedback_enabled"):
                         _fb_markup = telegram.feedback_keyboard(str(ids[0]))
-                    if telegram.send(text, urgency="high" if touched else "low",
+                    # C등급 무음 푸시 (2026-08-15 Tier1): 터치 본알림도 대표 재채점
+                    # 등급이 alert_sound_min_grade(B) 미만이면 무음 발송 — 내용·양식
+                    # ·발송 여부 불변, 소리만 제거. 예고는 종전대로 무음 고정.
+                    if telegram.send(text,
+                                     urgency=(_touch_sound_urgency(
+                                         rep.get("grade"), cfg_get)
+                                         if touched else "low"),
                                      reply_markup=_fb_markup):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
@@ -1137,6 +1176,24 @@ def run_once(now: float | None = None) -> dict:
                                     kimchi_pct=_snap_kimchi,
                                     btc_dominance=_sent.get("btc_dominance"),
                                     volume_rank=_snap_volume_rank)
+                    # 터치 시점 스냅샷 (2026-08-15 Tier1) — 재채점 등급/점수(전
+                    # 멤버 각자 값, 위 regrade_current in-place 갱신분)·관통 깊이·
+                    # 종가 이탈·TP 동결. send_ok 게이트 **밖**이라 발송·억제 무관
+                    # 모든 터치에 남는다(record_touch_verdicts 는 발송 성공건만 —
+                    # 억제 터치의 등급 분포가 이 기록의 존재 이유). 기록 실패가
+                    # 터치 경로(상태 전이 커밋)를 죽이면 안 되므로 격리.
+                    try:
+                        _pen_pct, _closed_below = _touch_quality(
+                            candles, cluster[0].get("collected_at") or 0, top_krw)
+                        db.record_touch_snapshot(
+                            conn,
+                            [(lv["id"], lv.get("grade"), lv.get("score"),
+                              lv.get("tp_usd")) for lv in cluster],
+                            penetration_pct=_pen_pct,
+                            closed_below=_closed_below)
+                    except Exception as e:  # noqa: BLE001 - 기록 실패 격리
+                        logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
+                                       coin, e)
                 else:
                     for lid in ids:
                         db.mark_previewed(conn, lid, now)
@@ -1351,7 +1408,10 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         _running_mfe = 0.0
         _running_mae = 0.0
         candles = get_range(ticker, 40) or []
-        for (c_start, c_end, c_high, c_low) in candles:
+        for c in candles:
+            # 5-튜플(종가 추가, 2026-08-15) 하위호환 — 정확 개수 언패킹 대신 위치
+            # 인덱스만 사용한다(구 4-튜플 스텁·신 5-튜플 실물 모두 수용).
+            c_start, c_end, c_high, c_low = c[0], c[1], c[2], c[3]
             # 진행 중 캔들(c_end>now)은 제외 — 터치 이전 가격이 남아 있을 수 있고
             # 15분봉 폴백에선 최대 15분치가 섞인다 (2026-07-26 감사 major2)
             if c_end <= lv["touched_at"] or c_end > now:

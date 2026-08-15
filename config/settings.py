@@ -140,6 +140,11 @@ SETTINGS = {
 
     # 알림 필터
     "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
+    # 유음(소리) 최소 등급 (2026-08-15 Tier1): 이 등급 이상 터치만 소리, 미만은
+    # 무음 발송(disable_notification — 메시지 내용·양식 완전 동일, 소리만 제거).
+    # 근거(research_2026-08-15_alert_quality.md): 푸시 2~5건/주에 사용자 46% 이탈,
+    # PagerDuty 경보 예산 15건/주. 즉시 가역 — "C" 로 낮추면 종전과 동일.
+    "alert_sound_min_grade": "B",
     "alert_max_per_coin_per_day": 3,     # 코인당 하루 알림 상한
     "alert_max_global_per_day": 15,      # 전체 코인 합산 하루 알림 상한 (알림 피로 방지)
     "alert_min_timeframe_hours": 4.0,    # 이 타임프레임 미만 아이디어는 알림 제외
@@ -158,7 +163,12 @@ SETTINGS = {
     # 분리 집계(v3 기본, 구버전은 "구 산식(참고)" 병기).
     # v4 (2026-08-03, 사용자 질문카드): 팔로워 상단 강화(최대 25) + SL 보너스 +10→+3.
     # 리서치: izrua_company/planner/sprint08_SL없는시그널_등급설계_리서치.md
-    "grade_formula_ver": "v4",
+    # v5 (2026-08-15, 사용자 승인 Tier1 스프린트): TP 사다리 0~1단 감점 -3.
+    # 실측 근거(research_2026-08-15_db_signal_analysis.md): 2단+ 48.2% vs
+    # 0~1단 31.7% (+16.5%p, n=189, v4 표본에서도 재현) — 종결 189건 기준
+    # 현재 채점 밖 신호 중 가장 두꺼운 판별력. 감점 폭 -3은 v4 SL 보너스(+3)와
+    # 대칭 — 조이기 전용(경계 C=40 근처만 영향, 완화 없음).
+    "grade_formula_ver": "v5",
     # 작성자 실적 가점(안2) 롤백 스위치 — False 면 calculate_grade/regrade_current
     # 양쪽에서 실적 가점 0 고정(배점표 축소분(안1)은 유지 — 위험 없는 부분).
     # 배포 후 1주 알림량 ±10% 이탈 시 이 값만 False 로 되돌린다(§6-4).

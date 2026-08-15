@@ -248,11 +248,13 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             followers, setup["direction"], setup["entry"],
             setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
             author_closed_n=closed_n, author_closed_hits=closed_hits,
+            tp_ladder_count=setup.get("tp_ladder_count"),  # 2026-08-15 v5 사다리 감점
         )
         bd = score_breakdown(
             followers, setup["direction"], setup["entry"],
             setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
             author_closed_n=closed_n, author_closed_hits=closed_hits,
+            tp_ladder_count=setup.get("tp_ladder_count"),  # 〃 (분해 저장 동기화)
         )
         tf_hours = parse_timeframe_hours(text)
         level = {

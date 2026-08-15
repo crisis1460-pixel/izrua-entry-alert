@@ -1,10 +1,11 @@
 """
 글(레벨) 등급 산정.
 
-배점(2026-08-03 v4): 팔로워(1~25) + 가격근접도(0~20)
+배점(2026-08-15 v5): 팔로워(1~25) + 가격근접도(0~20)
   + 목표거리(-6~+12) + 데이터완결성(2~23) + 작성자 실적 가점(0~+15)
-  = 실질 상한 95 (25+20+12+23+15). SL 없는 글 상한 92 — 실적 가점이 있으면
-  SL 없이도 S(85+) 도달 가능(v4 설계 의도).
+  + TP 사다리 감점(-3~0, v5 신설 — 0~1단이면 -3)
+  = 실질 상한 95 (25+20+12+23+15, 사다리 2단+ 기준). SL 없는 글 상한 92 —
+  실적 가점이 있으면 SL 없이도 S(85+) 도달 가능(v4 설계 의도).
   등급 임계 S85/A70/B55/C40 유지.
 
 팔로워 배점(v4 상단 강화)의 근거: 사용자 결정(2026-08-03) — 자체 DB 축적 기간이
@@ -42,6 +43,15 @@ v3 그대로** 두고 상단(5천+)만 끌어올렸다 — 소형 작성자의 �
     "상위 팔로워 or 검증 실적"이면 A~S 도달 가능해진다.
   ④ settings.grade_formula_ver 'v3' → 'v4' 로 태그 승격 — 신규 채점분에
     levels.grade_ver 로 기록. 과거 v3 행은 소급 재라벨 없음(D4 유지).
+2026-08-15 개정(v5 — TP 사다리 0~1단 감점, 사용자 승인):
+  실증 근거: izrua_company/research_2026-08-15_db_signal_analysis.md (종결 n=189) —
+  tp_ladder_count 2단 이상 win% 48.2 vs 0~1단 31.7 (+16.5%p), v4 한정 부분표본
+  (0-1 → 23.1% n=13 vs 2-3 → 45.2% n=42)에서도 방향 재현. 다단계 목표(구조화된
+  셋업)가 단일/무목표 글보다 일관되게 우수 — 현 채점에 없던 신호 중 표본 최다.
+  변경은 단 하나: tp_ladder_count <= 1 (NULL/0/1 — DB 분석이 0-1 을 한 버킷으로
+  묶었고 '단일 목표'와 '사다리 미상' 모두 31.7% 쪽) 이면 -3 (ladder_penalty).
+  2단 이상은 0 — 가점이 아니라 순수 감점(조이기)이며 그 외 v4 배점·임계 전부 불변.
+  settings.grade_formula_ver 'v4' → 'v5' 태그 승격, 과거 행 소급 재라벨 없음.
 """
 
 from typing import Optional, Tuple
@@ -87,6 +97,15 @@ AUTHOR_TRACK_TIERS = [       # (Wilson 하한 문턱, 가점) — 위에서부�
     (0.25, 5),
 ]
 AUTHOR_TRACK_MAX = 15        # 실적 가점 상한 (v4 이론 만점 80→95)
+
+# ── TP 사다리 감점 (2026-08-15 v5 — 사용자 승인) ─────────────────────────
+# 실증 근거: izrua_company/research_2026-08-15_db_signal_analysis.md (종결 n=189)
+# — tp_ladder_count 2단 이상 win% 48.2 vs 0~1단 31.7 (+16.5%p), v4 부분표본에서도
+# 방향 재현. 0~1단(단일 목표든 사다리 미상이든 — DB 분석이 0-1 을 한 버킷으로
+# 집계했고 둘 다 31.7% 쪽)은 -3, 2단 이상은 0. 가점 없는 순수 감점(조이기)이라
+# 이 감점으로 등급이 오르는 경로는 구조적으로 없다.
+LADDER_PENALTY = -3          # tp_ladder_count <= 1 (NULL/0/1 포함) 일 때
+LADDER_MIN_STEPS = 2         # 감점을 면하는 최소 사다리 단계 수
 
 
 def author_track_points(closed_n: Optional[int], closed_hits: Optional[int]) -> float:
@@ -150,11 +169,16 @@ def score_breakdown(
     current_usd_price: Optional[float],
     author_closed_n: Optional[int] = None,
     author_closed_hits: Optional[int] = None,
+    tp_ladder_count: Optional[int] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
     calculate_grade()가 내부적으로 사용하며, 수집 시 분해 저장에도 직접 호출된다.
-    키: follower, proximity, tp_dist, data, author.  sum(values()) == 총점."""
+    키: follower, proximity, tp_dist, data, author, ladder.  sum(values()) == 총점.
+
+    tp_ladder_count (2026-08-15 v5): levels.tp_ladder_count (extractor 가 센
+    유효 TP 단계 수, 0 = 단일 목표/사다리 미상). None 도 0~1 과 같은 -3 —
+    '미상'과 '단일 목표'가 실측에서 같은 저성과 버킷(31.7%, n=104)이었다."""
     bd: dict = {}
 
     f = followers or 0
@@ -206,6 +230,10 @@ def score_breakdown(
         if settings.get("grade_author_points_enabled"):
             bd["author"] = author_track_points(author_closed_n, author_closed_hits)
 
+    # TP 사다리 감점 (2026-08-15 v5) — 실증: research_2026-08-15_db_signal_analysis.md,
+    # 종결 n=189 에서 2단+ win% 48.2 vs 0~1단 31.7 (+16.5%p). NULL/0/1 모두 -3.
+    bd["ladder"] = LADDER_PENALTY if (tp_ladder_count or 0) < LADDER_MIN_STEPS else 0
+
     return bd
 
 
@@ -218,15 +246,21 @@ def calculate_grade(
     current_usd_price: Optional[float],
     author_closed_n: Optional[int] = None,
     author_closed_hits: Optional[int] = None,
+    tp_ladder_count: Optional[int] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
     author_closed_n/hits (2026-08-01 v3): 작성자의 자기 DB 종결 실적
     (storage.db.author_closed_stats). 기본 None = 가점 0 — 기존 호출부는 무수정
     으로 종전과 동일한 점수가 나온다. settings.grade_author_points_enabled=False
-    면 인자를 넘겨도 가점 0 고정(롤백 스위치 — calculate/regrade 경로 공통)."""
+    면 인자를 넘겨도 가점 0 고정(롤백 스위치 — calculate/regrade 경로 공통).
+
+    tp_ladder_count (2026-08-15 v5): TP 사다리 단계 수. <=1 (None 포함) 이면
+    -3 (LADDER_PENALTY) — 미전달(None)은 '사다리 미상'으로 0~1단과 같은 저성과
+    버킷(31.7%, n=104)이라 동일 감점. 상세는 모듈 헤더 v5 항목."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
-                         current_usd_price, author_closed_n, author_closed_hits)
+                         current_usd_price, author_closed_n, author_closed_hits,
+                         tp_ladder_count=tp_ladder_count)
     score = float(sum(bd.values()))
 
     rr = None
@@ -261,7 +295,11 @@ def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[st
 
     author_closed_n/hits (2026-08-01 v3): 호출부(monitor/price_check.py)가 터치/예고
     처리 직전에 storage.db.author_closed_stats 로 주입해 두는 키. 없으면(구 호출부,
-    주입 실패 격리 경로) 가점 0 — 구 산식과 동일하게 동작한다."""
+    주입 실패 격리 경로) 가점 0 — 구 산식과 동일하게 동작한다.
+
+    tp_ladder_count (2026-08-15 v5): 입력 행은 db.get_active_levels 의 SELECT *
+    라 levels.tp_ladder_count (DEFAULT 0) 를 항상 실어 온다. 키 부재/NULL 은
+    0~1단과 동일하게 -3 (사다리 미상 = 같은 저성과 버킷, 모듈 헤더 v5 참조)."""
     return calculate_grade(
         level.get("author_followers"),
         level.get("direction"),
@@ -271,4 +309,5 @@ def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[st
         current_usd_price,
         author_closed_n=level.get("author_closed_n"),
         author_closed_hits=level.get("author_closed_hits"),
+        tp_ladder_count=level.get("tp_ladder_count"),
     )
