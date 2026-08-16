@@ -340,3 +340,16 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | MEDIUM | Yahoo Finance `result[]` IndexError | `monitor/macro.py:68,119` | `(result or [{}])[0]` — 빈 리스트 응답 시 IndexError 방어 |
 | 데드코드 | `secrets_status()` 미사용 함수 | `config/settings.py` | 삭제 |
 | CI위험 | `test_tradingview_live.py` CI glob 노출 | `scripts/` | `probe_tradingview_live.py` 리네임 (실네트워크 테스트 CI 제외) |
+
+## 10라운드 전수검토 2차 수정 이력 (2026-08-17)
+
+| 심각도 | 버그 | 위치 | 수정 |
+|--------|------|------|------|
+| MEDIUM | `alert_ledger.append()` OSError만 catch | `storage/alert_ledger.py` | Exception으로 확장 (docstring 보장) |
+| MEDIUM | `alert_ledger.merge_files()` 예외 없음 | `storage/alert_ledger.py` | OSError try/except 추가 |
+| MEDIUM | 백필 루프 per-row 예외 격리 없음 | `storage/db.py` | `_backfill_volume_watch_urls`, `_backfill_outcome_chain` 행별 예외 격리 |
+| MEDIUM | upbit 429 → 회차 전체 스킵 | `monitor/upbit.py` | 1초 sleep 후 1회 재시도 추가 |
+| LOW | `options._fetch_dvol` data[-1][4] IndexError | `monitor/options.py` | `len(data[-1]) > 4` 길이 검사 |
+| LOW | `binance.fetch_cvd_ratio` dict 응답 IndexError | `monitor/binance.py` | `isinstance(list)` 체크 추가 |
+| LOW | `market_sentiment` TTL 만료 후 fallback 없음 | `monitor/market_sentiment.py` | 실패 시 stale 캐시 반환 |
+| 성능 | `run_collect` score_breakdown 이중 호출 | `collector/grading.py`, `scripts/run_collect.py` | `calculate_grade_with_breakdown()` 추가, 단일 호출로 교체 |
