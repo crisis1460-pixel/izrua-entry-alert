@@ -310,18 +310,6 @@ def _split_send(text: str, urgency: str) -> bool:
     return ok
 
 
-def feedback_keyboard(ref: str) -> dict:
-    """알림 반응 피드백 인라인 키보드 (2026-08-15 시험 운용).
-
-    ref 는 대표 레벨 id 문자열 — callback_data 는 Bot API 상한 64바이트라
-    짧은 참조만 넣는다("fb:<ref>:up|down"). 버튼은 메시지 본문 밖에 붙으므로
-    알림 양식(텍스트) 동결 원칙과 충돌하지 않는다. 수거는 notify/feedback_poll.py
-    가 getUpdates 폴링으로 담당(서버리스 — 웹훅 없음)."""
-    return {"inline_keyboard": [[
-        {"text": "👍 도움됨", "callback_data": f"fb:{ref}:up"},
-        {"text": "👎 별로", "callback_data": f"fb:{ref}:down"},
-    ]]}
-
 
 # ── 포맷 유틸 (워쳐 notifier.py 이식) ─────────────────────────────
 

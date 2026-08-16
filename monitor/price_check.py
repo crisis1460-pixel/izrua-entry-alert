@@ -1107,22 +1107,13 @@ def run_once(now: float | None = None) -> dict:
                     # 관찰 데이터(daily_stats)에는 영향이 없다.
                     # 피드백 버튼 (2026-08-15 시험 운용): 터치 본알림에만 👍/👎 인라인
                     # 버튼 부착 — 버튼은 본문 밖이라 알림 양식(텍스트) 동결 원칙 유지.
-                    # ref 는 **대표(rep) 레벨 id** (2026-08-16 리뷰 Fix4): 종전
-                    # ids[0](클러스터 상단 엔트리 레벨)은 알림이 표시한 등급·작성자의
-                    # 레벨과 다를 수 있어 투표가 엉뚱한 레벨에 붙었다 — 투표는 사용자가
-                    # 실제로 본 대표에 귀속돼야 한다. callback_data 64바이트 상한.
-                    # 예고 불변.
-                    _fb_markup = None
-                    if kind == "touch" and cfg_get("alert_feedback_enabled"):
-                        _fb_markup = telegram.feedback_keyboard(str(rep["id"]))
                     # C등급 무음 푸시 (2026-08-15 Tier1): 터치 본알림도 대표 재채점
                     # 등급이 alert_sound_min_grade(B) 미만이면 무음 발송 — 내용·양식
                     # ·발송 여부 불변, 소리만 제거. 예고는 종전대로 무음 고정.
                     if telegram.send(text,
                                      urgency=(_touch_sound_urgency(
                                          rep.get("grade"), cfg_get)
-                                         if touched else "low"),
-                                     reply_markup=_fb_markup):
+                                         if touched else "low")):
                         db.record_alert(conn, coin, kind, ids, day, now)
                         # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
@@ -1358,15 +1349,6 @@ def run_once(now: float | None = None) -> dict:
         db.prune_daily_stats(conn, now)
         db.prune_alerts_log(conn)
 
-        # 알림 반응 피드백 폴링 (2026-08-15 시험 운용) — getUpdates 1콜/회차로
-        # 👍/👎 버튼 콜백 수거. 이 기능의 예외가 2분 주기 핫패스를 죽이면 절대
-        # 안 되므로 통째로 격리한다(해시체인 검증 등과 동일 원칙).
-        if cfg_get("alert_feedback_enabled"):
-            try:
-                from notify import feedback_poll
-                feedback_poll.poll_feedback(conn, cfg_get("http_timeout_sec"))
-            except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
-                logger.warning("[체크] 피드백 폴링 실패(무시): %s", e)
 
         # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의
         # 버그/예외가 2분 주기 핫패스를 죽이면 절대 안 되므로 통째로 격리한다

@@ -49,7 +49,6 @@ settings.SETTINGS["db_path"] = TEST_DB
 # 오프라인 원칙 — 외부 API 를 때릴 수 있는 부가 기능은 전부 끈다 (test_price_logic 관례)
 settings.SETTINGS["announcement_alert_enabled"] = False
 settings.SETTINGS["volume_spike_enabled"] = False
-settings.SETTINGS["alert_feedback_enabled"] = False
 settings.SETTINGS["orderbook_pressure_enabled"] = False
 settings.SETTINGS["preview_alert_enabled"] = False
 # 등급 필터를 S 로 조여 모든 터치를 '억제' 경로로 보낸다 — 발송 블록(52주·펀딩 등

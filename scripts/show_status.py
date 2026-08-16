@@ -397,76 +397,6 @@ def print_signal_quality(conn) -> None:
 # 2026-08-15 Tier2 #11 (research_2026-08-15_sharpening_synthesis.md): 터치 알림의
 # 👍/👎 인라인 버튼 표를 등급·작성자 버킷으로 Wilson 집계한다. 수학은 프로젝트
 # 정본(analytics/calibration.wilson_interval, z=1.28 관례)을 재사용 — 새 산식 없음.
-# **표기 전용**: 알림·필터·등급 어디에도 반영되지 않는다. 판단 표기는 버킷당
-# 10표부터, 자동 조치(뮤트 등)는 30표+ 정책이라 여기서는 아예 하지 않는다.
-
-FEEDBACK_Z = 1.28        # 80% 단측 하한 — rank_z·작성자 실적 게이트와 동일 관례
-FEEDBACK_MIN_JUDGE = 10  # 이 미만 버킷은 수치 판단 유보("표본 부족" 표기만)
-
-
-def _feedback_bucket_line(label: str, votes: list) -> str:
-    """버킷 1줄 포맷. votes = ['up'|'down', ...]. 10표 미만은 판단 유보."""
-    n = len(votes)
-    up = sum(1 for v in votes if v == "up")
-    if n < FEEDBACK_MIN_JUDGE:
-        return f"    {label:<16} {n:>4}표  표본 부족(n={n})"
-    lo, _ = calibration.wilson_interval(up, n, z=FEEDBACK_Z)
-    return (f"    {label:<16} {n:>4}표  👍 {up / n * 100:.0f}%({up}/{n})"
-            f"  Wilson LB {lo:.2f}")
-
-
-def print_alert_feedback(conn) -> None:
-    print()
-    print(_SEP)
-    print("💬 알림 피드백 (시험)")
-    print(_SEP)
-    try:
-        # ref 는 TEXT(콜백 데이터의 레벨 id), levels.id 는 INTEGER — 캐스팅해 조인.
-        # 2026-08-15 수정: 캐스팅은 ref 쪽에 건다 — 인덱스 달린 PK(l.id)를 캐스팅
-        # 하면 SQLite 가 rowid 인덱스를 못 타 levels 전건 스캔이 된다. 숫자가 아닌
-        # ref 는 CAST 시 0 이 되어 어떤 PK 와도 안 붙는다(종전 TEXT 비교 실패와
-        # 동일하게 (미상) 버킷으로 귀결 — F4 테스트 축 유지).
-        # 등급은 터치 시점 재채점(touch_grade)이 정본이고 없으면 수집 시점 grade 폴백
-        # (fetch_calibration_rows 와 반대 방향인 이유: 피드백은 '그 알림'에 대한
-        # 반응이라 알림이 나간 순간의 등급이 맞는 축이다).
-        rows = conn.execute(
-            "SELECT f.vote AS vote, COALESCE(l.touch_grade, l.grade) AS grade, "
-            "l.author AS author FROM alert_feedback f "
-            "LEFT JOIN levels l ON l.id = CAST(f.ref AS INTEGER)").fetchall()
-        if not rows:
-            print("  피드백 없음 (버튼 도입 08-15)")
-            return
-
-        n = len(rows)
-        up = sum(1 for r in rows if r["vote"] == "up")
-        lo, _ = calibration.wilson_interval(up, n, z=FEEDBACK_Z)
-        print(f"  전체 {n}표 · 👍 {up}표 ({up / n * 100:.0f}%)"
-              f" · Wilson 80% 하한 {lo:.2f}")
-
-        by_grade: dict = {}
-        by_author: dict = {}
-        for r in rows:
-            by_grade.setdefault(r["grade"] or "(미상)", []).append(r["vote"])
-            by_author.setdefault(r["author"] or "(미상)", []).append(r["vote"])
-
-        print("  등급별:")
-        order = GRADE_ORDER + ["(미상)"]
-        keys = [g for g in order if g in by_grade]
-        keys += sorted(g for g in by_grade if g not in order)
-        for g in keys:
-            print(_feedback_bucket_line(g, by_grade[g]))
-
-        print("  작성자별 (표 많은 순 상위 10):")
-        top = sorted(by_author.items(), key=lambda kv: len(kv[1]), reverse=True)[:10]
-        for author, votes in top:
-            print(_feedback_bucket_line(author, votes))
-
-        print(f"  (판단 표기는 버킷당 {FEEDBACK_MIN_JUDGE}표부터 · "
-              f"자동 조치(뮤트 등)는 30표+ 정책 — 표기 전용, 알림·필터·등급 미반영)")
-    except Exception as e:  # noqa: BLE001 - 표기 전용 섹션이 현황판을 죽이면 안 된다
-        print(f"  ⚠ 피드백 집계 실패: {type(e).__name__}: {e}")
-
-
 # ── ③ 작성자 성적 ──────────────────────────────────────────────────
 
 def _rows_by_author(conn) -> dict:
@@ -893,7 +823,6 @@ def run(db_path: str, days: int, show_report: bool, now: float = None) -> int:
             print_active_positions(conn, live, now)
         print_pipeline_status(conn, now)
         print_signal_quality(conn)
-        print_alert_feedback(conn)
         print_author_performance(conn, now)
         print_health(conn, now)
         if show_report:
