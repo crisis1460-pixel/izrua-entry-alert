@@ -269,6 +269,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | purged IC 검증 (2026-08-15) | `scripts/validate_ic.py` — 시간순 3-fold, ±168h purge + 168h embargo, `--feature COL` 로 임의 컬럼 IC 감사 가능. 첫 실측: 시간외 평균 +0.193 vs 인샘플 +0.202 → 유지 판정 | `scripts/validate_ic.py` (읽기 전용 CLI) |
 | 작성자 삭제율 (2026-08-15) | 주간 감사 JSON `author_deletion_rates` — post_url 기준, 5건+ 작성자, 상위 20. "패배 글 삭제" 작성자 감지 (안티게이밍) | `storage/audit_dump.py` (내부 전용) |
 | 코드 리뷰 5건 수정 (2026-08-16) | **Fix1** macro.py FOMC fetch timeout `min(timeout,3.0)` 캡 (핫패스 최대 6s). **Fix2** `_STATIC_EVENTS` Q1 2027 비FOMC 항목 추가 + `_d()`/`_ev()` 헬퍼 재구성(kst_time 선언 시 포함). **Fix3** `refresh_macro_calendar` 죽은 FOMC 타입 필터 제거. **Fix4** `telegram.send()` reply_markup 파라미터·페이로드·독스트링 완전 삭제. **Fix5** 테스트 3종(test_price_logic·resilience·touch_recording) reply_markup=None 스텁 서명 정리 | `monitor/macro.py`, `notify/telegram.py`, `scripts/test_*.py` |
+| 내부 지표 3종 추가 (2026-08-16) | **F1** `touch_mfe_atr_ratio` — MFE ÷ ATR20% 배수(변동성 스케일 라벨), `record_mfe_mae()` 종결 시 자동 계산. **F5** `touch_atr_band_pct` — ATR×0.5 섀도 밴드(고정 1% 대비 비교용), `record_touch_snapshot()` 내 atr_pct 기록과 동시 저장. **F6** `touch_supply_1h` — 터치 1h 후 수급 재판정("라벨|근거"), `_backfill_supply_1h()` 이 deriv+cvd 2콜로 회차당 최대 5행 소급. 알림 무변동 — 전부 내부 DB 기록 전용 | `storage/db.py`, `monitor/price_check.py` |
 
 ---
 
