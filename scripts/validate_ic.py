@@ -181,9 +181,15 @@ def render_report(res: dict, feature: str, label: str = "전체",
         verdict = "유지" if held else "하락"
         lines.append(f"  요약: 인샘플 IC {ins_s} → 시간분할 평균 테스트 IC "
                      f"{mean:+.4f} ({verdict})")
-        lines.append(f"  비교: 기존 주간감사 인샘플 IC {REF_INSAMPLE_IC:.4f} 대비 "
-                     f"{'유지' if mean >= REF_INSAMPLE_IC - 0.10 and mean >= 0.05 else '하락'} "
-                     f"(겹치는 168h 판정창 제거 후 순수 시기별 IC 기준)")
+        if feature == "score":
+            lines.append(f"  비교: 기존 주간감사 인샘플 IC {REF_INSAMPLE_IC:.4f} 대비 "
+                         f"{'유지' if mean >= REF_INSAMPLE_IC - 0.10 and mean >= 0.05 else '하락'} "
+                         f"(겹치는 168h 판정창 제거 후 순수 시기별 IC 기준)")
+        else:
+            # 참고값 {REF_INSAMPLE_IC} 는 score 전용(주간감사 인샘플 IC)이라 다른
+            # --feature 와 견주면 축이 다른 수치를 비교하는 셈 — 중립 표기만 남긴다.
+            lines.append(f"  비교: {feature} 평균 테스트 IC {mean:+.4f} — "
+                         f"기준 IC 비교 생략(참고값 {REF_INSAMPLE_IC:.4f} 는 score 전용)")
     return "\n".join(lines)
 
 

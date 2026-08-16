@@ -322,6 +322,13 @@ _OUTCOME_COLUMNS = {
     # 터치 시점 TP 동결 (안티게이밍) — 각 레벨 자신의 tp_usd 를 터치 순간 스냅샷.
     # 사후 재파싱 값과 비교하면 작성자의 목표가 소급 수정(골대 이동)이 드러난다.
     "touch_tp_usd": "REAL",
+    # touch_grade 를 찍은 산식 버전 (2026-08-16 리뷰 Fix5) — grade_ver(수집 시점
+    # 버전)와 별개로, 터치 시점 재채점(regrade_current)이 어느 산식으로 돌았는지.
+    # v4 로 수집된 행이 v5 배포 후 터치되면 touch_grade 는 v5 값이 되는데, 이
+    # 도장 없이는 v4 터치 표본과 섞여 캘리브레이션 축이 오염된다. 소급 조임
+    # 자체는 의도된 재채점 의미론(v4 롤아웃 때와 동일 — 사용자 결정 D4 는 저장
+    # score 소급 금지이지 터치 재채점 금지가 아니다)이며, 이 컬럼은 그 구분자다.
+    "touch_grade_ver": "TEXT",
     # ── 터치 시점 기록 4종 2차 (2026-08-16 Tier2 스프린트 — 동 리서치 문서
     # 항목 7·8·10). 전부 **기록 전용**, record_touch_snapshot 경유(발송·억제
     # 무관 모든 실터치), 최초 기록 우선(IS NULL 가드) — 위 Tier1 4종과 동일 관례.
@@ -638,6 +645,13 @@ def reparse_all(conn) -> int:
                 and new_tps_usd == old_tps_usd
                 and new_tf == r["timeframe_hours"]):
             continue
+        # score/grade/score_breakdown 은 여기서 **의도적으로 재계산하지 않는다**
+        # (2026-08-16 리뷰 Fix9 — 문서화만): ① 소급 재라벨 금지(사용자 결정 D4 —
+        # 과거 알림이 왜 나갔는지의 원본 보존), ② 판단 시점 값은 터치 시점
+        # regrade_current 가 항상 새로 계산하므로 저장 점수가 낡아도 알림·필터는
+        # 오염되지 않는다. 한계: 저장 score 는 '수집 시점 산식·수집 시점 tp/sl'
+        # 기준이라 이 UPDATE 로 tp/sl 이 바뀐 행은 저장 점수와 필드가 어긋날 수
+        # 있다 — 사후 분석 시 grade_ver/touch_grade_ver 로 구분할 것.
         conn.execute(
             "UPDATE levels SET sl_usd=?, tp_usd=?, rr=?, judgment_window_hours=?, "
             "tp_ladder_count=?, tps_usd=?, timeframe_hours=? WHERE id=?",
@@ -706,27 +720,30 @@ def mark_touched(conn, touches: list, now: Optional[float] = None,
                  fear_greed, kimchi_pct, btc_dominance, volume_rank, lid))
 
 
-def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = None,
-                          closed_below: Optional[int] = None,
+def record_touch_snapshot(conn, rows: list,
                           atr_pct: Optional[float] = None,
                           btc_regime: Optional[str] = None,
-                          dvol: Optional[float] = None) -> None:
+                          dvol: Optional[float] = None,
+                          grade_ver: Optional[str] = None) -> None:
     """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 + 08-16 Tier2) — **기록 전용**.
 
-    rows: [(level_id, grade, score, tp_usd, post_age_hours), ...] — 각 레벨
-    **자신의** 터치 시점 재채점 등급/점수(regrade_current 가 in-place 갱신해 둔
-    값)·자신의 TP 동결값·자신의 글나이(h — post_age_minutes 가 레벨마다 달라
-    레벨별 값이다).
-    penetration_pct/closed_below 는 클러스터 공통값(트리거가 상단 엔트리 하나라
-    터치 캔들도 하나), atr_pct(코인 일봉)/btc_regime/dvol(시장 전역)도 클러스터
-    공통 — 전달된 전 행에 동일하게 기록한다.
+    rows: [(level_id, grade, score, tp_usd, post_age_hours,
+            penetration_pct, closed_below), ...] — 각 레벨 **자신의** 터치 시점
+    재채점 등급/점수(regrade_current 가 in-place 갱신해 둔 값)·자신의 TP 동결값·
+    자신의 글나이(h — post_age_minutes 가 레벨마다 달라 레벨별 값)·자신의 관통/
+    종가이탈(2026-08-16 리뷰 Fix2: 종전 클러스터 공통 kwarg 는 하단 형제를 상단
+    트리거 기준으로 오라벨 + 표본 복제했다 — 이제 각 레벨 자신의 엔트리 기준
+    레벨별 값이며, 자기 엔트리 미도달·진행 중 캔들 멤버는 (None, None)).
+    atr_pct(코인 일봉)/btc_regime/dvol(시장 전역)/grade_ver(터치 재채점 산식
+    버전 — 프로세스당 산식 하나, Fix5)는 클러스터 공통 — 전달된 전 행에 동일
+    기록.
 
     record_touch_verdicts(발송 성공건만 — "표시된 것만 기록" 불변식)와 달리 이
     함수는 mark_touched 옆에서 불려 발송·억제 무관 **모든 실터치**에 남는다 —
     등급 필터가 억제한 터치의 등급 분포가 바로 이 데이터의 존재 이유다.
     전 컬럼 최초 기록 우선(IS NULL 가드) — 재발송·경합에도 첫 값 보존."""
     ids = []
-    for lid, grade, score, tp_usd, post_age_hours in rows:
+    for lid, grade, score, tp_usd, post_age_hours, penetration_pct, closed_below in rows:
         ids.append(lid)
         if grade is not None:
             conn.execute(
@@ -747,19 +764,24 @@ def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = N
                 "UPDATE levels SET touch_post_age_hours=? "
                 "WHERE id=? AND touch_post_age_hours IS NULL",
                 (float(post_age_hours), lid))
+        if penetration_pct is not None:
+            conn.execute(
+                "UPDATE levels SET touch_penetration_pct=? "
+                "WHERE id=? AND touch_penetration_pct IS NULL",
+                (float(penetration_pct), lid))
+        if closed_below is not None:
+            conn.execute(
+                "UPDATE levels SET touch_closed_below=? "
+                "WHERE id=? AND touch_closed_below IS NULL",
+                (1 if closed_below else 0, lid))
     if not ids:
         return
     ph = ",".join("?" * len(ids))
-    if penetration_pct is not None:
+    if grade_ver is not None:
         conn.execute(
-            f"UPDATE levels SET touch_penetration_pct=? "
-            f"WHERE id IN ({ph}) AND touch_penetration_pct IS NULL",
-            (float(penetration_pct), *ids))
-    if closed_below is not None:
-        conn.execute(
-            f"UPDATE levels SET touch_closed_below=? "
-            f"WHERE id IN ({ph}) AND touch_closed_below IS NULL",
-            (1 if closed_below else 0, *ids))
+            f"UPDATE levels SET touch_grade_ver=? "
+            f"WHERE id IN ({ph}) AND touch_grade_ver IS NULL",
+            (str(grade_ver), *ids))
     if atr_pct is not None:
         conn.execute(
             f"UPDATE levels SET touch_atr_pct=? "
@@ -775,6 +797,39 @@ def record_touch_snapshot(conn, rows: list, penetration_pct: Optional[float] = N
             f"UPDATE levels SET touch_dvol=? "
             f"WHERE id IN ({ph}) AND touch_dvol IS NULL",
             (float(dvol), *ids))
+
+
+def get_touch_quality_pending(conn, t_lo: float, t_hi: float, limit: int = 5) -> list:
+    """터치 품질(관통/종가이탈) 소급 기록 대기 행 (2026-08-16 리뷰 Fix1b).
+
+    조건: touched 상태 + 두 품질 컬럼 모두 NULL + touched_at 이 [t_lo, t_hi]
+    (호출부: now-6h ~ now-60s — 터치 캔들이 확실히 완성된 창). 둘 중 하나만
+    NULL 인 행(구 4-튜플 시대 closed 만 결손 등)은 제외 — 반쪽 재계산은 최초
+    기록과 계보가 섞인다. limit 로 회차당 캔들 콜 상한을 지킨다. 오래된 순 —
+    창을 벗어나기 전에 먼저 처리."""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, ticker, entry_usd, touched_at FROM levels "
+        "WHERE status='touched' AND touch_penetration_pct IS NULL "
+        "AND touch_closed_below IS NULL AND touched_at BETWEEN ? AND ? "
+        "ORDER BY touched_at LIMIT ?",
+        (t_lo, t_hi, int(limit))).fetchall()]
+
+
+def set_touch_quality(conn, level_id: int,
+                      penetration_pct: Optional[float],
+                      closed_below: Optional[int]) -> None:
+    """터치 품질 소급 기록 — record_touch_snapshot 과 동일한 IS NULL 가드(멱등).
+    최초 기록 우선 원칙 그대로 — 경합·재실행이 첫 값을 덮지 못한다."""
+    if penetration_pct is not None:
+        conn.execute(
+            "UPDATE levels SET touch_penetration_pct=? "
+            "WHERE id=? AND touch_penetration_pct IS NULL",
+            (float(penetration_pct), level_id))
+    if closed_below is not None:
+        conn.execute(
+            "UPDATE levels SET touch_closed_below=? "
+            "WHERE id=? AND touch_closed_below IS NULL",
+            (1 if closed_below else 0, level_id))
 
 
 # ── 적중 판정 (ACCURACY_DB_PLAN v1) ──────────────────────────────

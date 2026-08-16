@@ -128,11 +128,10 @@ _LADDER_ARROW = re.compile(
 # 200자 안에 rung 3개가 들어오면 '나열인가' 판별은 이미 끝나 있다.
 _LADDER_MAX_WINDOW = 200
 
-# 줄바꿈 나열형 사다리의 단계 수 상한(표시 신뢰 컷). 실측(원문 103건) 분포는
-# 1~8 에서 끝나고 8단계 두 건은 육안 확인 결과 진짜 8단 사다리였다. 12 는 그
-# 위로 얹은 여유이자, 본문 산문에 'target' 이 흩뿌려져 단계가 부풀 때의 방어선 —
-# 넘으면 '틀린 단계 수를 보여주느니 안 보여준다'(이 모듈의 판단 보류 원칙).
-_LADDER_MAX_STEPS = 12
+# (2026-08-15 v5 후속) 종전의 단계 수 상한 _LADDER_MAX_STEPS=12(표시 신뢰 컷)는
+# 저장 게이트에서 제거하고 notify/telegram.py 의 "1/N" 표시 상한으로 이동했다 —
+# tp_ladder_count 가 v5 등급 산식에 들어가면서, 13단+ 진짜 사다리를 0(미상)으로
+# 뭉개면 사다리 감점(-3)을 잘못 물리기 때문. 저장은 참 개수, 표시만 12 컷.
 _SANITY_LO_MULT = 0.25
 _SANITY_HI_MULT = 4.0
 
@@ -464,8 +463,13 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         if risk > 0 and reward > 0:
             rr = round(reward / risk, 2)
 
-    # 사다리 단계 수 — 표시 전용(알림의 "1/8단계"). tp 가 sanity 로 폐기됐으면
-    # 같이 버린다(값 없는데 단계만 남으면 표시가 거짓말을 한다).
+    # 사다리 단계 수 — 원래 표시 전용(알림의 "1/8단계")이었지만 2026-08-15 v5 부터
+    # 등급 산식에 들어간다(count<=1 이면 -3 감점). 0 의 의미는 '단일 목표 또는
+    # 사다리 미상' — 감점 실증치 -3 은 미상 행이 섞인 이 저장 필드 그대로에서
+    # 측정됐으므로(research_2026-08-15_db_signal_analysis.md) 산문형 다중 목표를
+    # 0 에 두는 현행 의미와 일관된다. sanity 로 걸러진 rung(아래 각 분기)은 애초에
+    # 유효하지 않은 값이라 걸러낸 뒤의 개수가 곧 참값이다. tp 가 sanity 로
+    # 폐기됐으면 같이 버린다(값 없는데 단계만 남으면 표시가 거짓말을 한다).
     tp_ladder_count = 0
     if _tp_grp and tp is not None:
         _n = getattr(_tp_grp, "ladder_n", 0)
@@ -483,10 +487,12 @@ def parse_setup(text: str, current_price: Optional[float] = None,
             _ivalid = {v for v in _ivals if v is not None and _ilo <= v <= _ihi
                       and (entry is None
                            or (v > entry if direction == "long" else v < entry))}
-            # 스펙형 자매 분기와 동일 게이트: 유효 rung 이 2개 미만이거나 상한
-            # 초과면 tp_ladder_count 는 초기값(0)에 남는다(=렌더러가 단계
-            # 표시를 생략) — 필터 안 거친 원시값으로 되돌아가지 않는다.
-            if 1 < len(_ivalid) <= _LADDER_MAX_STEPS:
+            # 스펙형 자매 분기와 동일 게이트: 유효 rung 이 2개 미만이면
+            # tp_ladder_count 는 초기값(0)에 남는다 — 필터 안 거친 원시값으로
+            # 되돌아가지 않는다. 2026-08-15 v5: 상한(12) 게이트는 제거 — 13단+
+            # 진짜 사다리를 0(미상)으로 뭉개면 v5 가 -3 을 잘못 물린다. 참 개수를
+            # 저장하고 "1/N" 표시 상한은 렌더러(notify/telegram.py)가 담당.
+            if 1 < len(_ivalid):
                 tp_ladder_count = len(_ivalid)
         else:
             # 줄바꿈 나열형("Target 1: …" 세 줄, "• TP1: …" 네 줄). 실측상 원문의
@@ -517,7 +523,8 @@ def parse_setup(text: str, current_price: Optional[float] = None,
                 _lasts = {v[-1] for v in tps if v and _lo <= v[-1] <= _hi
                           and (entry is None
                                or (v[-1] > entry if direction == "long" else v[-1] < entry))}
-                if 1 < len(_lasts) <= _LADDER_MAX_STEPS:
+                # 2026-08-15 v5: 상한(12) 게이트 제거 — 위 인라인 분기와 동일 사유.
+                if 1 < len(_lasts):
                     tp_ladder_count = len(_lasts)
 
     # 전체 TP 목표가 목록 — 가장 가까운 것부터 먼 것 순. B안 필터에서 "마지막 TP가

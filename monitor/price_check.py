@@ -279,24 +279,79 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
-def _touch_quality(candles, collected_at: float, trigger_krw: float):
+def _touch_quality(candles, collected_at: float, trigger_krw: float, now: float):
     """터치 캔들의 관통 깊이(%)·종가 이탈(0/1) — (2026-08-15 Tier1) **기록 전용**.
 
-    터치 캔들 = 수집(collected_at) 이후 시작한 첫 캔들 중 저가가 트리거(클러스터
-    상단 엔트리 KRW) 이하인 것 — 터치 검출(_eff_low)과 동일한 수집 이후 원칙.
+    터치 캔들 = 수집(collected_at) 이후 시작한 첫 캔들 중 저가가 트리거(그 레벨
+    자신의 엔트리 KRW) 이하인 것 — 터치 검출(_eff_low)과 동일한 수집 이후 원칙.
     반환 (penetration_pct, closed_below). 캔들이 없거나(현재가 단독 감지) 터치
     캔들을 못 찾으면 (None, None). 종가는 fetch_range_since 5-튜플 확장 이후에만
     존재 — 구 4-튜플(테스트 스텁 등)이면 closed_below 만 None(len 가드).
+
+    진행 중 캔들 배제 (2026-08-16 리뷰 Fix1): 실시간 감지의 터치 캔들은 대부분
+    '지금 진행 중인' 1분봉이라 c[4]가 잠정 종가다 — 그대로 기록하면 closed_below
+    가 1 쪽으로, 관통 깊이는 얕은 쪽으로 체계적 편향되고 최초기록우선(IS NULL)
+    이라 영구 고착된다. 터치 캔들은 **완성된 경우(c[1] <= now)에만** 인정하고,
+    첫 터치 캔들이 진행 중이면 (None, None) — 뒤쪽 캔들로 넘어가지 않는다
+    (첫 터치 캔들이 아닌 캔들의 품질은 이 지표의 정의가 아니다). NULL 로 남은
+    건은 _backfill_touch_quality 가 다음 회차들에서 완성 캔들로 소급 기록한다.
     필터·알림·판정 어디에도 쓰지 않는다 — 꼬리 스침 vs 종가 안착 사후 분석용."""
     if not candles or not trigger_krw or trigger_krw <= 0:
         return None, None
     for c in candles:
         if c[0] >= (collected_at or 0) and c[3] <= trigger_krw:
+            if c[1] > now:
+                return None, None  # 진행 중 캔들 — 백필 대상 (잠정값 기록 금지)
             pen = (trigger_krw - c[3]) / trigger_krw * 100
             close = c[4] if len(c) > 4 else None
             closed = None if close is None else (1 if close <= trigger_krw else 0)
             return pen, closed
     return None, None
+
+
+def _backfill_touch_quality(conn, now: float, usdt_krw, get_range_fn) -> None:
+    """터치 품질(관통/종가이탈) NULL 소급 기록 — (2026-08-16 리뷰 Fix1b) 회차당 1회.
+
+    _touch_quality 가 진행 중 캔들을 거부하면서(위) 실시간 터치는 대부분 첫
+    회차에 NULL 로 남는다 — 여기서 '터치 캔들이 확실히 완성된'(touched_at 이
+    now-60 이전) 행만 골라 완성 캔들로 채운다. 상한 21600초(6h) = 15분봉 폴백
+    없이 1분봉 창(최대 200분)을 훨씬 넘는 다운타임 잔여분은 포기(오래된 건은
+    분석 가치 대비 콜 비용이 안 맞는다 — fail-safe 로 영구 NULL 허용).
+
+    기준가는 각 레벨 **자신의** 엔트리(entry_usd × 현재 usdt_krw) — 클러스터
+    상단이 아니다(Fix2 per-member 원칙과 동일 축). 터치 시점과 현재의 환율
+    드리프트(6h 내 <1%)로 관통이 미세 음수가 될 수 있어 0 으로 클램프한다.
+
+    캔들 예산: 회차당 최대 5행 × 1콜 = **+5콜 상한, 대기 행이 있을 때만** —
+    run_once 의 감시/판정 예산(30/40콜)과 별도지만 총량이 작아 안전하다.
+    쓰기는 db.set_touch_quality 의 IS NULL 가드 경유(멱등 — 경합·재실행 무해).
+    모든 예외는 삼킨다 — 이 기능이 2분 핫패스를 죽이면 안 된다."""
+    if not usdt_krw:
+        return
+    rows = db.get_touch_quality_pending(conn, now - 21600, now - 60, limit=5)
+    for lv in rows:
+        try:
+            entry = lv.get("entry_usd") or 0
+            touched_at = lv.get("touched_at")
+            if entry <= 0 or not touched_at:
+                continue
+            e_krw = entry * usdt_krw
+            minutes = int((now - touched_at + 59) // 60) + 3  # ceil + 여유 3분
+            candles = get_range_fn(lv["ticker"], minutes)
+            if not candles:
+                continue
+            for c in candles:
+                # touched_at 은 터치 캔들의 종료 시각(t_anchor) — 그 캔들 자신은
+                # c[0] < touched_at <= c[1] 로 특정된다.
+                if c[0] < touched_at <= c[1]:
+                    pen = max(0.0, (e_krw - c[3]) / e_krw * 100)  # 환율 드리프트 클램프
+                    close = c[4] if len(c) > 4 else None
+                    closed = None if close is None else (1 if close <= e_krw else 0)
+                    db.set_touch_quality(conn, lv["id"], pen, closed)
+                    break
+        except Exception as e:  # noqa: BLE001 - 소급 기록 실패가 회차를 죽이면 안 됨
+            logger.warning("[체크] %s 터치 품질 백필 실패(무시): %s",
+                           lv.get("ticker"), e)
 
 
 def _post_age_hours(lv: dict, touched_at) -> Optional[float]:
@@ -306,8 +361,10 @@ def _post_age_hours(lv: dict, touched_at) -> Optional[float]:
     collected_at 은 봇이 글을 발견한 시각일 뿐이라, 발행 기준 나이는 수집 시점에
     이미 흘러 있던 post_age_minutes 를 더해야 나온다. 신선도 창(168h) 조이기의
     근거 데이터(시들음 분석) — 알림·필터·판정 어디에도 쓰지 않는다.
-    수집 시각이 없으면 None (계산 불능 — fail-safe). 터치 시각은 호출부의 회차
-    시각(now) — 캔들 앵커와의 오차는 분 단위라 시간 단위 분석에 무의미."""
+    수집 시각이 없으면 None (계산 불능 — fail-safe). 터치 시각은 각 레벨의
+    t_anchor(실제 도달한 첫 캔들의 종료 시각, 2026-08-16 리뷰 Fix3) — 종전의
+    회차 시각(now)은 다운타임 소급 터치에서 실제 터치보다 최대 수 시간 뒤라
+    글나이를 부풀렸다. 이제 audit_dump 의 touched_at 기준과 일치한다."""
     col = lv.get("collected_at")
     if not col or not touched_at:
         return None
@@ -1050,10 +1107,14 @@ def run_once(now: float | None = None) -> dict:
                     # 관찰 데이터(daily_stats)에는 영향이 없다.
                     # 피드백 버튼 (2026-08-15 시험 운용): 터치 본알림에만 👍/👎 인라인
                     # 버튼 부착 — 버튼은 본문 밖이라 알림 양식(텍스트) 동결 원칙 유지.
-                    # ref 는 대표 첫 레벨 id (callback_data 64바이트 상한). 예고 불변.
+                    # ref 는 **대표(rep) 레벨 id** (2026-08-16 리뷰 Fix4): 종전
+                    # ids[0](클러스터 상단 엔트리 레벨)은 알림이 표시한 등급·작성자의
+                    # 레벨과 다를 수 있어 투표가 엉뚱한 레벨에 붙었다 — 투표는 사용자가
+                    # 실제로 본 대표에 귀속돼야 한다. callback_data 64바이트 상한.
+                    # 예고 불변.
                     _fb_markup = None
                     if kind == "touch" and cfg_get("alert_feedback_enabled"):
-                        _fb_markup = telegram.feedback_keyboard(str(ids[0]))
+                        _fb_markup = telegram.feedback_keyboard(str(rep["id"]))
                     # C등급 무음 푸시 (2026-08-15 Tier1): 터치 본알림도 대표 재채점
                     # 등급이 alert_sound_min_grade(B) 미만이면 무음 발송 — 내용·양식
                     # ·발송 여부 불변, 소리만 제거. 예고는 종전대로 무음 고정.
@@ -1224,9 +1285,18 @@ def run_once(now: float | None = None) -> dict:
                     # 모든 터치에 남는다(record_touch_verdicts 는 발송 성공건만 —
                     # 억제 터치의 등급 분포가 이 기록의 존재 이유). 기록 실패가
                     # 터치 경로(상태 전이 커밋)를 죽이면 안 되므로 격리.
+                    #
+                    # 관통/종가이탈은 **레벨별**(2026-08-16 리뷰 Fix2): 종전엔
+                    # 클러스터 상단 트리거 하나로 계산해 전 멤버에 도장 — 하단
+                    # 형제는 자기 엔트리 기준으론 종가 위인데 closed=1 로 오라벨
+                    # +같은 캔들 표본이 멤버 수만큼 복제됐다. 각 레벨 자신의
+                    # e_krw(touches 루프의 지정가 체결 모델과 동일 축) 기준으로
+                    # 계산하고, 자기 엔트리 미도달(섀도) 멤버는 (None, None).
+                    # 글나이 앵커도 각 레벨의 t_anchor(터치 캔들 종료 시각) —
+                    # 회차 시각(now)이 아니라 audit_dump 의 touched_at 기준과
+                    # 일치하고, 다운타임 소급 터치에서도 실제 터치 시각으로
+                    # 계산된다(Fix3).
                     try:
-                        _pen_pct, _closed_below = _touch_quality(
-                            candles, cluster[0].get("collected_at") or 0, top_krw)
                         # 레짐 도장 (2026-08-16 Tier2) — 회차 캐시 지연 로더.
                         # DVOL 은 이미 로드된 옵션 컨텍스트만 재사용 — 억제 터치
                         # 때문에 새 조회를 하지 않는다(추가 API 콜 0 원칙). 즉
@@ -1234,16 +1304,28 @@ def run_once(now: float | None = None) -> dict:
                         _dvol = (_mkt_ctx["options"].get("dvol")
                                  if _mkt_ctx["loaded"] and _mkt_ctx["options"]
                                  else None)
+                        _snap_rows = []
+                        for lv, (_lid, _price, _t_anchor) in zip(cluster, touches):
+                            if _price is not None:
+                                _pen_pct, _closed_below = _touch_quality(
+                                    candles, lv.get("collected_at") or 0,
+                                    _price, now)
+                            else:  # 섀도 터치 — 자기 엔트리 미도달, 품질 무의미
+                                _pen_pct, _closed_below = None, None
+                            _snap_rows.append(
+                                (_lid, lv.get("grade"), lv.get("score"),
+                                 lv.get("tp_usd"), _post_age_hours(lv, _t_anchor),
+                                 _pen_pct, _closed_below))
                         db.record_touch_snapshot(
-                            conn,
-                            [(lv["id"], lv.get("grade"), lv.get("score"),
-                              lv.get("tp_usd"), _post_age_hours(lv, now))
-                             for lv in cluster],
-                            penetration_pct=_pen_pct,
-                            closed_below=_closed_below,
+                            conn, _snap_rows,
                             atr_pct=_snap_atr,
                             btc_regime=_btc_regime(),
-                            dvol=_dvol)
+                            dvol=_dvol,
+                            # 산식 버전 도장 (Fix5) — 프로세스당 산식 하나라
+                            # 클러스터 공통 kwarg. v4 수집분이 v5 산식으로 터치
+                            # 재채점된 행을 구분 가능하게 한다 — 소급 조임 자체는
+                            # 의도된 재채점 의미론(v4 롤아웃 때와 동일, 문서화됨).
+                            grade_ver=cfg_get("grade_formula_ver"))
                     except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                         logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
                                        coin, e)
@@ -1258,6 +1340,18 @@ def run_once(now: float | None = None) -> dict:
         # ── 적중 판정 (ACCURACY_DB_PLAN 1단계 — 조용한 누적, 표시·필터 무관) ──
         summary["resolved"] = _judge_outcomes(
             conn, prices, usdt_krw, _get_range, now, cfg_get, obs=obs)
+
+        # 터치 품질 소급 기록 (2026-08-16 리뷰 Fix1b) — _touch_quality 가 진행 중
+        # 캔들을 거부해 NULL 로 남은 실시간 터치를 완성 캔들로 채운다. 판정
+        # (_judge_outcomes) **뒤** — 판정 예산과 경합하지 않는 위치. 회차당
+        # 최대 5행 × 1콜(대기 행이 있을 때만 발생 — 평시 0콜). 격리 필수.
+        try:
+            _backfill_touch_quality(
+                conn, now, usdt_krw,
+                lambda tkr, mins: upbit.fetch_range_since(
+                    tkr, mins, cfg_get("http_timeout_sec")))
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 터치 품질 백필 실패(무시하고 진행): %s", e)
 
         # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
         db.bump_daily_stats(conn, day, **obs)
@@ -1604,7 +1698,11 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                         resolve_price, entry_krw, post_url=lv.get("post_url"))
-                    if telegram.send(text, urgency="high"):
+                    # 유/무음은 본알림과 동일 정책 (2026-08-16 리뷰 Fix8): 원
+                    # 레벨의 터치 시점 등급(touch_grade, 없으면 grade) 기준 —
+                    # C등급 무음 신호의 후속 TP 만 고음량이던 비대칭 제거.
+                    if telegram.send(text, urgency=_touch_sound_urgency(
+                            lv.get("touch_grade") or lv.get("grade"), cfg_get)):
                         db.record_alert(conn, lv["coin_symbol"],
                                         _kind_inter, [lv["id"]], _tp_day, now)
                         alert_ledger.append(db_path, lv["coin_symbol"],
@@ -1644,7 +1742,9 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                         text = telegram.render_tp_partial_alert(
                             lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                             resolve_price, entry_krw, post_url=lv.get("post_url"))
-                        if telegram.send(text, urgency="high"):
+                        # 유/무음 본알림 정책 승계 (Fix8) — 위 중간 TP 와 동일.
+                        if telegram.send(text, urgency=_touch_sound_urgency(
+                                lv.get("touch_grade") or lv.get("grade"), cfg_get)):
                             db.record_alert(conn, lv["coin_symbol"],
                                             _kind, [lv["id"]], _tp_day, now)
                             alert_ledger.append(db_path, lv["coin_symbol"],
@@ -1919,6 +2019,7 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
                                                   tp_idx=_next_idx,
                                                   tp_count=_n_total,
                                                   post_urls=db._json_str_list(row.get("post_urls")))
+        # 거래량/OI 급증은 등급 무관 독립 알림 클래스 — 유음 고정은 의도(Fix8 검토).
         if telegram.send(text, urgency="high"):
             logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",
                         ticker, ratio, current_bil, avg_bil)

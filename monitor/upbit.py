@@ -276,9 +276,20 @@ def _fetch_ohlc(market: str, unit: str, count: int, timeout: float) -> Optional[
         time.sleep(_CANDLE_PACE_SEC)
         if not candles:
             return None
-        # 업비트 응답은 최신→과거 순 → 뒤집어 시간순으로
-        return [(float(c["high_price"]), float(c["low_price"]),
-                 float(c["trade_price"])) for c in reversed(candles)]
+        # 업비트 응답은 최신→과거 순 → 뒤집어 시간순으로.
+        # 캔들별 가드 (2026-08-16 리뷰 Fix7): 종전엔 결측 캔들 하나가 컴프리헨션
+        # 전체를 KeyError/TypeError 로 죽여 200개가 통째로 None — RSI/MA/ATR/레짐
+        # 소비처 전부가 한 번에 실종됐다. 이제 필드 결손 캔들만 건너뛰고 나머지를
+        # 살린다 — 소비처는 표본 부족 시 각자 None 으로 우아하게 강등(종전 설계).
+        out = []
+        for c in reversed(candles):
+            h, l, tp = c.get("high_price"), c.get("low_price"), c.get("trade_price")
+            if h is None or l is None or tp is None:
+                continue  # 결측 캔들 스킵 — 나머지는 유효
+            out.append((float(h), float(l), float(tp)))
+        if len(out) < 2:
+            return None  # 쓸만한 캔들 2개 미만 — 지표 계산 무의미(종전 None 동작)
+        return out
     except Exception as e:  # noqa: BLE001
         # 2026-08-08 재검토: 예외 경로도 페이싱(fetch_rvol_1h 관례 통일) — RSI/MA
         # 4콜(일·주·4h·MA)이 이 함수를 공유해 실패 연쇄 시 무페이싱 연사 위험이

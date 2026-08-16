@@ -470,6 +470,15 @@ LADDER_N_CASES = [
     # 써 "3/3단계"인데 실제 감시 목록은 2개뿐인 불일치가 생긴다.
     ("하이픈 사다리 중 마지막 rung 이 4배 초과(sanity 탈락) → 3 아닌 2단계",
      "$ETC/USDT LONG\nENTRY: 10\nTARGETS: 12 - 15 - 50\nSTOP LOSS: 8", 10.0, 2),
+    # 2026-08-15 기대값 변경(왜): tp_ladder_count 가 v5 등급 산식에 들어가면서
+    # (count<=1 이면 -3) 상한(12) 게이트를 제거 — 13단+ 진짜 사다리를 0(미상)으로
+    # 저장하면 감점이 잘못 물린다. 이제 참 개수를 저장하고, "1/N" 표시 상한(12)은
+    # notify/telegram.py 렌더러가 담당한다(아래 렌더 꼬리표 검증).
+    ("줄바꿈 스펙 13단 사다리 → 0 아닌 13단 (v5: 참 개수 저장)",
+     "Entry: 10\n" + "".join(f"TP{i}: {10 + i}\n" for i in range(1, 14)), 10.0, 13),
+    ("하이픈 13단 사다리 → 0 아닌 13단 (인라인 분기도 상한 게이트 제거)",
+     "Entry: 10\nTargets: " + " - ".join(str(10 + i) for i in range(1, 14)),
+     10.0, 13),
 ]
 for desc, text, price, exp_n in LADDER_N_CASES:
     r = parse_setup(text, current_price=price)
@@ -478,6 +487,32 @@ for desc, text, price, exp_n in LADDER_N_CASES:
     print(("✅" if passed else "❌"), f"단계수 {desc} → {got}")
     if passed:
         ok += 1
+
+# ── 렌더러 "1/N" 꼬리표 상한 (2026-08-15) ─────────────────────────────
+# 저장은 참 개수(위 13단 케이스)지만 표시는 2..12 에서만 붙는다 — 13단+ 알림
+# 양식이 종전(0 저장 시절)과 바이트 단위로 동일해야 한다. 기존 렌더 스위트
+# (test_price_logic T14l/T14n)는 8단·1단만 다뤄 12 초과 분기가 무검증이라
+# 여기서 최소 단위로만 확인한다(스냅샷 스위트에 신규 렌더 테스트는 안 얹는다).
+import time as _time
+from notify import telegram as _tg
+_rep = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
+            grade="C", score=45, author="SomeChannel", author_followers=None,
+            author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+            mcap_rank=19, mcap_tier_icon="🥇", post_url="https://t.me/x/1",
+            post_age_minutes=60, collected_at=_time.time(), source="telegram")
+_USDT = 1400.0
+_m13 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=13)],
+                        8.35 * _USDT, _USDT)
+_m8 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=8)],
+                       8.35 * _USDT, _USDT)
+for _desc, _passed in [
+        ("렌더 13단(>12)은 꼬리표 생략 — 종전 양식과 동일", "1/13" not in _m13
+         and _m13 == _m8.replace("  1/8", "")),
+        ("렌더 8단(≤12)은 종전대로 '1/8' 병기", "1/8" in _m8)]:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += 2
 
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)

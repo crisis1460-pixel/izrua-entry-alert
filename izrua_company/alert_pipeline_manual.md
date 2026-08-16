@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-16 (Tier2 예리화: ATR·BTC레짐·글나이 스냅샷, misses 자동분류, 피드백 Wilson 집계, 터치품질 분석기)  
+> 마지막 업데이트: 2026-08-16 (코드 리뷰 12건 수정: 터치품질 진행중캔들 배제+백필, 멤버별 관통, 글나이 t_anchor 기준, 피드백 ref 수정, touch_grade_ver, 레짐 관측일 히스테리시스, _fetch_ohlc 캔들별 가드, TP후속 무음 승계, 사다리 진값 저장+12단 표시캡, validate_ic score전용 비교, show_status PK인덱스)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -256,12 +256,16 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | IC/ICIR 신호 품질 (2026-08-14, 08-15 배선) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. show_status "신호 품질" 섹션 + 주간 감사덤프 grade_stats JSON에 연결. 첫 실측(08-15): IC 0.2072(n=167) 유효, ICIR 1.615(4주). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py`, `storage/audit_dump.py` |
 | 시간대·요일별 성과 (2026-08-14, 08-15 배선) | `signal_quality.compute_hourly_performance()` / `compute_weekday_performance()` — KST 기준 24시·7요일 적중률, best/worst 요약만 표시(n≥5). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py` |
 | Hash Ribbons (2026-08-15) | `hash_ribbons.fetch_hash_ribbons()` — mempool.space 무료 해시레이트 90일, SMA30/SMA60. 항복(30<60)=warn+1, 회복 크로스 14일 내=confirm+1 (수급 보정 입력). 6h DB 캐시. `hash_ribbons_enabled` 스위치 | `monitor/hash_ribbons.py` (내부 보정 전용) |
-| 터치 스냅샷 5종 (2026-08-15 Tier1) | 발송·억제 무관 전 터치에 첫 기록 우선 저장: 재채점 등급/점수(`touch_grade`/`touch_score` — 캘리브레이션 축 교정), 터치 품질(`touch_penetration_pct` 침투 깊이, `touch_closed_below` 종가이탈 여부 — 꼬리털기 vs 진성 이탈 구분), TP 동결(`touch_tp_usd` — 작성자 사후 목표가 수정 감지). `db.record_touch_snapshot()` | `monitor/price_check.py` → `storage/db.py` (기록 전용) |
-| 터치 스냅샷 Tier2 4종 (2026-08-16) | `touch_atr_pct` — Wilder ATR(20)% (일봉 1콜 공유, vol-스케일 라벨 `MFE≥k×ATR` 기반), `touch_btc_regime` — BTC vs 200일선 above/below (3 KST일 히스테리시스, meta 상태 영속, 시간당 BTC 일봉 1콜 상한), `touch_dvol` — DVOL 수치(옵션 컨텍스트 재사용), `touch_post_age_hours` — 글 발행→터치 경과시간(만료 조이기 근거 데이터) | `monitor/upbit.py`·`macro.py`·`price_check.py` → `storage/db.py` (기록 전용) |
+| 터치 스냅샷 5+2종 (2026-08-15 Tier1, 08-16 리뷰 수정) | 발송·억제 무관 전 터치에 첫 기록 우선 저장. **진행 중 캔들 배제**(08-16 Fix1): 실시간 터치의 잠정 종가 편향 방지 → NULL 행은 `_backfill_touch_quality`가 완성 캔들로 소급(회차당 ≤5행). **멤버별 관통**(Fix2): 클러스터 상단이 아닌 각 레벨 자신의 엔트리 기준. **touch_grade_ver**(Fix5): 산식 버전 도장. 기록 컬럼: `touch_grade`/`touch_score`(재채점), `touch_penetration_pct`/`touch_closed_below`(품질), `touch_tp_usd`(TP 동결), `touch_post_age_hours`(글나이, t_anchor 기준 Fix3), `touch_grade_ver`. `db.record_touch_snapshot()` | `monitor/price_check.py` → `storage/db.py` (기록 전용) |
+| 터치 스냅샷 Tier2 3종 (2026-08-16) | `touch_atr_pct` — Wilder ATR(20)% (일봉 1콜 공유), `touch_btc_regime` — BTC vs 200일선 above/below (**관측일** 3일 히스테리시스 Fix6: 달력일→실관측 KST일, 같은 날 중복 1회 제한, 조회실패일 미카운트), `touch_dvol` — DVOL 수치(옵션 컨텍스트 재사용) | `monitor/upbit.py`·`macro.py`·`price_check.py` → `storage/db.py` (기록 전용) |
 | 주간 감사 misses 섹션 (2026-08-16) | grade_stats JSON `misses` — 최근 7일 실패 신호별 MFE/MAE·소요시간·터치 판정·자동 분류(즉시반전 MFE<1% / 이익반납 ≥2% / 중간 / 판정불가), 상한 30 + class_counts. `post_age_stats` — 글 나이 버킷별 적중률 (<24h/24-72h/72-120h/120h+) | `storage/audit_dump.py` (내부 전용) |
 | 피드백 Wilson 집계 (2026-08-16) | show_status "알림 피드백 (시험)" — 전체·등급별·작성자별(상위 10) up율 + Wilson 80% 하한. 10표 미만 판단 보류, 자동조치는 30표+ 정책 (표기 전용) | `scripts/show_status.py` |
 | 터치 품질 분석기 (2026-08-16) | `analyze_touch_quality.py` — 꼬리터치 vs 종가이탈 그룹별 + 침투 깊이 3버킷별 승률·ret_24h·MFE/MAE (그룹당 n≥20 도달 시 판정 — 첫 터치 vs 재확인 알림 전환의 자체 근거). 읽기 전용 CLI | `scripts/analyze_touch_quality.py` |
-| 캔들 종가 보존 (2026-08-15) | `upbit.fetch_range_since` 반환 튜플 4→5원소 `(start, end, high, low, close)` — 뒤에 붙여 기존 인덱스 소비자 무영향. 터치 품질 판정 입력 | `monitor/upbit.py` |
+| 캔들 종가 보존 (2026-08-15, Fix7) | `upbit.fetch_range_since` 반환 튜플 4→5원소 `(start, end, high, low, close)` — 뒤에 붙여 기존 인덱스 소비자 무영향. `_fetch_ohlc` **캔들별 가드**(Fix7): 필드 결손 캔들 개별 스킵, 나머지 보존(종전: 1개 불량이 전량 None) | `monitor/upbit.py` |
+| TP 후속 무음 승계 (2026-08-16 Fix8) | 중간/최종 TP 알림의 유/무음이 본알림 등급 정책을 승계 — C등급 무음 터치의 후속 TP만 유음이던 비대칭 제거. `touch_grade` 우선, 없으면 `grade` 폴백 | `monitor/price_check.py` |
+| 사다리 진값 저장 (2026-08-16 Fix10) | `collector/extractor.py` — TP 사다리 게이트를 `1 < len ≤ 12` → `1 < len`으로 확장, 13단+ 사다리도 진값 저장(v5 감점 연산 무오염). 표시 12단 상한은 `notify/telegram.py`로 이관 | `collector/extractor.py` → `notify/telegram.py` |
+| validate_ic score 전용 비교 (2026-08-16 Fix11) | `--feature` != score 시 인샘플 IC 비교 라인 생략 — 다른 피처의 IC를 score IC 기준선과 비교하던 오류 제거 | `scripts/validate_ic.py` |
+| show_status PK 인덱스 (2026-08-16 Fix12) | 피드백 JOIN 방향 수정: `CAST(l.id AS TEXT)=f.ref` → `l.id=CAST(f.ref AS INTEGER)` — rowid PK 인덱스 활용 | `scripts/show_status.py` |
 | purged IC 검증 (2026-08-15) | `scripts/validate_ic.py` — 시간순 3-fold, ±168h purge + 168h embargo, `--feature COL` 로 임의 컬럼 IC 감사 가능. 첫 실측: 시간외 평균 +0.193 vs 인샘플 +0.202 → 유지 판정 | `scripts/validate_ic.py` (읽기 전용 CLI) |
 | 작성자 삭제율 (2026-08-15) | 주간 감사 JSON `author_deletion_rates` — post_url 기준, 5건+ 작성자, 상위 20. "패배 글 삭제" 작성자 감지 (안티게이밍) | `storage/audit_dump.py` (내부 전용) |
 

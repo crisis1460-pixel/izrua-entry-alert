@@ -422,13 +422,17 @@ def print_alert_feedback(conn) -> None:
     print(_SEP)
     try:
         # ref 는 TEXT(콜백 데이터의 레벨 id), levels.id 는 INTEGER — 캐스팅해 조인.
+        # 2026-08-15 수정: 캐스팅은 ref 쪽에 건다 — 인덱스 달린 PK(l.id)를 캐스팅
+        # 하면 SQLite 가 rowid 인덱스를 못 타 levels 전건 스캔이 된다. 숫자가 아닌
+        # ref 는 CAST 시 0 이 되어 어떤 PK 와도 안 붙는다(종전 TEXT 비교 실패와
+        # 동일하게 (미상) 버킷으로 귀결 — F4 테스트 축 유지).
         # 등급은 터치 시점 재채점(touch_grade)이 정본이고 없으면 수집 시점 grade 폴백
         # (fetch_calibration_rows 와 반대 방향인 이유: 피드백은 '그 알림'에 대한
         # 반응이라 알림이 나간 순간의 등급이 맞는 축이다).
         rows = conn.execute(
             "SELECT f.vote AS vote, COALESCE(l.touch_grade, l.grade) AS grade, "
             "l.author AS author FROM alert_feedback f "
-            "LEFT JOIN levels l ON CAST(l.id AS TEXT) = f.ref").fetchall()
+            "LEFT JOIN levels l ON l.id = CAST(f.ref AS INTEGER)").fetchall()
         if not rows:
             print("  피드백 없음 (버튼 도입 08-15)")
             return

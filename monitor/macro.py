@@ -97,33 +97,29 @@ def _btc_ma200_raw(timeout: float) -> Optional[str]:
         return None
 
 
-def _kst_days_inclusive(since: str, today: str) -> int:
-    """후보 시작일~오늘의 KST 날짜 수(양끝 포함). 파싱 실패 시 1(카운트 재시작
-    취급 — 오염된 날짜로 조기 전환하는 것보다 보수적)."""
-    try:
-        d0 = datetime.strptime(since, "%Y-%m-%d").date()
-        d1 = datetime.strptime(today, "%Y-%m-%d").date()
-        return max((d1 - d0).days, 0) + 1
-    except (ValueError, TypeError):
-        return 1
-
-
 def get_btc_regime(conn, timeout: float = 10.0,
                    now: Optional[float] = None) -> Optional[str]:
-    """BTC 레짐 도장 — "above"|"below"(BTC vs 200일선), 3일 히스테리시스.
+    """BTC 레짐 도장 — "above"|"below"(BTC vs 200일선), 관측일 3일 히스테리시스.
 
-    히스테리시스: 원시 조건이 저장 상태와 어긋나면 즉시 뒤집지 않고 후보(cand)로
-    두고, 같은 반대 조건이 3 KST일 연속(양끝 포함) 관측돼야 상태를 전환한다 —
-    200일선 걸침 구간의 일중 왕복이 레짐 라벨을 매일 뒤집는 노이즈 제거
-    (Golden Cross 류 지표의 확인 대기 관례). 조건이 상태와 재일치하면 후보 리셋
+    히스테리시스 (2026-08-16 리뷰 Fix6 — **관측된 KST일** 기준으로 수정):
+    원시 조건이 저장 상태와 어긋나면 즉시 뒤집지 않고 후보(cand)로 두고, 같은
+    반대 조건이 **서로 다른 KST일에 3회 관측**돼야 상태를 전환한다 — 200일선
+    걸침 구간의 일중 왕복이 레짐 라벨을 매일 뒤집는 노이즈 제거(Golden Cross
+    류 지표의 확인 대기 관례). 종전 규칙(달력 경과일 cand_since 기준)은 중간
+    날에 관측이 하나도 없어도(봇 다운타임·조회 실패 연속) 달력만 3일 지나면
+    뒤집었다 — "3일 연속 확인"이 아니라 "달력 3일 전 1회 확인"으로 퇴화하는
+    버그. 이제 같은 날의 반복 관측은 1회로 세고(cand_last_day 게이트), 관측이
+    없던 날은 카운트에 기여하지 않는다. 조건이 상태와 재일치하면 후보 리셋
     (연속성 요건). 최초 호출은 원시 조건으로 즉시 초기화(히스테리시스 없음 —
     비교할 저장 상태가 없다).
 
-    상태는 meta JSON 하나에 영속: {"state","cand","cand_since","at"}.
+    상태는 meta JSON 하나에 영속: {"state","cand","cand_days","cand_last_day",
+    "at"}. 구형식({"cand_since"})은 후보 없음으로 취급해 재구축한다 — 배포 수
+    시간 뒤의 형식 교체라 후보 카운트 손실은 무해(보수 방향: 전환이 늦어질 뿐).
     "at" 이 1시간 캐시를 겸해 시간당 업비트 일봉 1콜이 상한(사용자 승인 예산).
     전 경로 실패 허용 — 원시 조건 조회 실패 시 저장 상태(스테일)를 그대로
-    반환하고 "at" 은 갱신하지 않아 다음 회차가 재시도한다. now 인자는 테스트
-    주입용(기본 현재 시각)."""
+    반환하고 "at" 은 갱신하지 않아 다음 회차가 재시도한다(실패한 날은 관측일로
+    세지 않는다). now 인자는 테스트 주입용(기본 현재 시각)."""
     now = now if now is not None else time.time()
     st = {}
     try:
@@ -141,19 +137,30 @@ def get_btc_regime(conn, timeout: float = 10.0,
         return state  # fail-safe: 스테일 상태 반환, 메타 미갱신(다음 회차 재시도)
 
     today = day_kst(now)
+    _reset = {"cand": None, "cand_days": 0, "cand_last_day": None}
     if state is None:
         # 최초 호출(또는 오염 복구) — 원시 조건으로 즉시 초기화
-        new = {"state": raw, "cand": None, "cand_since": None, "at": now}
+        new = {"state": raw, "at": now, **_reset}
     elif raw == state:
-        new = {"state": state, "cand": None, "cand_since": None, "at": now}  # 후보 리셋
+        new = {"state": state, "at": now, **_reset}  # 재일치 — 후보 리셋
     else:
-        since = st.get("cand_since")
-        if st.get("cand") != raw or not since:
-            since = today  # 새 반대 조건 관측 시작 — 카운트 재시작
-        if _kst_days_inclusive(since, today) >= _REGIME_HYST_DAYS:
-            new = {"state": raw, "cand": None, "cand_since": None, "at": now}  # 전환
+        cand = st.get("cand")
+        try:
+            cand_days = int(st.get("cand_days") or 0)
+        except (ValueError, TypeError):
+            cand_days = 0
+        cand_last_day = st.get("cand_last_day")
+        # 구형식(cand_since 만 있음) 또는 오염 → cand_days=0 → 아래에서 재시작
+        if cand != raw or cand_days < 1 or not cand_last_day:
+            cand_days, cand_last_day = 1, today  # 새 반대 조건 — 관측일 1일째
+        elif today != cand_last_day:
+            cand_days, cand_last_day = cand_days + 1, today  # 새 관측일 +1
+        # else: 같은 날 반복 관측 — 1회로 유지(카운트 불변)
+        if cand_days >= _REGIME_HYST_DAYS:
+            new = {"state": raw, "at": now, **_reset}  # 관측일 3일 충족 — 전환
         else:
-            new = {"state": state, "cand": raw, "cand_since": since, "at": now}
+            new = {"state": state, "cand": raw, "cand_days": cand_days,
+                   "cand_last_day": cand_last_day, "at": now}
     try:
         db.set_meta(conn, _BTC_REGIME_KEY, json.dumps(new))
     except Exception:  # noqa: BLE001 — 메타 기록 실패해도 이번 회차 값은 반환
