@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨 → DB 무결성 라운드7 3건 수정)  
+> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨 → DB 무결성 라운드7 3건 → 10라운드 전수검토 즉시수정 5건)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -329,3 +329,14 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | SCHEMA ↔ `_DAILY_STATS_COLS` 불일치 | `storage/db.py` SCHEMA | `daily_stats` 정의에 `suppressed_global_cap`, `token_unlock_warned` 두 컬럼 추가 — 기존 DB는 `_migrate()` ALTER TABLE로 이미 보완되고 있었으나 SCHEMA가 허위 문서화 상태였음 |
 | `get_observation_report()` 데이터 누락 | `storage/db.py` | `suppressed_global_cap`·`token_unlock_warned`가 DB에 쌓이지만 리포트 반환값에 없었음 → 두 키 추가 |
 | `grade_v5_since` meta 마커 부재 | `storage/db.py` `_migrate()` | `grade_v3_since`만 기록하고 v5 배포(08-16) 시점 마커가 없었음 → `grade_v5_since` 조건부 기록 추가 |
+
+## 10라운드 전수검토 즉시수정 이력 (2026-08-16)
+
+| 심각도 | 버그 | 위치 | 수정 |
+|--------|------|------|------|
+| HIGH | `upsert_level` SELECT→INSERT TOCTOU | `storage/db.py:527` | `IntegrityError` catch → 중복 삽입 시 레벨 손실 방지 |
+| HIGH | `_backfill_supply_1h` funding 키 오타 | `monitor/price_check.py:327` | `.get("funding")` → `.get("fr")` — 1h 수급 재판정 펀딩 입력이 항상 None이었음 |
+| MEDIUM | `coingecko.py` baseAsset KeyError | `collector/coingecko.py:165` | `s["baseAsset"]` → `s.get("baseAsset", "")` — Binance exchangeInfo 응답 방어 |
+| MEDIUM | Yahoo Finance `result[]` IndexError | `monitor/macro.py:68,119` | `(result or [{}])[0]` — 빈 리스트 응답 시 IndexError 방어 |
+| 데드코드 | `secrets_status()` 미사용 함수 | `config/settings.py` | 삭제 |
+| CI위험 | `test_tradingview_live.py` CI glob 노출 | `scripts/` | `probe_tradingview_live.py` 리네임 (실네트워크 테스트 CI 제외) |
