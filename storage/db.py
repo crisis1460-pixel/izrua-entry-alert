@@ -526,38 +526,41 @@ def upsert_level(conn, level: dict) -> bool:
     key = level["signal_key"]
     row = conn.execute("SELECT id, status FROM levels WHERE signal_key = ?", (key,)).fetchone()
     if row is None:
-        conn.execute(
-            """INSERT INTO levels
-               (signal_key, coin_symbol, ticker, direction, entry_usd, sl_usd, tp_usd,
-                rr, grade, score, author, author_followers, author_hit_rate,
-                author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
-                post_url, post_age_minutes, status, collected_at, judgment_window_hours,
-                raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours,
-                score_breakdown)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                key, level["coin_symbol"], level["ticker"], level["direction"],
-                level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
-                level.get("rr"), level.get("grade"), level.get("score"),
-                level.get("author"), level.get("author_followers"),
-                level.get("author_hit_rate"), level.get("author_hit_count"),
-                (None if level.get("author_whitelisted") is None
-                 else (1 if level.get("author_whitelisted") else 0)),
-                level.get("mcap_rank"), level.get("mcap_tier_icon"),
-                level.get("post_url"), level.get("post_age_minutes"),
-                "watching", level.get("collected_at", time.time()),
-                level.get("judgment_window_hours"), level.get("raw_text"),
-                # 소스 미지정이면 tradingview (기존 호출부 무수정 호환)
-                level.get("source") or "tradingview",
-                level.get("tp_ladder_count") or 0,   # 표시 전용(알림 "1/N단계")
-                level.get("tps_usd") or "[]",         # 전체 TP 목표가 목록 JSON
-                # 산식 버전 태그 (2026-08-01 v3). 미지정(None)=구 호출부/테스트 호환
-                level.get("grade_ver"),
-                level.get("timeframe_hours"),
-                level.get("score_breakdown"),
-            ),
-        )
-        return True
+        try:
+            conn.execute(
+                """INSERT INTO levels
+                   (signal_key, coin_symbol, ticker, direction, entry_usd, sl_usd, tp_usd,
+                    rr, grade, score, author, author_followers, author_hit_rate,
+                    author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
+                    post_url, post_age_minutes, status, collected_at, judgment_window_hours,
+                    raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours,
+                    score_breakdown)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    key, level["coin_symbol"], level["ticker"], level["direction"],
+                    level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
+                    level.get("rr"), level.get("grade"), level.get("score"),
+                    level.get("author"), level.get("author_followers"),
+                    level.get("author_hit_rate"), level.get("author_hit_count"),
+                    (None if level.get("author_whitelisted") is None
+                     else (1 if level.get("author_whitelisted") else 0)),
+                    level.get("mcap_rank"), level.get("mcap_tier_icon"),
+                    level.get("post_url"), level.get("post_age_minutes"),
+                    "watching", level.get("collected_at", time.time()),
+                    level.get("judgment_window_hours"), level.get("raw_text"),
+                    # 소스 미지정이면 tradingview (기존 호출부 무수정 호환)
+                    level.get("source") or "tradingview",
+                    level.get("tp_ladder_count") or 0,   # 표시 전용(알림 "1/N단계")
+                    level.get("tps_usd") or "[]",         # 전체 TP 목표가 목록 JSON
+                    # 산식 버전 태그 (2026-08-01 v3). 미지정(None)=구 호출부/테스트 호환
+                    level.get("grade_ver"),
+                    level.get("timeframe_hours"),
+                    level.get("score_breakdown"),
+                ),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            pass  # 두 collect 프로세스 중복 삽입 → UPDATE 경로로 계속
     # 기존 레벨: 시총순위/등급/작성자 통계 + SL/TP 를 최신값으로 갱신 (상태·시각은 보존).
     # sl/tp 갱신 이유(2026-07-23): 추출기 버그 수정이 배포돼도 이미 저장된 오염값
     # (예: 서수 오인 tp=1.0)이 그대로 알림에 노출되는 것을 막는다 — 매 수집마다

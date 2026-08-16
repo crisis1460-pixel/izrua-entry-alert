@@ -324,7 +324,7 @@ def _backfill_supply_1h(conn, now: float, timeout: float) -> None:
             _deriv = binance.fetch_deriv_snapshot(coin, timeout)
             if not _deriv:
                 continue
-            _funding = _deriv.get("funding")
+            _funding = _deriv.get("fr")
             _pchg = _deriv.get("pchg")
             _oi_now = _deriv.get("oi")
             _oi_chg = None

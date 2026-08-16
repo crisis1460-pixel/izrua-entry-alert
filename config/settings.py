@@ -390,13 +390,3 @@ def mask(val: str) -> str:
         return "*" * len(val)
     return f"{val[:3]}…{val[-2:]} (len={len(val)})"
 
-
-def secrets_status() -> dict:
-    """어떤 비밀값이 채워졌는지 진단용 요약 (값은 노출하지 않음)."""
-    return {
-        "TELEGRAM_BOT_TOKEN": mask(secret("TELEGRAM_BOT_TOKEN")),
-        "TELEGRAM_CHAT_ID": mask(secret("TELEGRAM_CHAT_ID")),
-        "COINGECKO_API_KEY": mask(secret("COINGECKO_API_KEY")),
-        "WATCHER_GITHUB_TOKEN": mask(secret("WATCHER_GITHUB_TOKEN")),
-        "TV_COOKIE": mask(secret("TV_COOKIE")),
-    }

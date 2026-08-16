@@ -383,7 +383,11 @@ _rc.close()
 
 _mc = sqlite3.connect(":memory:")
 _mc.row_factory = sqlite3.Row
-_mc.execute("CREATE TABLE levels (id INTEGER PRIMARY KEY, mfe_pct REAL, mae_pct REAL)")
+_mc.execute(
+    "CREATE TABLE levels "
+    "(id INTEGER PRIMARY KEY, mfe_pct REAL, mae_pct REAL, "
+    "touch_atr_pct REAL, touch_mfe_atr_ratio REAL)"
+)
 _mc.execute("INSERT INTO levels (id) VALUES (1)")
 _mc.commit()
 

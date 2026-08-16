@@ -162,9 +162,10 @@ def fetch_binance_usdt_symbols(timeout: float) -> set:
         logger.warning("[cg] Binance exchangeInfo 조회 실패 (Binance 필터 건너뜀): %s", e)
         return set()
     return {
-        s["baseAsset"].upper()
+        s.get("baseAsset", "").upper()
         for s in data.get("symbols", [])
         if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING"
+        and s.get("baseAsset")
     }
 
 

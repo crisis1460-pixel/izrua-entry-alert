@@ -65,7 +65,7 @@ def _fetch_dxy_fresh(timeout: float) -> Optional[float]:
             logger.warning("[macro] DXY Yahoo HTTP %s", r.status_code)
             return None
         data = r.json()
-        meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+        meta = (data.get("chart", {}).get("result") or [{}])[0].get("meta", {})
         price = meta.get("regularMarketPrice")
         if price:
             return round(float(price), 2)
@@ -116,7 +116,7 @@ def _fetch_us_indices_fresh(timeout: float) -> Optional[dict]:
             )
             if r.status_code != 200:
                 continue
-            meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+            meta = (r.json().get("chart", {}).get("result") or [{}])[0].get("meta", {})
             price = meta.get("regularMarketPrice")
             prev = meta.get("chartPreviousClose") or meta.get("previousClose")
             if price and prev and prev > 0:
