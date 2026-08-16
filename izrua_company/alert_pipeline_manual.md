@@ -268,6 +268,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | show_status PK 인덱스 (2026-08-16 Fix12) | 피드백 JOIN 방향 수정: `CAST(l.id AS TEXT)=f.ref` → `l.id=CAST(f.ref AS INTEGER)` — rowid PK 인덱스 활용 | `scripts/show_status.py` |
 | purged IC 검증 (2026-08-15) | `scripts/validate_ic.py` — 시간순 3-fold, ±168h purge + 168h embargo, `--feature COL` 로 임의 컬럼 IC 감사 가능. 첫 실측: 시간외 평균 +0.193 vs 인샘플 +0.202 → 유지 판정 | `scripts/validate_ic.py` (읽기 전용 CLI) |
 | 작성자 삭제율 (2026-08-15) | 주간 감사 JSON `author_deletion_rates` — post_url 기준, 5건+ 작성자, 상위 20. "패배 글 삭제" 작성자 감지 (안티게이밍) | `storage/audit_dump.py` (내부 전용) |
+| 코드 리뷰 5건 수정 (2026-08-16) | **Fix1** macro.py FOMC fetch timeout `min(timeout,3.0)` 캡 (핫패스 최대 6s). **Fix2** `_STATIC_EVENTS` Q1 2027 비FOMC 항목 추가 + `_d()`/`_ev()` 헬퍼 재구성(kst_time 선언 시 포함). **Fix3** `refresh_macro_calendar` 죽은 FOMC 타입 필터 제거. **Fix4** `telegram.send()` reply_markup 파라미터·페이로드·독스트링 완전 삭제. **Fix5** 테스트 3종(test_price_logic·resilience·touch_recording) reply_markup=None 스텁 서명 정리 | `monitor/macro.py`, `notify/telegram.py`, `scripts/test_*.py` |
 
 ---
 
