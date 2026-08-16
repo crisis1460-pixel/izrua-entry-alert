@@ -18,6 +18,7 @@ meta 선기록(중복 방지 우선)과 반대인 이유: 브리핑은 하루 �
 
 import logging
 import time
+import unicodedata
 from datetime import datetime
 
 from config import settings
@@ -32,6 +33,15 @@ META_LAST_BRIEF_DATE = "last_morning_brief_date"
 # 구분선·F&G 한국어 라벨은 알림과 동일 표기 유지(같은 채팅방에 섞여 보인다).
 _SEP = telegram._SEP
 _FNG_KR = telegram._FNG_KR
+
+# 캘린더 줄 포맷: display width 32 초과 시 kst 부분을 다음 줄로 분리
+_MACRO_LINE_MAX_W = 32
+_MACRO_INDENT = "   "  # 📅 + 공백 너비 보정(이모지=2, 공백=1 → 3칸)
+
+
+def _display_width(text: str) -> int:
+    """한글·CJK·이모지 = 2, 나머지 = 1 로 환산한 표시 너비."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
 # 매크로 이벤트 예고 범위(일). get_nearby_macro_event 는 24h 창이라 브리핑용
 # 7일 예고는 get_macro_events(conn) 자동 캘린더를 사용한다.
@@ -101,7 +111,12 @@ def _macro_event_lines(now: float, conn) -> list:
             tag = "D-DAY" if d == 0 else f"D-{d}"
             kst = ev.get("kst_time", "")
             kst_part = f" ({kst})" if kst else ""
-            upcoming.append((d, f"📅 {ev['label']} {tag}{kst_part}"))
+            base = f"📅 {ev['label']} {tag}"
+            if kst_part and _display_width(base + kst_part) > _MACRO_LINE_MAX_W:
+                line = f"{base}\n{_MACRO_INDENT}{kst_part.lstrip()}"
+            else:
+                line = base + kst_part
+            upcoming.append((d, line))
     upcoming.sort(key=lambda x: x[0])
     return [line for _, line in upcoming]
 
