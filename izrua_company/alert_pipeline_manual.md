@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨)  
+> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨 → DB 무결성 라운드7 3건 수정)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -319,3 +319,13 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 ## 설정 파일 위치
 
 `config/settings.py` — 위 모든 수치의 원본. 조정 시 이 파일 하나만 수정.
+
+---
+
+## DB 무결성 수정 이력 (라운드7, 2026-08-16)
+
+| 버그 | 위치 | 수정 내용 |
+|------|------|-----------|
+| SCHEMA ↔ `_DAILY_STATS_COLS` 불일치 | `storage/db.py` SCHEMA | `daily_stats` 정의에 `suppressed_global_cap`, `token_unlock_warned` 두 컬럼 추가 — 기존 DB는 `_migrate()` ALTER TABLE로 이미 보완되고 있었으나 SCHEMA가 허위 문서화 상태였음 |
+| `get_observation_report()` 데이터 누락 | `storage/db.py` | `suppressed_global_cap`·`token_unlock_warned`가 DB에 쌓이지만 리포트 반환값에 없었음 → 두 키 추가 |
+| `grade_v5_since` meta 마커 부재 | `storage/db.py` `_migrate()` | `grade_v3_since`만 기록하고 v5 배포(08-16) 시점 마커가 없었음 → `grade_v5_since` 조건부 기록 추가 |

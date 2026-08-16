@@ -166,6 +166,12 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- suppressed_* 와 달리 _judge_outcomes 에서 누적 (가격체크 루프 외부).
     suppressed_tp_gate   INTEGER NOT NULL DEFAULT 0,
     suppressed_timeframe INTEGER NOT NULL DEFAULT 0,
+    -- 글로벌 일일 상한(alert_max_global_per_day)으로 차단된 건수 (2026-08-07~).
+    -- suppressed_cap(코인당 상한)과 별개 — 코인별이 아니라 전체 합산 상한.
+    suppressed_global_cap INTEGER NOT NULL DEFAULT 0,
+    -- 토큰 언락 경고가 터치 알림에 표시된 건수 (2026-08-14~).
+    -- 억제가 아니라 "경고 표시 건수" — 발송은 정상적으로 됨.
+    token_unlock_warned  INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 
@@ -482,6 +488,10 @@ def _migrate(conn) -> None:
     # 이미 있으면 no-op (meta 조회 1건).
     if get_meta(conn, "grade_v3_since") is None:
         set_meta(conn, "grade_v3_since", str(time.time()))
+    # grade_v5_since (2026-08-16 v5+Tier1/Tier2 배포): 동일 패턴으로 v5 시점 기록.
+    # grade_ver='v5' 행이 이 DB 에 언제부터 섞였는지 단일 조회점 — 표본 분리 기준.
+    if get_meta(conn, "grade_v5_since") is None:
+        set_meta(conn, "grade_v5_since", str(time.time()))
 
 
 def _maybe_audit_dump(conn, db_path: str) -> None:
@@ -2269,5 +2279,9 @@ def get_observation_report(conn, days: int = 30) -> list:
             # (2026-08-01): 컬럼은 저장되는데 이 리포트에 빠져 있어 관찰 불가였다.
             "suppressed_tp_gate":                s.get("suppressed_tp_gate", 0),
             "suppressed_timeframe":              s.get("suppressed_timeframe", 0),
+            # 글로벌 일일 상한 억제 — suppressed_cap(코인당)과 별개 (2026-08-16 Fix)
+            "suppressed_global_cap":             s.get("suppressed_global_cap", 0),
+            # 토큰 언락 경고 표시 건수 (억제 아님) (2026-08-16 Fix)
+            "token_unlock_warned":               s.get("token_unlock_warned", 0),
         })
     return out
