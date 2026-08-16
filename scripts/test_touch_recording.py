@@ -123,7 +123,7 @@ with db.connect(TEST_DB) as conn:
 
 # ── 오프라인 스텁 (test_price_logic 관례) ────────────────────────────────
 sent = []
-telegram.send = lambda text, urgency="high", reply_markup=None: (sent.append(urgency) or True)
+telegram.send = lambda text, urgency="high": (sent.append(urgency) or True)
 
 PRICES = {"KRW-AAA": 10050.0, "KRW-BBB": 20100.0, "KRW-CCC": 30100.0,
           "KRW-DDD": 20100.0, "KRW-EEE": 50100.0, "KRW-FFF": 40200.0,

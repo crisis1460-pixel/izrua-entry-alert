@@ -1060,7 +1060,7 @@ with db.connect(TEST_DB_CHAIN_CYCLE) as conn:
 _orig_fetch_prices = upbit_mod.fetch_prices
 _orig_send = telegram.send
 upbit_mod.fetch_prices = lambda mkts, t: {m: 1400.0 for m in mkts}  # 가격이 entry 대비 멀어 터치 없음
-telegram.send = lambda text, urgency="high", reply_markup=None: True
+telegram.send = lambda text, urgency="high": True
 
 _orig_verify = db.verify_outcome_chain
 db.verify_outcome_chain = lambda conn: (_ for _ in ()).throw(RuntimeError("체인4 고의 예외"))
@@ -1288,7 +1288,7 @@ db.init_db(TEST_DB_GAP)
 
 _gap_sent = []
 _orig_tg_send_gap = telegram.send
-telegram.send = lambda text, urgency="high", reply_markup=None: (_gap_sent.append(text), True)[1]
+telegram.send = lambda text, urgency="high": (_gap_sent.append(text), True)[1]
 settings.SETTINGS["price_check_gap_alert_minutes"] = 120
 
 _now_gap = time.time()

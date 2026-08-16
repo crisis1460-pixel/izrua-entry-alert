@@ -362,13 +362,13 @@ _mem_cal_ts = 0.0
 
 
 def refresh_macro_calendar(conn, timeout=10.0):
-    """경제일정 자동 갱신 — FOMC 수집 + 규칙 생성 + DB 캐시."""
+    """경제일정 자동 갱신 — FOMC 수집 + 규칙 생성 + DB 캐시.
+    FOMC fetch timeout 은 3s 상한 — 주 1회 핫패스 블로킹 최소화."""
     global _mem_cal, _mem_cal_ts
     today = date.today()
     events = _generate_rule_events(today, months=8)
-    fomc = _fetch_fomc_calendar(timeout)
+    fomc = _fetch_fomc_calendar(min(timeout, 3.0))
     if fomc:
-        events = [e for e in events if e["type"] not in ("FOMC", "FOMC_MIN")]
         events.extend(fomc)
     events.sort(key=lambda e: e.get("date", ""))
     now = time.time()
@@ -401,32 +401,62 @@ def get_macro_events(conn=None):
             return refresh_macro_calendar(conn)
         except Exception as e:  # noqa: BLE001
             logger.warning("[macro] 캘린더 갱신 실패(폴백): %s", e)
-    for ev in _STATIC_EVENTS:
-        if "kst_time" not in ev:
-            try:
-                ev["kst_time"] = _kst_release_label(
-                    ev["type"], date.fromisoformat(ev["date"]))
-            except (ValueError, TypeError):
-                pass
     return _STATIC_EVENTS
 
 
-# 정적 폴백 리스트 (자동 캘린더 전 소스 실패 시 사용)
+# 정적 폴백 리스트 — _ev()로 선언해 kst_time 포함(패치 루프 불필요).
+# 자동 캘린더 전 소스 실패 시 사용. Q3 2026 ~ Q1 2027 핵심 이벤트.
+def _d(dt, tp, lb):
+    return _ev(date.fromisoformat(dt), tp, lb)
+
+
 _STATIC_EVENTS = [
-    {"date": "2026-09-16", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2026-11-04", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2026-12-16", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2027-01-27", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2027-03-17", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2026-09-10", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2026-10-14", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2026-11-12", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2026-12-10", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2026-09-09", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2026-09-04", "type": "NFP", "label": "비농업 고용"},
-    {"date": "2026-10-02", "type": "NFP", "label": "비농업 고용"},
-    {"date": "2026-11-06", "type": "NFP", "label": "비농업 고용"},
-    {"date": "2026-12-04", "type": "NFP", "label": "비농업 고용"},
+    # FOMC 금리결정
+    _d("2026-09-16", "FOMC", "FOMC 금리결정"),
+    _d("2026-10-28", "FOMC", "FOMC 금리결정"),
+    _d("2026-12-16", "FOMC", "FOMC 금리결정"),
+    _d("2027-01-27", "FOMC", "FOMC 금리결정"),
+    _d("2027-03-17", "FOMC", "FOMC 금리결정"),
+    # CPI 소비자물가
+    _d("2026-09-10", "CPI", "CPI 소비자물가"),
+    _d("2026-10-14", "CPI", "CPI 소비자물가"),
+    _d("2026-11-12", "CPI", "CPI 소비자물가"),
+    _d("2026-12-10", "CPI", "CPI 소비자물가"),
+    _d("2027-01-14", "CPI", "CPI 소비자물가"),
+    _d("2027-02-12", "CPI", "CPI 소비자물가"),
+    _d("2027-03-12", "CPI", "CPI 소비자물가"),
+    # PPI 생산자물가
+    _d("2026-09-09", "PPI", "PPI 생산자물가"),
+    _d("2026-10-13", "PPI", "PPI 생산자물가"),
+    _d("2026-11-10", "PPI", "PPI 생산자물가"),
+    _d("2026-12-09", "PPI", "PPI 생산자물가"),
+    _d("2027-01-13", "PPI", "PPI 생산자물가"),
+    _d("2027-02-11", "PPI", "PPI 생산자물가"),
+    _d("2027-03-11", "PPI", "PPI 생산자물가"),
+    # 비농업 고용(NFP)
+    _d("2026-09-04", "NFP", "비농업 고용"),
+    _d("2026-10-02", "NFP", "비농업 고용"),
+    _d("2026-11-06", "NFP", "비농업 고용"),
+    _d("2026-12-04", "NFP", "비농업 고용"),
+    _d("2027-01-08", "NFP", "비농업 고용"),
+    _d("2027-02-05", "NFP", "비농업 고용"),
+    _d("2027-03-05", "NFP", "비농업 고용"),
+    # PCE 물가
+    _d("2026-09-25", "PCE", "PCE 물가"),
+    _d("2026-10-30", "PCE", "PCE 물가"),
+    _d("2026-11-25", "PCE", "PCE 물가"),
+    _d("2026-12-23", "PCE", "PCE 물가"),
+    _d("2027-01-29", "PCE", "PCE 물가"),
+    _d("2027-02-26", "PCE", "PCE 물가"),
+    _d("2027-03-26", "PCE", "PCE 물가"),
+    # ISM 제조업
+    _d("2026-09-01", "ISM", "ISM 제조업"),
+    _d("2026-10-01", "ISM", "ISM 제조업"),
+    _d("2026-11-02", "ISM", "ISM 제조업"),
+    _d("2026-12-01", "ISM", "ISM 제조업"),
+    _d("2027-01-05", "ISM", "ISM 제조업"),
+    _d("2027-02-03", "ISM", "ISM 제조업"),
+    _d("2027-03-01", "ISM", "ISM 제조업"),
 ]
 
 # 모듈 레벨 호환 참조 — get_macro_events(conn) 사용 권장

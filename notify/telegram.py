@@ -204,20 +204,12 @@ _TG_MAX_LEN = 4096
 _KIMCHI_DELTA_TH = 0.5
 
 
-def send(text: str, urgency: Literal["high", "low"] = "high",
-         reply_markup: dict = None) -> bool:
+def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
     """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
 
     4096자 초과 시 구분선(_SEP) 기준으로 자동 분할 전송한다.
 
-    urgency: 'high'(기본, 유음) | 'low'(disable_notification=true, 무음). 기본값은
-    기존 동작과 동일 - 활성화는 호출부 수정 후(사용자 확정 대기 중).
-
-    reply_markup (2026-08-15 피드백 버튼 시험): Bot API InlineKeyboardMarkup dict.
-    지정 시 json.dumps 로 직렬화해 payload 에 포함(Bot API 규약 — reply_markup 은
-    JSON 직렬화 문자열도 허용). 기본 None 이면 payload 불변 = 기존 호출부 무영향.
-    분할 발송(_split_send) 경로엔 부착하지 않는다 — 어느 조각에 붙일지 모호하고,
-    피드백 대상인 터치 본알림은 4096자를 넘지 않는다.
+    urgency: 'high'(기본, 유음) | 'low'(disable_notification=true, 무음).
 
     재시도(2026-07-26): 429 는 retry_after(상한 10초) 대기 후, 5xx/타임아웃·연결
     오류는 1~2초 대기 후 재시도. 총 재시도 최대 _RETRY_MAX 회, 소진하면 기존처럼
@@ -241,8 +233,6 @@ def send(text: str, urgency: Literal["high", "low"] = "high",
                "disable_web_page_preview": True}
     if urgency == "low":
         payload["disable_notification"] = True
-    if reply_markup is not None:
-        payload["reply_markup"] = json.dumps(reply_markup)
 
     retry = 0
     while True:
