@@ -355,7 +355,7 @@ def _fetch_fomc_calendar(timeout=10.0):
 
 
 # ── 캘린더 캐시 ──────────────────────────────────────────────────────────
-_CAL_CACHE_KEY = "macro_calendar_v2"
+_CAL_CACHE_KEY = "macro_calendar_v3"
 _CAL_CACHE_TTL = 604800.0   # 7일
 _mem_cal = None              # type: list | None
 _mem_cal_ts = 0.0
