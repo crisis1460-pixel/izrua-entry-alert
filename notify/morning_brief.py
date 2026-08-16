@@ -140,46 +140,38 @@ def build_brief(conn, now: float, timeout: float) -> str:
             label = _FNG_KR.get(sent.get("fear_greed_label", ""),
                                 sent.get("fear_greed_label", ""))
             lines.append(f"😨 시장심리 {fng} ({label})")
-        dom_parts = []
         if sent.get("btc_dominance") is not None:
-            dom_parts.append(f"비트 {sent['btc_dominance']}%")
+            lines.append(f"🌍 비트 점유율 {sent['btc_dominance']}%")
         if sent.get("usdt_dominance") is not None:
-            dom_parts.append(f"USDT {sent['usdt_dominance']}%")
-        if dom_parts:
-            lines.append("🌍 " + " · ".join(dom_parts))
+            lines.append(f"🪙 USDT 점유율 {sent['usdt_dominance']}%")
 
-    # 달러지수 (1h 캐시) + BTC 변동성 (5min 캐시) — 한 줄 합침(화면 절약)
-    dxy = dvol = None
+    # 달러지수 (1h 캐시)
     try:
         dxy = macro_mod.fetch_dxy(conn, timeout)
+        if dxy is not None:
+            lines.append(f"💵 달러지수 {dxy:.2f}")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] DXY 실패: %s", e)
+
+    # BTC 변동성 (5min 캐시)
     try:
         opt = options.fetch_btc_options_context(timeout)
         dvol = opt.get("dvol") if opt else None
+        if dvol is not None:
+            lines.append(f"📊 BTC변동성 {dvol:.0f}")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 옵션 컨텍스트 실패: %s", e)
-    macro_parts = []
-    if dxy is not None:
-        macro_parts.append(f"달러지수 {dxy:.2f}")
-    if dvol is not None:
-        macro_parts.append(f"BTC변동성 {dvol:.0f}")
-    if macro_parts:
-        lines.append("💵 " + " · ".join(macro_parts))
 
     # 미국 증시 전일 등락 (1h 캐시, Yahoo Finance 무료)
     try:
         us = macro_mod.fetch_us_indices(conn, timeout)
         if us:
-            us_parts = []
             sp = us.get("sp500")
             nq = us.get("nasdaq")
             if sp is not None:
-                us_parts.append(f"S&P500 {sp:+.2f}%")
+                lines.append(f"🇺🇸 S&P500 {sp:+.2f}%")
             if nq is not None:
-                us_parts.append(f"나스닥 {nq:+.2f}%")
-            if us_parts:
-                lines.append("🇺🇸 " + " · ".join(us_parts))
+                lines.append(f"🇺🇸 나스닥 {nq:+.2f}%")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 미국 증시 실패: %s", e)
 

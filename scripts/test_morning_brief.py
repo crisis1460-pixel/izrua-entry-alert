@@ -106,10 +106,16 @@ options.fetch_btc_options_context = lambda timeout=10.0: {"dvol": 52.3}
 macro_mod.fetch_us_indices = lambda conn, timeout=10.0: {"sp500": 0.87, "nasdaq": -0.34}
 with db.connect(TEST_DB) as conn:
     text_full = morning_brief.build_brief(conn, AT_9, timeout=1.0)
-check("B3b 달러지수 라벨(DXY 아님)", "달러지수 103.45" in text_full and "DXY" not in text_full)
-check("B3c BTC변동성 라벨(DVOL 아님)", "BTC변동성 52" in text_full and "DVOL" not in text_full)
-check("B3d 미국 증시 S&P500 등락률 표시", "S&P500 +0.87%" in text_full)
-check("B3e 미국 증시 나스닥 등락률 표시", "나스닥 -0.34%" in text_full)
+check("B3b 달러지수 단독 줄(DXY 아님)", "달러지수 103.45" in text_full and "DXY" not in text_full)
+check("B3c BTC변동성 단독 줄(DVOL 아님)", "BTC변동성 52" in text_full and "DVOL" not in text_full)
+check("B3d S&P500 단독 줄", "S&P500 +0.87%" in text_full)
+check("B3e 나스닥 단독 줄", "나스닥 -0.34%" in text_full)
+# 한 줄에 두 항목이 섞이지 않는다 (· 합침 금지)
+for ln in text_full.split("\n"):
+    if "달러지수" in ln:
+        check("B3f 달러지수 줄에 BTC변동성 미합침", "BTC변동성" not in ln)
+    if "S&P500" in ln:
+        check("B3g S&P500 줄에 나스닥 미합침", "나스닥" not in ln)
 # 원복 — 이후 테스트는 None 경로
 macro_mod.fetch_dxy = lambda conn, timeout=10.0: None
 options.fetch_btc_options_context = lambda timeout=10.0: None
