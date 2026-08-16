@@ -309,6 +309,38 @@ def _touch_quality(candles, collected_at: float, trigger_krw: float, now: float)
     return None, None
 
 
+def _backfill_supply_1h(conn, now: float, timeout: float) -> None:
+    """터치 후 1h 수급 재판정 소급 기록 (2026-08-16 F6) — 회차당 최대 5행.
+
+    touched_at 기준 1~2h 사이이고 touch_supply_1h 가 NULL 인 행에 대해
+    fetch_deriv_snapshot + fetch_cvd_ratio 로 시점 수급을 재계산해 저장한다.
+    무거운 옵션/청산/DXY/매크로 컨텍스트는 생략(캐시 없음 — 추가 콜 0 원칙);
+    펀딩·OI·CVD 세 신호만으로 라벨이 결정되는 경우가 대부분이다.
+    모든 예외를 행 단위로 삼킨다 — 이 기능이 2분 핫패스를 죽이면 안 된다."""
+    pending = db.get_supply_1h_pending(conn, now)
+    for row in pending:
+        coin = row["coin_symbol"]
+        try:
+            _deriv = binance.fetch_deriv_snapshot(coin, timeout)
+            if not _deriv:
+                continue
+            _funding = _deriv.get("funding")
+            _pchg = _deriv.get("pchg")
+            _oi_now = _deriv.get("oi")
+            _oi_chg = None
+            if _oi_now:
+                _oi_base = db.get_oi_baseline(conn, coin, now)
+                if _oi_base:
+                    _oi_chg = (_oi_now - _oi_base) / _oi_base * 100
+            _cvd = binance.fetch_cvd_ratio(coin, timeout)
+            verdict = binance.derive_supply_verdict(
+                _funding, _oi_chg, _pchg, cvd_ratio=_cvd)
+            if verdict[0] is not None:
+                db.record_supply_1h(conn, row["id"], f"{verdict[0]}|{verdict[1]}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[체크] %s 1h 수급 재판정 실패(무시): %s", coin, e)
+
+
 def _backfill_touch_quality(conn, now: float, usdt_krw, get_range_fn) -> None:
     """터치 품질(관통/종가이탈) NULL 소급 기록 — (2026-08-16 리뷰 Fix1b) 회차당 1회.
 
@@ -1343,6 +1375,13 @@ def run_once(now: float | None = None) -> dict:
                     tkr, mins, cfg_get("http_timeout_sec")))
         except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
             logger.warning("[체크] 터치 품질 백필 실패(무시하고 진행): %s", e)
+
+        # 1h 수급 재판정 소급 기록 (2026-08-16 F6) — touched_at 1~2h 사이 행에만.
+        # 회차당 최대 5행 × 2콜(deriv+cvd) = +10콜 상한, 대기 행이 있을 때만 발생.
+        try:
+            _backfill_supply_1h(conn, now, cfg_get("http_timeout_sec"))
+        except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+            logger.warning("[체크] 1h 수급 재판정 백필 실패(무시하고 진행): %s", e)
 
         # 관찰 집계 반영 + 보존기간 정리 (스프린트5 — 알림 발송 없음, 조용히 누적만)
         db.bump_daily_stats(conn, day, **obs)

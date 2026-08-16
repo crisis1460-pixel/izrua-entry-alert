@@ -353,6 +353,11 @@ _OUTCOME_COLUMNS = {
     # Edge Ratio(MFE/|MAE|), Capture Ratio(실현이익/MFE) 도출의 원천 데이터.
     "mfe_pct": "REAL",
     "mae_pct": "REAL",
+    # MFE ÷ ATR20% 배수 (2026-08-16 변동성 스케일 라벨). 코인별 변동성 편차를
+    # 제거한 이동폭 표준화 — "이 코인 ATR 몇 배 움직였나"로 코인 간 비교 가능.
+    # touch_atr_pct 가 NULL(억제 터치)이면 이 값도 NULL. 판정 종결 시 record_mfe_mae
+    # 내부에서 touch_atr_pct 조회 후 1회 계산·저장.
+    "touch_mfe_atr_ratio": "REAL",
     # 글 삭제 감지 (2026-07-26 ACCURACY_DB_PLAN 안티게이밍 항목 구현).
     # 판정/통계는 그대로 유지하고 플래그만 추가 - "삭제 건수 자체가 신뢰도 신호".
     "deleted": "INTEGER DEFAULT 0",       # 1 = post_url 이 확인 시점에 404(삭제 확정)
@@ -412,6 +417,15 @@ _EXTRA_COLUMNS = {
     # "data": N, "author": N}. 사후 요소별 적중률 기여도 분석의 원천 — 총점에서는
     # 역산이 불가능하다(동일 총점에 여러 조합이 매핑). 수집·재수집 시 갱신.
     "score_breakdown": "TEXT",
+    # ATR 기반 클러스터 밴드 섀도 (2026-08-16 F5). 현재 고정 1% 밴드 대신 ATR20%
+    # × 0.5 를 쓸 경우의 값(%). 충분한 표본이 쌓이면 "ATR 스케일 밴드가 고정 1%
+    # 보다 클러스터링을 잘 나누었나"를 사후 분석하기 위한 원천 데이터.
+    # touch_atr_pct 가 NULL(억제 터치)이면 이 값도 NULL.
+    "touch_atr_band_pct": "REAL",
+    # 터치 후 1h 수급 재판정 결과 (2026-08-16 F6). "라벨|근거" 형식 — touch_supply_verdict
+    # 와 동일 포맷. 1h 경과 시점 시장 환경이 터치 당시와 얼마나 달라지는지 추적.
+    # 발송 건에 한정하지 않고 status='touched' 전 건에 기록(억제 터치 포함).
+    "touch_supply_1h": "TEXT",
 }
 
 
@@ -787,6 +801,10 @@ def record_touch_snapshot(conn, rows: list,
             f"UPDATE levels SET touch_atr_pct=? "
             f"WHERE id IN ({ph}) AND touch_atr_pct IS NULL",
             (float(atr_pct), *ids))
+        conn.execute(
+            f"UPDATE levels SET touch_atr_band_pct=? "
+            f"WHERE id IN ({ph}) AND touch_atr_band_pct IS NULL",
+            (float(atr_pct) * 0.5, *ids))
     if btc_regime is not None:
         conn.execute(
             f"UPDATE levels SET touch_btc_regime=? "
@@ -1566,6 +1584,37 @@ def record_mfe_mae(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
     conn.execute(
         "UPDATE levels SET mfe_pct=?, mae_pct=? WHERE id=? AND mfe_pct IS NULL",
         (mfe_pct, mae_pct, level_id),
+    )
+    row = conn.execute(
+        "SELECT touch_atr_pct FROM levels WHERE id=?", (level_id,)
+    ).fetchone()
+    if row and row["touch_atr_pct"]:
+        ratio = mfe_pct / row["touch_atr_pct"]
+        conn.execute(
+            "UPDATE levels SET touch_mfe_atr_ratio=? "
+            "WHERE id=? AND touch_mfe_atr_ratio IS NULL",
+            (ratio, level_id),
+        )
+
+
+def get_supply_1h_pending(conn, now: float, limit: int = 5) -> list:
+    """1h 수급 재판정 대기 행 조회 — touched_at 기준 1~2h 사이, touch_supply_1h NULL.
+
+    회차당 최대 limit 건만 반환(API 예산 보호). 오래된 터치 우선(먼저 처리해야
+    2h 창을 넘기기 전에 기록할 수 있다)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, coin_symbol, ticker FROM levels "
+        "WHERE status='touched' AND touch_supply_1h IS NULL "
+        "AND touched_at BETWEEN ? AND ? "
+        "ORDER BY touched_at LIMIT ?",
+        (now - 7200, now - 3600, int(limit))).fetchall()]
+
+
+def record_supply_1h(conn, level_id: int, supply_str: str) -> None:
+    """1h 수급 재판정 결과 기록 — 최초 1회만 (IS NULL 가드)."""
+    conn.execute(
+        "UPDATE levels SET touch_supply_1h=? WHERE id=? AND touch_supply_1h IS NULL",
+        (supply_str, level_id),
     )
 
 
