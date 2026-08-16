@@ -325,10 +325,11 @@ def _fetch_fomc_calendar(timeout=10.0):
             if r.status_code != 200:
                 continue
             data = r.json()
-            if not isinstance(data, list):
+            meetings = data.get("meetings") if isinstance(data, dict) else data
+            if not isinstance(meetings, list):
                 continue
             raw = []
-            for entry in data:
+            for entry in meetings:
                 try:
                     raw.append(date.fromisoformat(str(entry.get("date", ""))[:10]))
                 except (ValueError, TypeError):
