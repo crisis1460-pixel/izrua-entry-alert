@@ -34,7 +34,7 @@ _SEP = telegram._SEP
 _FNG_KR = telegram._FNG_KR
 
 # 매크로 이벤트 예고 범위(일). get_nearby_macro_event 는 24h 창이라 브리핑용
-# 7일 예고는 MACRO_EVENTS 를 직접 읽어 계산한다.
+# 7일 예고는 get_macro_events(conn) 자동 캘린더를 사용한다.
 _MACRO_LOOKAHEAD_DAYS = 7
 
 
@@ -85,13 +85,13 @@ def _btc_block(timeout: float) -> tuple:
     return btc_krw, kimchi
 
 
-def _macro_event_lines(now: float) -> list:
-    """향후 7일 내 매크로 이벤트 전부 — 날짜순 리스트("📅 CPI 소비자물가 D-2")."""
+def _macro_event_lines(now: float, conn) -> list:
+    """향후 7일 내 매크로 이벤트 전부 — 날짜순, 한국 발표시각 표기."""
     from monitor import macro
 
     today = datetime.fromtimestamp(now, KST).date()
     upcoming = []
-    for ev in macro.MACRO_EVENTS:
+    for ev in macro.get_macro_events(conn):
         try:
             ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
         except (ValueError, TypeError):
@@ -99,7 +99,9 @@ def _macro_event_lines(now: float) -> list:
         d = (ev_date - today).days
         if 0 <= d <= _MACRO_LOOKAHEAD_DAYS:
             tag = "D-DAY" if d == 0 else f"D-{d}"
-            upcoming.append((d, f"📅 {ev['label']} {tag}"))
+            kst = ev.get("kst_time", "")
+            kst_part = f" ({kst})" if kst else ""
+            upcoming.append((d, f"📅 {ev['label']} {tag}{kst_part}"))
     upcoming.sort(key=lambda x: x[0])
     return [line for _, line in upcoming]
 
@@ -176,7 +178,7 @@ def build_brief(conn, now: float, timeout: float) -> str:
 
     # 매크로 이벤트 7일 예고 (전부 표시)
     try:
-        ev_lines = _macro_event_lines(now)
+        ev_lines = _macro_event_lines(now, conn)
         if ev_lines:
             lines.extend(ev_lines)
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등

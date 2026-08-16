@@ -1,18 +1,20 @@
 """
-매크로 경제 지표 — DXY(달러 인덱스), FOMC/CPI 이벤트 캘린더.
+매크로 경제 지표 — DXY(달러 인덱스), 경제일정 자동 캘린더, BTC 레짐.
 
 DXY: 달러 강세 시 코인 약세 경향 (상관관계 −0.72~−0.90).
      Yahoo Finance 비공식 API — 무인증, 무료. 1시간 DB 캐시.
-FOMC/CPI: 고영향 이벤트 24h 전~2h 후 경고.
-          정적 JSON — API 호출 0, 수동 갱신.
+경제일정: FOMC는 the-calendar.net JSON 자동 수집(무인증, 무료).
+          NFP·ISM 등은 규칙 기반 자동 생성. 7일 DB 캐시 + 정적 폴백.
+          한국 발표시각 자동 계산(서머/윈터타임 반영).
 
 전 항목 실패 허용 — None 반환 시 호출부가 해당 데이터를 무시한다.
 """
 
+import calendar as _cal
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -219,111 +221,238 @@ def get_btc_regime(conn, timeout: float = 10.0,
     return new["state"]
 
 
-# ── 매크로 이벤트 캘린더 ─────────────────────────────────────────────────
-# 미국 주요 경제지표 — 대부분 미국 동부 08:30(한국시간 21:30 여름/22:30 겨울)
-# 발표 직후 코인 시장 변동성 급등. 정적 리스트 — 수동 갱신(분기 1회).
-MACRO_EVENTS = [
-    # ── 2026 Q3~Q4 ──────────────────────────────────────────────────
-    # FOMC 금리결정 (연 8회)
+# ── 매크로 이벤트 캘린더 (자동 생성 + 정적 폴백) ────────────────────────
+# FOMC: the-calendar.net JSON 자동 수집(무인증, 무료). CC BY 4.0.
+# NFP·ISM: 규칙 기반 자동 계산(첫째 금요일·첫 영업일 — 정확).
+# CPI·PPI·PCE·GDP·소매판매: 규칙 기반 근사(±1~2일 오차 가능).
+# 전 소스 실패 시 정적 리스트로 폴백. 7일 DB 캐시.
+# 한국 발표시각은 서머타임(EDT→KST +13h)/윈터타임(EST→KST +14h) 자동 반영.
+
+_RELEASE_TIMES_ET = {
+    "FOMC": (14, 0),       # 2:00 PM ET
+    "FOMC_MIN": (14, 0),
+    "CPI": (8, 30),        # 8:30 AM ET
+    "PPI": (8, 30),
+    "NFP": (8, 30),
+    "PCE": (8, 30),
+    "GDP": (8, 30),
+    "RETAIL": (8, 30),
+    "ISM": (10, 0),        # 10:00 AM ET
+}
+
+
+def _is_us_dst(d) -> bool:
+    """미국 동부 DST 여부 (3월 둘째 일요일 ~ 11월 첫째 일요일)."""
+    y = d.year
+    mar1 = date(y, 3, 1)
+    first_sun_mar = mar1 + timedelta(days=(6 - mar1.weekday()) % 7)
+    dst_start = first_sun_mar + timedelta(days=7)
+    nov1 = date(y, 11, 1)
+    dst_end = nov1 + timedelta(days=(6 - nov1.weekday()) % 7)
+    return dst_start <= d < dst_end
+
+
+def _kst_release_label(ev_type: str, ev_date) -> str:
+    """이벤트 발표시각→한국시간 문자열. 서머/윈터타임 자동 반영."""
+    h_et, m_et = _RELEASE_TIMES_ET.get(ev_type, (8, 30))
+    offset = 13 if _is_us_dst(ev_date) else 14
+    h_kst = h_et + offset
+    next_day = h_kst >= 24
+    h_kst %= 24
+    prefix = "익일" if next_day else ""
+    return f"한국 {prefix}{h_kst:02d}:{m_et:02d}"
+
+
+def _first_weekday_of(year, month, weekday):
+    """월의 첫 번째 특정 요일 (Monday=0 … Sunday=6)."""
+    d = date(year, month, 1)
+    return d + timedelta(days=(weekday - d.weekday()) % 7)
+
+
+def _first_biz_day(year, month):
+    """월의 첫 영업일."""
+    d = date(year, month, 1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def _ev(d, ev_type, label):
+    return {"date": d.isoformat(), "type": ev_type, "label": label,
+            "kst_time": _kst_release_label(ev_type, d)}
+
+
+def _generate_rule_events(start, months=8):
+    """규칙 기반 경제일정 자동 생성 (FOMC 제외)."""
+    events = []
+    for off in range(months):
+        m = start.month + off
+        y = start.year + (m - 1) // 12
+        m = (m - 1) % 12 + 1
+        events.append(_ev(_first_weekday_of(y, m, 4), "NFP", "비농업 고용"))
+        events.append(_ev(_first_biz_day(y, m), "ISM", "ISM 제조업"))
+        second_tue = _first_weekday_of(y, m, 1) + timedelta(days=7)
+        cpi_d = second_tue + timedelta(days=1)
+        events.append(_ev(cpi_d, "CPI", "CPI 소비자물가"))
+        events.append(_ev(cpi_d - timedelta(days=1), "PPI", "PPI 생산자물가"))
+        last = date(y, m, _cal.monthrange(y, m)[1])
+        while last.weekday() != 4:
+            last -= timedelta(days=1)
+        events.append(_ev(last, "PCE", "PCE 물가"))
+        retail = date(y, m, 15)
+        while retail.weekday() >= 5:
+            retail += timedelta(days=1)
+        events.append(_ev(retail, "RETAIL", "소매판매"))
+        if m in (1, 4, 7, 10):
+            gdp = date(y, m, _cal.monthrange(y, m)[1])
+            while gdp.weekday() >= 5:
+                gdp -= timedelta(days=1)
+            events.append(_ev(gdp, "GDP", "GDP 성장률"))
+    return events
+
+
+def _fetch_fomc_calendar(timeout=10.0):
+    """the-calendar.net에서 FOMC 회의일정 자동 수집 — 현재+내년."""
+    today = date.today()
+    events, seen = [], set()
+    for year in (today.year, today.year + 1):
+        try:
+            r = requests.get(
+                f"https://the-calendar.net/api/finance/fomc/{year}.json",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=timeout,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+            raw = []
+            for entry in data:
+                try:
+                    raw.append(date.fromisoformat(str(entry.get("date", ""))[:10]))
+                except (ValueError, TypeError):
+                    continue
+            raw.sort()
+            i = 0
+            while i < len(raw):
+                if i + 1 < len(raw) and (raw[i + 1] - raw[i]).days == 1:
+                    decision = raw[i + 1]
+                    i += 2
+                else:
+                    decision = raw[i]
+                    i += 1
+                if decision in seen:
+                    continue
+                seen.add(decision)
+                events.append(_ev(decision, "FOMC", "FOMC 금리결정"))
+                events.append(_ev(decision + timedelta(days=21),
+                                  "FOMC_MIN", "FOMC 의사록"))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[macro] FOMC 캘린더 수집 실패(year=%d): %s", year, e)
+    return events or None
+
+
+# ── 캘린더 캐시 ──────────────────────────────────────────────────────────
+_CAL_CACHE_KEY = "macro_calendar_v2"
+_CAL_CACHE_TTL = 604800.0   # 7일
+_mem_cal = None              # type: list | None
+_mem_cal_ts = 0.0
+
+
+def refresh_macro_calendar(conn, timeout=10.0):
+    """경제일정 자동 갱신 — FOMC 수집 + 규칙 생성 + DB 캐시."""
+    global _mem_cal, _mem_cal_ts
+    today = date.today()
+    events = _generate_rule_events(today, months=8)
+    fomc = _fetch_fomc_calendar(timeout)
+    if fomc:
+        events = [e for e in events if e["type"] not in ("FOMC", "FOMC_MIN")]
+        events.extend(fomc)
+    events.sort(key=lambda e: e.get("date", ""))
+    now = time.time()
+    try:
+        db.set_meta(conn, _CAL_CACHE_KEY,
+                    json.dumps({"at": now, "events": events}))
+    except Exception:  # noqa: BLE001
+        pass
+    _mem_cal, _mem_cal_ts = events, now
+    return events
+
+
+def get_macro_events(conn=None):
+    """캐시된 경제일정 반환. 7일 캐시, 실패 시 정적 폴백."""
+    global _mem_cal, _mem_cal_ts
+    now = time.time()
+    if _mem_cal and now - _mem_cal_ts < 86400:
+        return _mem_cal
+    if conn:
+        try:
+            raw = db.get_meta(conn, _CAL_CACHE_KEY)
+            if raw:
+                payload = json.loads(raw)
+                if now - payload.get("at", 0) <= _CAL_CACHE_TTL:
+                    _mem_cal, _mem_cal_ts = payload["events"], now
+                    return _mem_cal
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return refresh_macro_calendar(conn)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[macro] 캘린더 갱신 실패(폴백): %s", e)
+    for ev in _STATIC_EVENTS:
+        if "kst_time" not in ev:
+            try:
+                ev["kst_time"] = _kst_release_label(
+                    ev["type"], date.fromisoformat(ev["date"]))
+            except (ValueError, TypeError):
+                pass
+    return _STATIC_EVENTS
+
+
+# 정적 폴백 리스트 (자동 캘린더 전 소스 실패 시 사용)
+_STATIC_EVENTS = [
     {"date": "2026-09-16", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2026-11-04", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2026-12-16", "type": "FOMC", "label": "FOMC 금리결정"},
-    # FOMC 의사록 (금리결정 ~3주 후)
-    {"date": "2026-10-07", "type": "FOMC_MIN", "label": "FOMC 의사록"},
-    {"date": "2026-11-25", "type": "FOMC_MIN", "label": "FOMC 의사록"},
-    # CPI 소비자물가 (매월 중순)
+    {"date": "2027-01-27", "type": "FOMC", "label": "FOMC 금리결정"},
+    {"date": "2027-03-17", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2026-09-10", "type": "CPI", "label": "CPI 소비자물가"},
     {"date": "2026-10-14", "type": "CPI", "label": "CPI 소비자물가"},
     {"date": "2026-11-12", "type": "CPI", "label": "CPI 소비자물가"},
     {"date": "2026-12-10", "type": "CPI", "label": "CPI 소비자물가"},
-    # PPI 생산자물가 (CPI 전일 또는 근접)
     {"date": "2026-09-09", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2026-10-13", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2026-11-10", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2026-12-09", "type": "PPI", "label": "PPI 생산자물가"},
-    # 비농업 고용 NFP (매월 첫째 금요일)
     {"date": "2026-09-04", "type": "NFP", "label": "비농업 고용"},
     {"date": "2026-10-02", "type": "NFP", "label": "비농업 고용"},
     {"date": "2026-11-06", "type": "NFP", "label": "비농업 고용"},
     {"date": "2026-12-04", "type": "NFP", "label": "비농업 고용"},
-    # PCE 개인소비지출물가 (연준 선호 물가지표, 월말)
-    {"date": "2026-09-25", "type": "PCE", "label": "PCE 물가"},
-    {"date": "2026-10-30", "type": "PCE", "label": "PCE 물가"},
-    {"date": "2026-11-25", "type": "PCE", "label": "PCE 물가"},
-    {"date": "2026-12-23", "type": "PCE", "label": "PCE 물가"},
-    # GDP 경제성장률 (분기별, 속보/수정/확정)
-    {"date": "2026-09-30", "type": "GDP", "label": "GDP 성장률"},
-    {"date": "2026-10-29", "type": "GDP", "label": "GDP 성장률"},
-    {"date": "2026-12-22", "type": "GDP", "label": "GDP 성장률"},
-    # 소매판매 (매월 중순)
-    {"date": "2026-09-16", "type": "RETAIL", "label": "소매판매"},
-    {"date": "2026-10-16", "type": "RETAIL", "label": "소매판매"},
-    {"date": "2026-11-17", "type": "RETAIL", "label": "소매판매"},
-    {"date": "2026-12-16", "type": "RETAIL", "label": "소매판매"},
-    # ISM 제조업 (매월 첫 영업일)
-    {"date": "2026-09-01", "type": "ISM", "label": "ISM 제조업"},
-    {"date": "2026-10-01", "type": "ISM", "label": "ISM 제조업"},
-    {"date": "2026-11-02", "type": "ISM", "label": "ISM 제조업"},
-    {"date": "2026-12-01", "type": "ISM", "label": "ISM 제조업"},
-    # ── 2027 Q1 ─────────────────────────────────────────────────────
-    # FOMC 금리결정
-    {"date": "2027-01-27", "type": "FOMC", "label": "FOMC 금리결정"},
-    {"date": "2027-03-17", "type": "FOMC", "label": "FOMC 금리결정"},
-    # FOMC 의사록
-    {"date": "2027-01-06", "type": "FOMC_MIN", "label": "FOMC 의사록"},
-    {"date": "2027-02-17", "type": "FOMC_MIN", "label": "FOMC 의사록"},
-    # CPI 소비자물가
-    {"date": "2027-01-14", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2027-02-12", "type": "CPI", "label": "CPI 소비자물가"},
-    {"date": "2027-03-12", "type": "CPI", "label": "CPI 소비자물가"},
-    # PPI 생산자물가
-    {"date": "2027-01-13", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2027-02-11", "type": "PPI", "label": "PPI 생산자물가"},
-    {"date": "2027-03-11", "type": "PPI", "label": "PPI 생산자물가"},
-    # 비농업 고용
-    {"date": "2027-01-08", "type": "NFP", "label": "비농업 고용"},
-    {"date": "2027-02-05", "type": "NFP", "label": "비농업 고용"},
-    {"date": "2027-03-05", "type": "NFP", "label": "비농업 고용"},
-    # PCE 물가
-    {"date": "2027-01-29", "type": "PCE", "label": "PCE 물가"},
-    {"date": "2027-02-26", "type": "PCE", "label": "PCE 물가"},
-    {"date": "2027-03-26", "type": "PCE", "label": "PCE 물가"},
-    # GDP 성장률
-    {"date": "2027-01-28", "type": "GDP", "label": "GDP 성장률"},
-    {"date": "2027-02-25", "type": "GDP", "label": "GDP 성장률"},
-    # 소매판매
-    {"date": "2027-01-15", "type": "RETAIL", "label": "소매판매"},
-    {"date": "2027-02-17", "type": "RETAIL", "label": "소매판매"},
-    {"date": "2027-03-16", "type": "RETAIL", "label": "소매판매"},
-    # ISM 제조업
-    {"date": "2027-01-04", "type": "ISM", "label": "ISM 제조업"},
-    {"date": "2027-02-01", "type": "ISM", "label": "ISM 제조업"},
-    {"date": "2027-03-01", "type": "ISM", "label": "ISM 제조업"},
 ]
+
+# 모듈 레벨 호환 참조 — get_macro_events(conn) 사용 권장
+MACRO_EVENTS = _STATIC_EVENTS
 
 
 def get_nearby_macro_event(hours_before: int = 24,
-                           hours_after: int = 2) -> Optional[dict]:
+                           hours_after: int = 2,
+                           conn=None) -> Optional[dict]:
     """현재 시각 기준 +-N시간 내 매크로 이벤트(가장 가까운 1건).
-
-    반환: {"type": str, "label": str, "date": str, "hours_until": float}
-    또는 None (근접 이벤트 없음).
-    hours_until: 음수 = 이미 지남, 양수 = 아직 안 옴."""
-    now = datetime.now(timezone.utc)
+    이벤트 시각은 타입별 미국 동부 발표시각 + DST 반영."""
+    now_dt = datetime.now(timezone.utc)
+    events = get_macro_events(conn)
     closest = None
     min_dist = float("inf")
-
-    for ev in MACRO_EVENTS:
+    for ev in events:
         try:
-            # 이벤트 시각: 날짜 기준 UTC 13:30 (미국 동부 08:30 = 주요 발표 시각)
-            ev_dt = datetime.strptime(ev["date"], "%Y-%m-%d").replace(
-                hour=13, minute=30, tzinfo=timezone.utc)
-            diff_hours = (ev_dt - now).total_seconds() / 3600
-            if -hours_after <= diff_hours <= hours_before:
-                if abs(diff_hours) < min_dist:
-                    min_dist = abs(diff_hours)
-                    closest = {**ev, "hours_until": round(diff_hours, 1)}
+            h, m = _RELEASE_TIMES_ET.get(ev.get("type"), (8, 30))
+            ev_d = date.fromisoformat(ev["date"])
+            utc_off = -4 if _is_us_dst(ev_d) else -5
+            ev_dt = datetime(ev_d.year, ev_d.month, ev_d.day, h, m,
+                             tzinfo=timezone(timedelta(hours=utc_off)))
+            diff_h = (ev_dt - now_dt).total_seconds() / 3600
+            if -hours_after <= diff_h <= hours_before:
+                if abs(diff_h) < min_dist:
+                    min_dist = abs(diff_h)
+                    closest = {**ev, "hours_until": round(diff_h, 1)}
         except (ValueError, TypeError):  # noqa: BLE001
             continue
-
     return closest

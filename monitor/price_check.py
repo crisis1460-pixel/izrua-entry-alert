@@ -651,7 +651,7 @@ def run_once(now: float | None = None) -> dict:
                 try:
                     from monitor import macro
                     _macro_ctx["dxy"] = macro.fetch_dxy(conn, cfg_get("http_timeout_sec"))
-                    _macro_ctx["event"] = macro.get_nearby_macro_event()
+                    _macro_ctx["event"] = macro.get_nearby_macro_event(conn=conn)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[체크] 매크로 조회 실패(무시): %s", e)
                 try:
