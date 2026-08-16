@@ -72,6 +72,57 @@ def _fetch_dxy_fresh(timeout: float) -> Optional[float]:
         logger.warning("[macro] DXY 조회 실패: %s", e)
         return None
 
+# ── 미국 증시 (S&P 500 / 나스닥) ─────────────────────────────────────────
+_US_CACHE_KEY = "macro_us_indices"
+_US_CACHE_TTL_SEC = 3600.0  # 1시간 캐시
+
+
+def fetch_us_indices(conn, timeout: float = 10.0) -> Optional[dict]:
+    """미국 증시 전일 등락률. Yahoo Finance 무료 — DXY와 동일 패턴.
+    반환 {"sp500": float(%), "nasdaq": float(%)} 또는 None.
+    모닝 브리핑 전용 — 알림·필터·등급 어디에도 관여하지 않는다."""
+    try:
+        raw = db.get_meta(conn, _US_CACHE_KEY)
+        if raw:
+            payload = json.loads(raw)
+            if time.time() - payload.get("at", 0) <= _US_CACHE_TTL_SEC:
+                return payload.get("value")
+    except Exception:  # noqa: BLE001
+        pass
+
+    value = _fetch_us_indices_fresh(timeout)
+    if value is not None:
+        try:
+            db.set_meta(conn, _US_CACHE_KEY,
+                        json.dumps({"at": time.time(), "value": value}))
+        except Exception:  # noqa: BLE001
+            pass
+    return value
+
+
+def _fetch_us_indices_fresh(timeout: float) -> Optional[dict]:
+    """Yahoo Finance에서 S&P 500·나스닥 전일 등락률 조회."""
+    symbols = {"sp500": "^GSPC", "nasdaq": "^IXIC"}
+    result = {}
+    for key, ticker in symbols.items():
+        try:
+            r = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+                params={"interval": "1d", "range": "5d"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=timeout,
+            )
+            if r.status_code != 200:
+                continue
+            meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+            if price and prev and prev > 0:
+                result[key] = round((float(price) / float(prev) - 1) * 100, 2)
+        except Exception:  # noqa: BLE001
+            continue
+    return result if result else None
+
 
 # ── BTC 레짐 (200일선 ± 3일 히스테리시스) ────────────────────────────────
 # (2026-08-16 Tier2 스프린트 — research_2026-08-15_sharpening_synthesis.md #8)

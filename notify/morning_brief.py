@@ -148,7 +148,7 @@ def build_brief(conn, now: float, timeout: float) -> str:
         if dom_parts:
             lines.append("🌍 " + " · ".join(dom_parts))
 
-    # DXY (1h 캐시) + DVOL (5min 캐시) — 한 줄 합침(화면 절약)
+    # 달러지수 (1h 캐시) + BTC 변동성 (5min 캐시) — 한 줄 합침(화면 절약)
     dxy = dvol = None
     try:
         dxy = macro_mod.fetch_dxy(conn, timeout)
@@ -161,11 +161,27 @@ def build_brief(conn, now: float, timeout: float) -> str:
         logger.warning("[brief] 옵션 컨텍스트 실패: %s", e)
     macro_parts = []
     if dxy is not None:
-        macro_parts.append(f"DXY {dxy:.2f}")
+        macro_parts.append(f"달러지수 {dxy:.2f}")
     if dvol is not None:
-        macro_parts.append(f"DVOL {dvol:.0f}")
+        macro_parts.append(f"BTC변동성 {dvol:.0f}")
     if macro_parts:
         lines.append("💵 " + " · ".join(macro_parts))
+
+    # 미국 증시 전일 등락 (1h 캐시, Yahoo Finance 무료)
+    try:
+        us = macro_mod.fetch_us_indices(conn, timeout)
+        if us:
+            us_parts = []
+            sp = us.get("sp500")
+            nq = us.get("nasdaq")
+            if sp is not None:
+                us_parts.append(f"S&P500 {sp:+.2f}%")
+            if nq is not None:
+                us_parts.append(f"나스닥 {nq:+.2f}%")
+            if us_parts:
+                lines.append("🇺🇸 " + " · ".join(us_parts))
+    except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
+        logger.warning("[brief] 미국 증시 실패: %s", e)
 
     # 매크로 이벤트 7일 예고
     try:

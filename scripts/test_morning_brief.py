@@ -43,6 +43,7 @@ binance.fetch_usdt_price = lambda symbol, timeout: None
 market_sentiment.get_sentiment = lambda conn: None
 options.fetch_btc_options_context = lambda timeout=10.0: None
 macro_mod.fetch_dxy = lambda conn, timeout=10.0: None
+macro_mod.fetch_us_indices = lambda conn, timeout=10.0: None
 
 # 텔레그램 발송 목(mock) — 발송문을 기록하고 성공/실패를 전환할 수 있다
 sent_log = []
@@ -97,7 +98,22 @@ with db.connect(TEST_DB) as conn:
     text = morning_brief.build_brief(conn, AT_9, timeout=1.0)
 check("B1 전 항목 None 이어도 문자열 반환", isinstance(text, str) and len(text) > 0)
 check("B2 헤더(제목+날짜)는 항상 포함", "모닝 브리핑" in text and TODAY in text)
-check("B3 결측 행은 생략(김프/DXY 미노출)", "김프" not in text and "DXY" not in text)
+check("B3 결측 행은 생략(김프/달러지수 미노출)", "김프" not in text and "달러지수" not in text)
+
+# B3b: 데이터 있을 때 한국어 라벨 확인 + 미국 증시 행
+macro_mod.fetch_dxy = lambda conn, timeout=10.0: 103.45
+options.fetch_btc_options_context = lambda timeout=10.0: {"dvol": 52.3}
+macro_mod.fetch_us_indices = lambda conn, timeout=10.0: {"sp500": 0.87, "nasdaq": -0.34}
+with db.connect(TEST_DB) as conn:
+    text_full = morning_brief.build_brief(conn, AT_9, timeout=1.0)
+check("B3b 달러지수 라벨(DXY 아님)", "달러지수 103.45" in text_full and "DXY" not in text_full)
+check("B3c BTC변동성 라벨(DVOL 아님)", "BTC변동성 52" in text_full and "DVOL" not in text_full)
+check("B3d 미국 증시 S&P500 등락률 표시", "S&P500 +0.87%" in text_full)
+check("B3e 미국 증시 나스닥 등락률 표시", "나스닥 -0.34%" in text_full)
+# 원복 — 이후 테스트는 None 경로
+macro_mod.fetch_dxy = lambda conn, timeout=10.0: None
+options.fetch_btc_options_context = lambda timeout=10.0: None
+macro_mod.fetch_us_indices = lambda conn, timeout=10.0: None
 
 # B4: 어제 성과·대기 레벨은 로컬 DB 원천 — 데이터가 있으면 행이 나온다
 YESTERDAY = "2026-08-14"

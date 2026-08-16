@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-16 (코드 리뷰 12건 수정: 터치품질 진행중캔들 배제+백필, 멤버별 관통, 글나이 t_anchor 기준, 피드백 ref 수정, touch_grade_ver, 레짐 관측일 히스테리시스, _fetch_ohlc 캔들별 가드, TP후속 무음 승계, 사다리 진값 저장+12단 표시캡, validate_ic score전용 비교, show_status PK인덱스)  
+> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -300,7 +300,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 | 항목 | 파일 | 내용 |
 |------|------|------|
-| 모닝 브리핑 | `notify/morning_brief.py` → `scripts/run_cycle.py` | 하루 1회, KST 8~10시 창(`morning_brief_kst_hour_from/to`)에 시장환경 요약 1통 (~11줄): BTC 가격·김프·F&G·BTC.D/USDT.D·DXY/DVOL·매크로 D-day(7일 전망)·어제 터치 수·대기 레벨 수. meta `last_morning_brief_date` 게이트 — 발송 성공 시에만 날짜 마킹(실패 시 창 내 재시도). 데이터 None인 줄은 생략. 끄기: `morning_brief_enabled=False` |
+| 모닝 브리핑 | `notify/morning_brief.py` → `scripts/run_cycle.py` | 하루 1회, KST 8~10시 창(`morning_brief_kst_hour_from/to`)에 시장환경 요약 1통 (~12줄): BTC 가격·김프·F&G·BTC.D/USDT.D·달러지수/BTC변동성(한국어 라벨)·🇺🇸 S&P500·나스닥 전일 등락률(Yahoo Finance 무료 1h 캐시)·매크로 D-day(7일 전망)·어제 터치 수·대기 레벨 수. meta `last_morning_brief_date` 게이트 — 발송 성공 시에만 날짜 마킹(실패 시 창 내 재시도). 데이터 None인 줄은 생략. 끄기: `morning_brief_enabled=False` |
 | 알림 반응 피드백 (시험) | `notify/telegram.py`(버튼) + `notify/feedback_poll.py`(수거) + `storage/db.py`(`alert_feedback` 테이블) | 터치 본알림에만 👍도움됨/👎별로 인라인 버튼(`fb:<level_id>:<up\|down>`, 본문 텍스트 불변). 2분 회차마다 getUpdates 폴링(meta `feedback_update_offset`), 웹훅 불필요. 유저당 1표(재투표=갱신), UNIQUE(ref, tg_user_id). 내부 축적 전용. 끄기: `alert_feedback_enabled=False` — 버튼 미부착·폴링 중단 |
 
 ---
