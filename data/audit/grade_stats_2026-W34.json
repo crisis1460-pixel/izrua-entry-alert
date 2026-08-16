@@ -1,0 +1,1136 @@
+{
+  "_week": "2026-W34",
+  "_generated_at": 1786920495.6575222,
+  "grade_hit_rates": {
+    "A": {
+      "wins": 1,
+      "losses": 7,
+      "total": 8,
+      "hit_rate": 0.125
+    },
+    "B": {
+      "wins": 13,
+      "losses": 12,
+      "total": 25,
+      "hit_rate": 0.52
+    },
+    "C": {
+      "wins": 29,
+      "losses": 51,
+      "total": 80,
+      "hit_rate": 0.362
+    },
+    "D": {
+      "wins": 32,
+      "losses": 40,
+      "total": 72,
+      "hit_rate": 0.444
+    },
+    "S": {
+      "wins": 1,
+      "losses": 10,
+      "total": 11,
+      "hit_rate": 0.091
+    }
+  },
+  "score_bucket_hit_rates": {
+    "20-24": {
+      "wins": 1,
+      "losses": 5,
+      "total": 6,
+      "hit_rate": 0.167
+    },
+    "25-29": {
+      "wins": 3,
+      "losses": 10,
+      "total": 13,
+      "hit_rate": 0.231
+    },
+    "30-34": {
+      "wins": 1,
+      "losses": 14,
+      "total": 15,
+      "hit_rate": 0.067
+    },
+    "35-39": {
+      "wins": 27,
+      "losses": 11,
+      "total": 38,
+      "hit_rate": 0.711
+    },
+    "40-44": {
+      "wins": 8,
+      "losses": 17,
+      "total": 25,
+      "hit_rate": 0.32
+    },
+    "45-49": {
+      "wins": 14,
+      "losses": 22,
+      "total": 36,
+      "hit_rate": 0.389
+    },
+    "50-54": {
+      "wins": 7,
+      "losses": 12,
+      "total": 19,
+      "hit_rate": 0.368
+    },
+    "55-59": {
+      "wins": 12,
+      "losses": 9,
+      "total": 21,
+      "hit_rate": 0.571
+    },
+    "60-64": {
+      "wins": 1,
+      "losses": 3,
+      "total": 4,
+      "hit_rate": 0.25
+    },
+    "70-74": {
+      "wins": 0,
+      "losses": 3,
+      "total": 3,
+      "hit_rate": 0.0
+    },
+    "75-79": {
+      "wins": 1,
+      "losses": 2,
+      "total": 3,
+      "hit_rate": 0.333
+    },
+    "80-84": {
+      "wins": 0,
+      "losses": 2,
+      "total": 2,
+      "hit_rate": 0.0
+    },
+    "85-89": {
+      "wins": 0,
+      "losses": 2,
+      "total": 2,
+      "hit_rate": 0.0
+    },
+    "90-94": {
+      "wins": 0,
+      "losses": 3,
+      "total": 3,
+      "hit_rate": 0.0
+    },
+    "95-99": {
+      "wins": 1,
+      "losses": 3,
+      "total": 4,
+      "hit_rate": 0.25
+    },
+    "100-104": {
+      "wins": 0,
+      "losses": 2,
+      "total": 2,
+      "hit_rate": 0.0
+    }
+  },
+  "grade_ret_distribution": {
+    "C": {
+      "ret_24h": {
+        "n": 86,
+        "mean": -1.825,
+        "median": -1.125,
+        "stdev": 4.871
+      },
+      "ret_72h": {
+        "n": 78,
+        "mean": -2.6,
+        "median": -1.536,
+        "stdev": 5.548
+      }
+    },
+    "S": {
+      "ret_24h": {
+        "n": 11,
+        "mean": -1.813,
+        "median": -0.812,
+        "stdev": 4.072
+      },
+      "ret_72h": {
+        "n": 11,
+        "mean": -1.59,
+        "median": 0.058,
+        "stdev": 5.36
+      }
+    },
+    "D": {
+      "ret_24h": {
+        "n": 84,
+        "mean": -2.58,
+        "median": -1.031,
+        "stdev": 6.817
+      },
+      "ret_72h": {
+        "n": 79,
+        "mean": -3.068,
+        "median": -1.064,
+        "stdev": 7.62
+      }
+    },
+    "A": {
+      "ret_24h": {
+        "n": 13,
+        "mean": -1.307,
+        "median": -0.842,
+        "stdev": 4.882
+      },
+      "ret_72h": {
+        "n": 13,
+        "mean": -1.164,
+        "median": -0.414,
+        "stdev": 5.173
+      }
+    },
+    "B": {
+      "ret_24h": {
+        "n": 41,
+        "mean": 0.69,
+        "median": 0.576,
+        "stdev": 2.853
+      },
+      "ret_72h": {
+        "n": 37,
+        "mean": -0.655,
+        "median": -1.28,
+        "stdev": 3.765
+      }
+    }
+  },
+  "author_advanced": {
+    "BitmexSignalsFee": {
+      "profit_factor": 0.945,
+      "r_expectancy": -0.012,
+      "max_consec_loss": 2,
+      "monthly_consistency": null,
+      "r_track_n": 9
+    },
+    "Elephantun": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "Elite_Forex_Signals_pro": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Fibonacci_Flow": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Hamzatheinsider": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Juliia": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "KSM_Trader": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Katsumi-Nohara": {
+      "profit_factor": 0.258,
+      "r_expectancy": -0.445,
+      "max_consec_loss": 2,
+      "monthly_consistency": 0.25,
+      "r_track_n": 5
+    },
+    "Master_Hunter": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Primal_Signals": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "QilanX": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Richtv_official": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "SEER1618777": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Terminator_Crypto_Analyst": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "TradeAnalyzerPro": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Wall_Street_Levels": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "aminrahmani888": {
+      "profit_factor": 1.237,
+      "r_expectancy": 0.189,
+      "max_consec_loss": 3,
+      "monthly_consistency": 0.25,
+      "r_track_n": 5
+    },
+    "badalworld": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "celkemircan": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "coinpediamarkets": {
+      "profit_factor": 0.228,
+      "r_expectancy": -0.662,
+      "max_consec_loss": 3,
+      "monthly_consistency": 0.1,
+      "r_track_n": 7
+    },
+    "davidjulien369": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "gongroupvn": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "johwilliam756": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "kiv1n": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "mastercrypto2020": {
+      "profit_factor": 0.563,
+      "r_expectancy": -0.281,
+      "max_consec_loss": 5,
+      "monthly_consistency": 0.041,
+      "r_track_n": 33
+    },
+    "melikatrader94": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    }
+  },
+  "touch_time_analysis": {
+    "overall": {
+      "<1h": {
+        "n": 100,
+        "wins": 33,
+        "hit_rate": 0.33
+      },
+      "1-6h": {
+        "n": 18,
+        "wins": 10,
+        "hit_rate": 0.556
+      },
+      "6-24h": {
+        "n": 43,
+        "wins": 18,
+        "hit_rate": 0.419
+      },
+      "24-72h": {
+        "n": 28,
+        "wins": 14,
+        "hit_rate": 0.5
+      },
+      ">72h": {
+        "n": 7,
+        "wins": 1,
+        "hit_rate": 0.143
+      }
+    },
+    "by_grade": {
+      "C": {
+        "<1h": {
+          "n": 32,
+          "wins": 10,
+          "hit_rate": 0.312
+        },
+        "1-6h": {
+          "n": 12,
+          "wins": 6,
+          "hit_rate": 0.5
+        },
+        "6-24h": {
+          "n": 28,
+          "wins": 10,
+          "hit_rate": 0.357
+        },
+        "24-72h": {
+          "n": 6,
+          "wins": 3,
+          "hit_rate": 0.5
+        },
+        ">72h": {
+          "n": 2,
+          "wins": 0,
+          "hit_rate": 0.0
+        }
+      },
+      "S": {
+        "<1h": {
+          "n": 4,
+          "wins": 1,
+          "hit_rate": 0.25
+        },
+        "6-24h": {
+          "n": 3,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        "24-72h": {
+          "n": 2,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        ">72h": {
+          "n": 2,
+          "wins": 0,
+          "hit_rate": 0.0
+        }
+      },
+      "D": {
+        "<1h": {
+          "n": 50,
+          "wins": 19,
+          "hit_rate": 0.38
+        },
+        "1-6h": {
+          "n": 1,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        "6-24h": {
+          "n": 5,
+          "wins": 5,
+          "hit_rate": 1.0
+        },
+        "24-72h": {
+          "n": 14,
+          "wins": 7,
+          "hit_rate": 0.5
+        },
+        ">72h": {
+          "n": 2,
+          "wins": 1,
+          "hit_rate": 0.5
+        }
+      },
+      "A": {
+        "<1h": {
+          "n": 4,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        "1-6h": {
+          "n": 1,
+          "wins": 1,
+          "hit_rate": 1.0
+        },
+        "6-24h": {
+          "n": 2,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        "24-72h": {
+          "n": 1,
+          "wins": 0,
+          "hit_rate": 0.0
+        }
+      },
+      "B": {
+        "<1h": {
+          "n": 10,
+          "wins": 3,
+          "hit_rate": 0.3
+        },
+        "1-6h": {
+          "n": 4,
+          "wins": 3,
+          "hit_rate": 0.75
+        },
+        "6-24h": {
+          "n": 5,
+          "wins": 3,
+          "hit_rate": 0.6
+        },
+        "24-72h": {
+          "n": 5,
+          "wins": 4,
+          "hit_rate": 0.8
+        },
+        ">72h": {
+          "n": 1,
+          "wins": 0,
+          "hit_rate": 0.0
+        }
+      }
+    }
+  },
+  "signal_quality": {
+    "ic": {
+      "ic": 0.1909,
+      "n": 179
+    },
+    "icir": {
+      "icir": 1.839,
+      "mean_ic": 0.1837,
+      "std_ic": 0.0999,
+      "weeks": 4
+    },
+    "weekly_ics": {
+      "2026-W30": 0.1717,
+      "2026-W31": 0.1697,
+      "2026-W32": 0.3176,
+      "2026-W33": 0.0757
+    }
+  },
+  "author_deletion_rates": [
+    {
+      "author": "QilanX",
+      "total": 5,
+      "checked": 2,
+      "deleted": 1,
+      "rate": 0.2
+    },
+    {
+      "author": "CryptoAnalystSignal",
+      "total": 86,
+      "checked": 26,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "mastercrypto2020",
+      "total": 71,
+      "checked": 19,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "BitmexSignalsFee",
+      "total": 14,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "coinpediamarkets",
+      "total": 14,
+      "checked": 7,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "aminrahmani888",
+      "total": 12,
+      "checked": 1,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "kiv1n",
+      "total": 9,
+      "checked": 5,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Katsumi-Nohara",
+      "total": 8,
+      "checked": 4,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Richtv_official",
+      "total": 8,
+      "checked": 2,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "DomicChaina",
+      "total": 7,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "MasterAnanda",
+      "total": 7,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Wall_Street_Levels",
+      "total": 7,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "BigBeluga",
+      "total": 6,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "SEER1618777",
+      "total": 6,
+      "checked": 3,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "quantlinesystems",
+      "total": 6,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Fibonacci_Flow",
+      "total": 5,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Master_Hunter",
+      "total": 5,
+      "checked": 2,
+      "deleted": 0,
+      "rate": 0.0
+    }
+  ],
+  "misses": {
+    "total": 40,
+    "class_counts": {
+      "즉시반전": 11,
+      "판정불가": 29
+    },
+    "signals": [
+      {
+        "coin": "HBAR",
+        "author": "Terminator_Crypto_Analyst",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 38,
+        "mfe_pct": 0.0,
+        "mae_pct": -0.5423380602926597,
+        "time_to_fail_h": 0.4,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "ALGO",
+        "author": "Primal_Signals",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": 0.0,
+        "mae_pct": 0.0,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": "중립|",
+        "position_verdict": "주의|역배열·일43",
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "DOT",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": 0.0,
+        "mae_pct": 0.0,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": "중립|",
+        "position_verdict": "우호|장기바닥·주27",
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "DOGE",
+        "author": "davidjulien369",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 45.0,
+        "mfe_pct": 0.03349959056057086,
+        "mae_pct": -0.06764651620441306,
+        "time_to_fail_h": 0.6,
+        "supply_verdict": "주의|",
+        "position_verdict": "주의|하락세·RSI42",
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "ZAMA",
+        "author": "readCrypto",
+        "outcome": "timeboxed_loss",
+        "grade": "C",
+        "score": 42.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -10.793289110708848,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": "중립|",
+        "position_verdict": "중립|눌림목·일47",
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "INJ",
+        "author": "mastercrypto2020",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 40.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -5.240710742128172,
+        "time_to_fail_h": 68.3,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "APT",
+        "author": "Terminator_Crypto_Analyst",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 30.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -1.8779314618652503,
+        "time_to_fail_h": 4.9,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "UNI",
+        "author": "Richtv_official",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 50.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -2.7047610988290187,
+        "time_to_fail_h": 0.5,
+        "supply_verdict": "중립|투매 진행",
+        "position_verdict": "우호|상승세·4h급락",
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "UNI",
+        "author": "Terminator_Crypto_Analyst",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 40.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -1.9615082011864429,
+        "time_to_fail_h": 6.7,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "BTC",
+        "author": "gongroupvn",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 38.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -0.9122365523749442,
+        "time_to_fail_h": 3.5,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "APT",
+        "author": "mastercrypto2020",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 42.0,
+        "mfe_pct": 0.0,
+        "mae_pct": -3.33785057630049,
+        "time_to_fail_h": 6.5,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "DOT",
+        "author": "BitmexSignalsFee",
+        "outcome": "timeboxed_loss",
+        "grade": "C",
+        "score": 42.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "INJ",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "SHIB",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "ETC",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "BTC",
+        "author": "Lingrid",
+        "outcome": "timeboxed_loss",
+        "grade": "C",
+        "score": 53.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "ENA",
+        "author": "mastercrypto2020",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 31.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "CHZ",
+        "author": "Richtv_official",
+        "outcome": "miss",
+        "grade": "B",
+        "score": 58.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 17.9,
+        "supply_verdict": "우호|숏 과열",
+        "position_verdict": "주의|역배열·일28",
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "XRP",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "AVAX",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 56.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "BTC",
+        "author": "johwilliam756",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 38.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 20.9,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "ETH",
+        "author": "Master_Hunter",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 49.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 24.7,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "BTC",
+        "author": "Elite_Forex_Signals_pro",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 38.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 134.3,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "ICP",
+        "author": "coinpediamarkets",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 42.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 0.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "DOT",
+        "author": "mastercrypto2020",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 32.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 125.4,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "NEAR",
+        "author": "mastercrypto2020",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 44.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 22.9,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "WLD",
+        "author": "mastercrypto2020",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 34.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 0.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "BTC",
+        "author": "aminrahmani888",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 38.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 0.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "DOGE",
+        "author": "Wall_Street_Levels",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 28.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      },
+      {
+        "coin": "ONDO",
+        "author": "CryptoAnalystSignal",
+        "outcome": "timeboxed_loss",
+        "grade": "B",
+        "score": 63.0,
+        "mfe_pct": null,
+        "mae_pct": null,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": null,
+        "failure_class": "판정불가"
+      }
+    ]
+  },
+  "post_age_stats": {
+    "<24h": {
+      "n": 122,
+      "wins": 53,
+      "win_rate": 0.43
+    },
+    "24-72h": {
+      "n": 37,
+      "wins": 10,
+      "win_rate": 0.27
+    },
+    "72-120h": {
+      "n": 17,
+      "wins": 9,
+      "win_rate": 0.53
+    },
+    "120h+": {
+      "n": 20,
+      "wins": 4,
+      "win_rate": 0.2
+    }
+  }
+}
