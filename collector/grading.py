@@ -275,6 +275,26 @@ def calculate_grade(
     return grade_from_score(score), score, rr
 
 
+def calculate_grade_with_breakdown(
+    followers, direction, entry, stop_loss, target, current_usd_price,
+    author_closed_n=None, author_closed_hits=None, tp_ladder_count=None,
+) -> tuple:
+    """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
+    bd = score_breakdown(followers, direction, entry, stop_loss, target,
+                         current_usd_price, author_closed_n, author_closed_hits,
+                         tp_ladder_count=tp_ladder_count)
+    score = float(sum(bd.values()))
+    rr = None
+    if entry and stop_loss and target:
+        if direction == "long":
+            risk, reward = entry - stop_loss, target - entry
+        else:
+            risk, reward = stop_loss - entry, entry - target
+        if risk > 0 and reward > 0:
+            rr = reward / risk
+    return grade_from_score(score), score, rr, bd
+
+
 def meets_min_grade(grade: str, min_grade: str) -> bool:
     try:
         return GRADE_ORDER.index(grade) <= GRADE_ORDER.index(min_grade)

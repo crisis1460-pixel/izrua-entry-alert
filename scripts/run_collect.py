@@ -29,7 +29,7 @@ except Exception:
 
 from collector import coingecko, telegram_source, tradingview, watcher_stats
 from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
-from collector.grading import calculate_grade, score_breakdown
+from collector.grading import calculate_grade_with_breakdown
 from config import settings
 from notify import telegram
 from storage import db
@@ -244,17 +244,11 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         # 작성자 실적 가점 (2026-08-01 S10 v3 안2) — 자기 DB 종결 실적을 채점 직전
         # 조회해 전달. 콜드스타트(n<5)는 grading 쪽 게이트가 0점(중립) 처리.
         closed_n, closed_hits = db.author_closed_stats(conn, idea.get("author"))
-        grade, score, rr = calculate_grade(
+        grade, score, rr, bd = calculate_grade_with_breakdown(
             followers, setup["direction"], setup["entry"],
             setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
             author_closed_n=closed_n, author_closed_hits=closed_hits,
             tp_ladder_count=setup.get("tp_ladder_count"),  # 2026-08-15 v5 사다리 감점
-        )
-        bd = score_breakdown(
-            followers, setup["direction"], setup["entry"],
-            setup.get("sl"), setup.get("tp"), coin.get("price_usd"),
-            author_closed_n=closed_n, author_closed_hits=closed_hits,
-            tp_ladder_count=setup.get("tp_ladder_count"),  # 〃 (분해 저장 동기화)
         )
         tf_hours = parse_timeframe_hours(text)
         level = {

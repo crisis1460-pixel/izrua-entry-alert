@@ -36,6 +36,17 @@ def fetch_prices(markets: list, timeout: float) -> dict:
         resp.raise_for_status()
         return {t["market"]: float(t["trade_price"]) for t in resp.json()}
     except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 429:
+            logger.warning("[upbit] 현재가 429 — 1초 대기 후 재시도")
+            time.sleep(1.0)
+            try:
+                resp2 = requests.get(
+                    f"{_BASE}/ticker", params={"markets": ",".join(markets)}, timeout=timeout)
+                resp2.raise_for_status()
+                return {t["market"]: float(t["trade_price"]) for t in resp2.json()}
+            except Exception as e2:  # noqa: BLE001
+                logger.warning("[upbit] 현재가 429 재시도 실패: %s", e2)
+            return {}
         if e.response is not None and e.response.status_code in (400, 404):
             logger.warning(
                 "[upbit] 현재가 배치 HTTP %s - 상폐 종목 의심, 개별 재시도(%d마켓)",

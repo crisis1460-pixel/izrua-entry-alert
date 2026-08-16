@@ -502,6 +502,8 @@ def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[flo
                 logger.warning("[binance] cvd %s %s HTTP %s", base, pair, r.status_code)
                 continue
             candles = r.json()
+            if not isinstance(candles, list):
+                continue
             total = sum(float(c[5]) for c in candles)
             if total <= 0:
                 return None

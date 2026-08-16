@@ -1161,17 +1161,20 @@ def _backfill_volume_watch_urls(conn) -> int:
         return 0
     filled = 0
     for r in rows:
-        urls = conn.execute(
-            "SELECT DISTINCT post_url FROM levels "
-            "WHERE coin_symbol=? AND post_url IS NOT NULL AND direction='long'",
-            (r["coin_symbol"],),
-        ).fetchall()
-        url_list = sorted(u["post_url"] for u in urls)
-        if url_list:
-            conn.execute(
-                "UPDATE volume_watch SET post_urls=? WHERE ticker=?",
-                (json.dumps(url_list), r["ticker"]))
-            filled += 1
+        try:
+            urls = conn.execute(
+                "SELECT DISTINCT post_url FROM levels "
+                "WHERE coin_symbol=? AND post_url IS NOT NULL AND direction='long'",
+                (r["coin_symbol"],),
+            ).fetchall()
+            url_list = sorted(u["post_url"] for u in urls)
+            if url_list:
+                conn.execute(
+                    "UPDATE volume_watch SET post_urls=? WHERE ticker=?",
+                    (json.dumps(url_list), r["ticker"]))
+                filled += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[마이그레이션] volume_watch URL 소급 실패(%s): %s", r["ticker"], e)
     if filled:
         logger.info("[마이그레이션] volume_watch post_urls 소급 %d건", filled)
     return filled
@@ -1194,15 +1197,20 @@ def _backfill_outcome_chain(conn) -> int:
     if not rows:
         return 0
     prev = _get_chain_tip(conn)
+    linked = 0
     for r in rows:
-        h = _compute_outcome_hash(prev, r["id"], r["outcome"], r["resolved_at"] or 0.0,
-                                  r["r_multiple"], bool(r["ambiguous"]))
-        conn.execute(
-            "UPDATE levels SET outcome_prev_hash=?, outcome_hash=? WHERE id=?",
-            (prev, h, r["id"]))
-        prev = h
+        try:
+            h = _compute_outcome_hash(prev, r["id"], r["outcome"], r["resolved_at"] or 0.0,
+                                      r["r_multiple"], bool(r["ambiguous"]))
+            conn.execute(
+                "UPDATE levels SET outcome_prev_hash=?, outcome_hash=? WHERE id=?",
+                (prev, h, r["id"]))
+            prev = h
+            linked += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[마이그레이션] 체인 소급 실패(id=%s): %s", r["id"], e)
     _set_chain_tip(conn, prev)
-    return len(rows)
+    return linked
 
 
 def verify_outcome_chain(conn) -> Optional[dict]:

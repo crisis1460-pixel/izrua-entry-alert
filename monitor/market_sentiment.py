@@ -115,16 +115,20 @@ def _fetch_fresh(timeout: float) -> dict:
 
 def get_sentiment(conn) -> Optional[dict]:
     """1시간 캐시된 시장 심리 지표. conn 은 levels DB (meta 테이블 캐시용)."""
+    stale = None
     try:
         raw = db.get_meta(conn, _CACHE_KEY)
         if raw:
             payload = json.loads(raw)
+            stale = payload.get("data")
             if time.time() - payload.get("at", 0) <= _CACHE_TTL_SEC:
-                return payload.get("data")
+                return stale
     except Exception:  # noqa: BLE001 - 캐시 문제는 무시하고 새로 조회
         pass
 
     data = _fetch_fresh(settings.get("http_timeout_sec"))
+    if data is None:
+        return stale  # API 실패 시 구버전 반환 (None보다 낫다)
     try:
         db.set_meta(conn, _CACHE_KEY, json.dumps({"at": time.time(), "data": data}))
     except Exception:  # noqa: BLE001

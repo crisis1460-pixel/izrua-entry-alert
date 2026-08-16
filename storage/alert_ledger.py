@@ -58,7 +58,7 @@ def append(db_path: str, coin_symbol: str, kind: str, level_ids: Iterable,
     try:
         with open(ledger_path(db_path), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
-    except OSError as e:
+    except Exception as e:  # noqa: BLE001 - docstring "예외 올리지 않는다" 보장
         logger.warning("[원장] 발송 기록 실패(무시): %s", e)
 
 
@@ -147,8 +147,11 @@ def merge_files(*paths: str, out_path: str, keep_sec: float = 7 * 86400,
     # 2026-07-28 수리: 임시파일에 쓰고 os.replace 로 원자 교체 — 프로세스 중단 시
     # 반쪽 잘린 원장이 남아 최근 발송 기록이 유실되는 것 방지.
     tmp = out_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        for _t, line in rows:
-            fh.write(line + "\n")
-    os.replace(tmp, out_path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for _t, line in rows:
+                fh.write(line + "\n")
+        os.replace(tmp, out_path)
+    except OSError as e:
+        logger.warning("[원장] 병합 쓰기 실패(무시): %s", e)
     return len(rows)

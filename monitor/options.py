@@ -120,7 +120,7 @@ def _fetch_dvol(timeout: float) -> Optional[float]:
             logger.warning("[options] DVOL HTTP %s", r.status_code)
             return None
         data = r.json().get("result", {}).get("data", [])
-        if data:
+        if data and len(data[-1]) > 4:
             return data[-1][4]  # index 4 = close
         return None
     except Exception as e:  # noqa: BLE001
