@@ -220,31 +220,93 @@ def get_btc_regime(conn, timeout: float = 10.0,
 
 
 # ── 매크로 이벤트 캘린더 ─────────────────────────────────────────────────
+# 미국 주요 경제지표 — 대부분 미국 동부 08:30(한국시간 21:30 여름/22:30 겨울)
+# 발표 직후 코인 시장 변동성 급등. 정적 리스트 — 수동 갱신(분기 1회).
 MACRO_EVENTS = [
-    # 2026 FOMC
+    # ── 2026 Q3~Q4 ──────────────────────────────────────────────────
+    # FOMC 금리결정 (연 8회)
     {"date": "2026-09-16", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2026-11-04", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2026-12-16", "type": "FOMC", "label": "FOMC 금리결정"},
-    # 2026 CPI
-    {"date": "2026-09-10", "type": "CPI", "label": "CPI 발표"},
-    {"date": "2026-10-14", "type": "CPI", "label": "CPI 발표"},
-    {"date": "2026-11-12", "type": "CPI", "label": "CPI 발표"},
-    {"date": "2026-12-10", "type": "CPI", "label": "CPI 발표"},
-    # 2027 Q1 FOMC
+    # FOMC 의사록 (금리결정 ~3주 후)
+    {"date": "2026-10-07", "type": "FOMC_MIN", "label": "FOMC 의사록"},
+    {"date": "2026-11-25", "type": "FOMC_MIN", "label": "FOMC 의사록"},
+    # CPI 소비자물가 (매월 중순)
+    {"date": "2026-09-10", "type": "CPI", "label": "CPI 소비자물가"},
+    {"date": "2026-10-14", "type": "CPI", "label": "CPI 소비자물가"},
+    {"date": "2026-11-12", "type": "CPI", "label": "CPI 소비자물가"},
+    {"date": "2026-12-10", "type": "CPI", "label": "CPI 소비자물가"},
+    # PPI 생산자물가 (CPI 전일 또는 근접)
+    {"date": "2026-09-09", "type": "PPI", "label": "PPI 생산자물가"},
+    {"date": "2026-10-13", "type": "PPI", "label": "PPI 생산자물가"},
+    {"date": "2026-11-10", "type": "PPI", "label": "PPI 생산자물가"},
+    {"date": "2026-12-09", "type": "PPI", "label": "PPI 생산자물가"},
+    # 비농업 고용 NFP (매월 첫째 금요일)
+    {"date": "2026-09-04", "type": "NFP", "label": "비농업 고용"},
+    {"date": "2026-10-02", "type": "NFP", "label": "비농업 고용"},
+    {"date": "2026-11-06", "type": "NFP", "label": "비농업 고용"},
+    {"date": "2026-12-04", "type": "NFP", "label": "비농업 고용"},
+    # PCE 개인소비지출물가 (연준 선호 물가지표, 월말)
+    {"date": "2026-09-25", "type": "PCE", "label": "PCE 물가"},
+    {"date": "2026-10-30", "type": "PCE", "label": "PCE 물가"},
+    {"date": "2026-11-25", "type": "PCE", "label": "PCE 물가"},
+    {"date": "2026-12-23", "type": "PCE", "label": "PCE 물가"},
+    # GDP 경제성장률 (분기별, 속보/수정/확정)
+    {"date": "2026-09-30", "type": "GDP", "label": "GDP 성장률"},
+    {"date": "2026-10-29", "type": "GDP", "label": "GDP 성장률"},
+    {"date": "2026-12-22", "type": "GDP", "label": "GDP 성장률"},
+    # 소매판매 (매월 중순)
+    {"date": "2026-09-16", "type": "RETAIL", "label": "소매판매"},
+    {"date": "2026-10-16", "type": "RETAIL", "label": "소매판매"},
+    {"date": "2026-11-17", "type": "RETAIL", "label": "소매판매"},
+    {"date": "2026-12-16", "type": "RETAIL", "label": "소매판매"},
+    # ISM 제조업 (매월 첫 영업일)
+    {"date": "2026-09-01", "type": "ISM", "label": "ISM 제조업"},
+    {"date": "2026-10-01", "type": "ISM", "label": "ISM 제조업"},
+    {"date": "2026-11-02", "type": "ISM", "label": "ISM 제조업"},
+    {"date": "2026-12-01", "type": "ISM", "label": "ISM 제조업"},
+    # ── 2027 Q1 ─────────────────────────────────────────────────────
+    # FOMC 금리결정
     {"date": "2027-01-27", "type": "FOMC", "label": "FOMC 금리결정"},
     {"date": "2027-03-17", "type": "FOMC", "label": "FOMC 금리결정"},
-    # 2027 Q1 CPI
-    {"date": "2027-01-14", "type": "CPI", "label": "CPI 발표"},
-    {"date": "2027-02-12", "type": "CPI", "label": "CPI 발표"},
-    {"date": "2027-03-12", "type": "CPI", "label": "CPI 발표"},
+    # FOMC 의사록
+    {"date": "2027-01-06", "type": "FOMC_MIN", "label": "FOMC 의사록"},
+    {"date": "2027-02-17", "type": "FOMC_MIN", "label": "FOMC 의사록"},
+    # CPI 소비자물가
+    {"date": "2027-01-14", "type": "CPI", "label": "CPI 소비자물가"},
+    {"date": "2027-02-12", "type": "CPI", "label": "CPI 소비자물가"},
+    {"date": "2027-03-12", "type": "CPI", "label": "CPI 소비자물가"},
+    # PPI 생산자물가
+    {"date": "2027-01-13", "type": "PPI", "label": "PPI 생산자물가"},
+    {"date": "2027-02-11", "type": "PPI", "label": "PPI 생산자물가"},
+    {"date": "2027-03-11", "type": "PPI", "label": "PPI 생산자물가"},
+    # 비농업 고용
+    {"date": "2027-01-08", "type": "NFP", "label": "비농업 고용"},
+    {"date": "2027-02-05", "type": "NFP", "label": "비농업 고용"},
+    {"date": "2027-03-05", "type": "NFP", "label": "비농업 고용"},
+    # PCE 물가
+    {"date": "2027-01-29", "type": "PCE", "label": "PCE 물가"},
+    {"date": "2027-02-26", "type": "PCE", "label": "PCE 물가"},
+    {"date": "2027-03-26", "type": "PCE", "label": "PCE 물가"},
+    # GDP 성장률
+    {"date": "2027-01-28", "type": "GDP", "label": "GDP 성장률"},
+    {"date": "2027-02-25", "type": "GDP", "label": "GDP 성장률"},
+    # 소매판매
+    {"date": "2027-01-15", "type": "RETAIL", "label": "소매판매"},
+    {"date": "2027-02-17", "type": "RETAIL", "label": "소매판매"},
+    {"date": "2027-03-16", "type": "RETAIL", "label": "소매판매"},
+    # ISM 제조업
+    {"date": "2027-01-04", "type": "ISM", "label": "ISM 제조업"},
+    {"date": "2027-02-01", "type": "ISM", "label": "ISM 제조업"},
+    {"date": "2027-03-01", "type": "ISM", "label": "ISM 제조업"},
 ]
 
 
 def get_nearby_macro_event(hours_before: int = 24,
                            hours_after: int = 2) -> Optional[dict]:
-    """현재 시각 기준 +-N시간 내 매크로 이벤트.
+    """현재 시각 기준 +-N시간 내 매크로 이벤트(가장 가까운 1건).
 
-    반환: {"type": "FOMC"|"CPI", "label": str, "date": str, "hours_until": float}
+    반환: {"type": str, "label": str, "date": str, "hours_until": float}
     또는 None (근접 이벤트 없음).
     hours_until: 음수 = 이미 지남, 양수 = 아직 안 옴."""
     now = datetime.now(timezone.utc)

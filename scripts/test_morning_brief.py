@@ -121,6 +121,16 @@ macro_mod.fetch_dxy = lambda conn, timeout=10.0: None
 options.fetch_btc_options_context = lambda timeout=10.0: None
 macro_mod.fetch_us_indices = lambda conn, timeout=10.0: None
 
+# B3h: 매크로 이벤트 복수 표시 — 7일 내 이벤트 전부 나온다
+# 2026-09-08 기준: 09-09 PPI(D-1), 09-10 CPI(D-2), 09-04 NFP(지남), 09-01 ISM(지남)
+#                  → D-1, D-2 두 건이 날짜순으로
+AT_SEP8 = datetime(2026, 9, 8, 9, 0, tzinfo=KST).timestamp()
+with db.connect(TEST_DB) as conn:
+    text_ev = morning_brief.build_brief(conn, AT_SEP8, timeout=1.0)
+check("B3h PPI D-1 표시", "PPI 생산자물가 D-1" in text_ev)
+check("B3i CPI D-2 표시", "CPI 소비자물가 D-2" in text_ev)
+check("B3j 이벤트가 1개가 아닌 복수", text_ev.count("📅") >= 2)
+
 # B4: 어제 성과·대기 레벨은 로컬 DB 원천 — 데이터가 있으면 행이 나온다
 YESTERDAY = "2026-08-14"
 with db.connect(TEST_DB) as conn:

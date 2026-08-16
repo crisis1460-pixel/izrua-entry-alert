@@ -85,24 +85,23 @@ def _btc_block(timeout: float) -> tuple:
     return btc_krw, kimchi
 
 
-def _macro_event_line(now: float):
-    """향후 7일 내 FOMC/CPI 예고 한 줄("📅 CPI 발표 D-2") 또는 None."""
+def _macro_event_lines(now: float) -> list:
+    """향후 7일 내 매크로 이벤트 전부 — 날짜순 리스트("📅 CPI 소비자물가 D-2")."""
     from monitor import macro
 
     today = datetime.fromtimestamp(now, KST).date()
-    best = None
+    upcoming = []
     for ev in macro.MACRO_EVENTS:
         try:
             ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
         except (ValueError, TypeError):
             continue
         d = (ev_date - today).days
-        if 0 <= d <= _MACRO_LOOKAHEAD_DAYS and (best is None or d < best[0]):
-            best = (d, ev)
-    if best is None:
-        return None
-    d, ev = best
-    return f"📅 {ev['label']} {'D-DAY' if d == 0 else f'D-{d}'}"
+        if 0 <= d <= _MACRO_LOOKAHEAD_DAYS:
+            tag = "D-DAY" if d == 0 else f"D-{d}"
+            upcoming.append((d, f"📅 {ev['label']} {tag}"))
+    upcoming.sort(key=lambda x: x[0])
+    return [line for _, line in upcoming]
 
 
 # ── 렌더링 ──────────────────────────────────────────────────────────
@@ -175,11 +174,11 @@ def build_brief(conn, now: float, timeout: float) -> str:
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 미국 증시 실패: %s", e)
 
-    # 매크로 이벤트 7일 예고
+    # 매크로 이벤트 7일 예고 (전부 표시)
     try:
-        ev_line = _macro_event_line(now)
-        if ev_line:
-            lines.append(ev_line)
+        ev_lines = _macro_event_lines(now)
+        if ev_lines:
+            lines.extend(ev_lines)
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 매크로 이벤트 실패: %s", e)
 
