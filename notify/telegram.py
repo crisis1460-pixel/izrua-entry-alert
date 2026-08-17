@@ -548,19 +548,20 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         lines.append(f"    거래:  {volume_rank}위")
 
     # ── 52주 고저 + 현재 위치 바 (워쳐 notifier.py 표기 그대로, 2026-07-23 #9) ──
+    # 2026-08-17 UX: (1) 타점 블록 직후 빈줄 제거 (52주 바로 붙임), (2) 저가↔바
+    # 사이 빈줄 → _SEP 로 승격해 다른 블록 간 구분선과 시각적 일관성.
     if week52 and current_krw:
         high52, low52 = week52
         if high52 and low52 and high52 > 0 and low52 > 0:
             from_high = (current_krw - high52) / high52 * 100
             from_low = (current_krw - low52) / low52 * 100
-            lines.append("")
             lines.append("52주")
             lines.append(f"    고가  {from_high:+.1f}% ({_fmt_krw(high52)}원)")
             lines.append(f"    저가  {from_low:+.1f}% ({_fmt_krw(low52)}원)")
             if high52 > low52:
                 pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
                 filled = max(0, min(10, round(pos / 10)))
-                lines.append("")
+                lines.append(_SEP)
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
