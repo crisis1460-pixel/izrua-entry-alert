@@ -160,6 +160,26 @@ def tp_distance_points(direction: str, entry: Optional[float], target: Optional[
     return 0.0
 
 
+def _dex_points(buy_ratio_24h: Optional[float],
+                liquidity_usd: Optional[float]) -> float:
+    """DEX Screener 온체인 시그널 가감점 (2026-08-17).
+
+    buy_ratio_24h (0~1, buys/(buys+sells)): 24h 매수/매도 tx 비율.
+      >=0.65 매수 우위 +2, <=0.35 매도 우위 -2, 나머지 0.
+    liquidity_usd: DEX 전 페어 합산 유동성.
+      <100k$ 저유동 -3 (러그·이탈 위험), 그 외 0. 100k$ 이상은 감점 없음.
+    매핑 없는 네이티브 코인(XRP/ADA/BTC)이나 소형 알트(값 None) → 0 (무해)."""
+    pts = 0.0
+    if buy_ratio_24h is not None:
+        if buy_ratio_24h >= 0.65:
+            pts += 2
+        elif buy_ratio_24h <= 0.35:
+            pts -= 2
+    if liquidity_usd is not None and liquidity_usd < 100_000:
+        pts -= 3
+    return pts
+
+
 def _regime_points(adx14: Optional[float], bb_width_pctile: Optional[float]) -> float:
     """F3 (2026-08-17) — 시장 국면 가감점.
 
@@ -195,6 +215,8 @@ def score_breakdown(
     tp_ladder_count: Optional[int] = None,
     adx14: Optional[float] = None,
     bb_width_pctile: Optional[float] = None,
+    dex_buy_ratio: Optional[float] = None,
+    dex_liquidity_usd: Optional[float] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
@@ -265,6 +287,9 @@ def score_breakdown(
     # 시장 국면 (2026-08-17 F3) — ADX 추세강도 + BB Width 압축·팽창
     bd["regime"] = _regime_points(adx14, bb_width_pctile)
 
+    # DEX 온체인 시그널 (2026-08-17) — 매수/매도 tx 비율 + 저유동성 경고
+    bd["dex"] = _dex_points(dex_buy_ratio, dex_liquidity_usd)
+
     return bd
 
 
@@ -280,6 +305,8 @@ def calculate_grade(
     tp_ladder_count: Optional[int] = None,
     adx14: Optional[float] = None,
     bb_width_pctile: Optional[float] = None,
+    dex_buy_ratio: Optional[float] = None,
+    dex_liquidity_usd: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
@@ -294,7 +321,9 @@ def calculate_grade(
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
                          current_usd_price, author_closed_n, author_closed_hits,
                          tp_ladder_count=tp_ladder_count,
-                         adx14=adx14, bb_width_pctile=bb_width_pctile)
+                         adx14=adx14, bb_width_pctile=bb_width_pctile,
+                         dex_buy_ratio=dex_buy_ratio,
+                         dex_liquidity_usd=dex_liquidity_usd)
     score = float(sum(bd.values()))
 
     rr = None
@@ -313,12 +342,15 @@ def calculate_grade_with_breakdown(
     followers, direction, entry, stop_loss, target, current_usd_price,
     author_closed_n=None, author_closed_hits=None, tp_ladder_count=None,
     adx14=None, bb_width_pctile=None,
+    dex_buy_ratio=None, dex_liquidity_usd=None,
 ) -> tuple:
     """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
                          current_usd_price, author_closed_n, author_closed_hits,
                          tp_ladder_count=tp_ladder_count,
-                         adx14=adx14, bb_width_pctile=bb_width_pctile)
+                         adx14=adx14, bb_width_pctile=bb_width_pctile,
+                         dex_buy_ratio=dex_buy_ratio,
+                         dex_liquidity_usd=dex_liquidity_usd)
     score = float(sum(bd.values()))
     rr = None
     if entry and stop_loss and target:
@@ -343,6 +375,8 @@ def regrade_current(
     current_usd_price: Optional[float],
     adx14: Optional[float] = None,
     bb_width_pctile: Optional[float] = None,
+    dex_buy_ratio: Optional[float] = None,
+    dex_liquidity_usd: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
 
@@ -373,4 +407,6 @@ def regrade_current(
         tp_ladder_count=level.get("tp_ladder_count"),
         adx14=adx14,
         bb_width_pctile=bb_width_pctile,
+        dex_buy_ratio=dex_buy_ratio,
+        dex_liquidity_usd=dex_liquidity_usd,
     )

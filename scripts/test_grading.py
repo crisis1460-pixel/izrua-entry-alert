@@ -390,6 +390,31 @@ check("F3c 조합·regrade·breakdown — ADX+BB 합산 +5, 'regime' 키 격리"
              _base_r + 5)
       and eq(regrade_current(_lv_r, 100.0)[1], _base_r))  # 미전달 = 0 (구 산식)
 
+# DEX Screener 등급 반영 (2026-08-17) — _dex_points: buy_ratio ≥0.65 +2 /
+# ≤0.35 -2 / liquidity <100k$ -3 (각 독립, 없으면 0)
+check("DEX1 buy_ratio 매수 우위(+2) / 매도 우위(-2) / 중립(0)",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, dex_buy_ratio=0.70)[1], _base_r + 2)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, dex_buy_ratio=0.30)[1], _base_r - 2)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, dex_buy_ratio=0.50)[1], _base_r))
+check("DEX2 저유동성 <100k$ -3 / 100k$+ 0",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, dex_liquidity_usd=50_000)[1], _base_r - 3)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, dex_liquidity_usd=500_000)[1], _base_r))
+# 조합 + breakdown 'dex' 키 격리 + regrade 전파
+_bd_dex = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                          tp_ladder_count=3, dex_buy_ratio=0.70,
+                          dex_liquidity_usd=50_000)
+check("DEX3 조합·regrade·breakdown — buy_ratio +2 + 저유동 -3 = -1, 'dex' 키 격리",
+      _bd_dex["dex"] == -1.0
+      and eq(sum(_bd_dex.values()), _base_r - 1)
+      and eq(regrade_current(_lv_r, 100.0, dex_buy_ratio=0.70,
+                             dex_liquidity_usd=50_000)[1], _base_r - 1)
+      and eq(regrade_current(_lv_r, 100.0)[1], _base_r))  # 미전달 = 0
+
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

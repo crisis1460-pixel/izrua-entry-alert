@@ -540,6 +540,82 @@ _bin._coingecko_binance_funding_map = _orig_cg_map
 _restore()
 
 
+# ─── DEX Screener + 매핑 (2026-08-17) ────────────────────────────────
+# monitor/dexscreener.py 응답 집계 + upbit_dex_mapping.py 캐시 로직 +
+# telegram.render_alert dex_stats 배지 3종. 실 API 콜 없음.
+
+from monitor import dexscreener as _dex
+from monitor import upbit_dex_mapping as _dxmap
+
+_orig_dex_get = _dex.requests.get
+_orig_dxmap_get = _dxmap.requests.get
+
+
+class _RD:
+    def __init__(self, status, body):
+        self.status_code = status; self._body = body
+    def json(self): return self._body
+
+
+# DX1: 정상 응답 집계 (2 페어 유동성/볼륨/tx 합산 + buy_ratio 계산)
+_dex.requests.get = lambda *a, **k: _RD(200, {"pairs": [
+    {"chainId": "ethereum", "liquidity": {"usd": 1_000_000},
+     "volume": {"h24": 500_000},
+     "txns": {"h24": {"buys": 130, "sells": 70}}},
+    {"chainId": "bsc", "liquidity": {"usd": 500_000},
+     "volume": {"h24": 200_000},
+     "txns": {"h24": {"buys": 60, "sells": 40}}},
+]})
+_r = _dex.fetch_token_stats("0xabc")
+check("DX1 페어 합산 유동성", _r["liquidity_usd"] == 1_500_000)
+check("DX1b 페어 합산 24h 볼륨", _r["volume_24h_usd"] == 700_000)
+check("DX1c buy_ratio 정확도(3자리 반올림)",
+      abs(_r["buy_ratio_24h"] - 0.633) < 0.001)
+check("DX1d top_chain 선정", _r["top_chain"] == "ethereum")
+
+# DX2: pairs 비어있으면 None
+_dex.requests.get = lambda *a, **k: _RD(200, {"pairs": []})
+check("DX2 페어 없음 → None", _dex.fetch_token_stats("0xabc") is None)
+
+# DX3: HTTP 오류 → None
+_dex.requests.get = lambda *a, **k: _RD(429, {})
+check("DX3 HTTP 429 → None", _dex.fetch_token_stats("0xabc") is None)
+
+_dex.requests.get = _orig_dex_get
+
+# DX4: telegram.render_alert 배지 3종 (저유동/매수/매도 임계)
+from notify import telegram as _tg
+_base_cluster = [{"entry_usd": 100.0, "score": 50, "grade": "B", "author": "x",
+                  "author_followers": 1000, "tp_usd": 110, "direction": "long"}]
+_base_rep = _base_cluster[0]
+# 저유동
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       dex_stats={"liquidity_usd": 50_000, "buy_ratio_24h": 0.5})
+check("DX4 저유동성 <100k$ 배지 표시",
+      "DEX 유동성 낮음" in _txt and "50k$" in _txt)
+# 매수 우위
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.70})
+check("DX4b 매수 우위 ≥65% 배지 표시",
+      "DEX 매수 우위" in _txt and "70%" in _txt)
+# 매도 우위
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.30})
+check("DX4c 매도 우위 (buy_ratio ≤35%) 배지 표시",
+      "DEX 매도 우위" in _txt and "70%" in _txt)  # (1-0.30)*100 = 70
+# 중립 = 배지 없음
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.50})
+check("DX4d 중립(매수 우위 미달·유동성 충분) → DEX 배지 없음",
+      "DEX 매수 우위" not in _txt and "DEX 매도 우위" not in _txt
+      and "DEX 유동성" not in _txt)
+# dex_stats=None → 배지 미표시
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       dex_stats=None)
+check("DX4e dex_stats=None → 배지 미표시(매핑 없는 코인 자연 처리)",
+      "DEX" not in _txt)
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

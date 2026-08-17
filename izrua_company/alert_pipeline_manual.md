@@ -382,6 +382,25 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 **첫 실호출 검증(2026-08-17)**: VIX 14.63, 10Y 4.63% 정상 조회.
 
+## DEX Screener 통합 (2026-08-17)
+
+| 항목 | 데이터 | 반영 위치 |
+|------|--------|-----------|
+| **DEX Screener 헬퍼** | `fetch_token_stats(token_addr)` — 무료·무키·300 req/min. 페어 전체 집계(유동성/24h볼륨/buys·sells/buy_ratio/top_chain) | `monitor/dexscreener.py` (신설) |
+| **Upbit→DEX 매핑** | CoinGecko `/coins/{id}` platforms → 첫 non-null 컨트랙트 주소. 24h 파일 캐시(성공)/7일(실패) | `monitor/upbit_dex_mapping.py` (신설), `data/upbit_dex_addr_cache.json` |
+| **터치 시점 조회** | 발송 확정 터치에만 1콜(예고·억제는 미조회 — 콜 예산). 매핑 없는 네이티브(XRP/ADA/BTC)·매핑 실패 → `_snap_dex=None` 자연 스킵 | `monitor/price_check.py` |
+| **알림 배지 3종** | 저유동성 <100k$ (`💧 DEX 유동성 낮음 Nk$`), 매수 우위 ≥65% (`🟢 DEX 매수 우위 N%`), 매도 우위 ≤35% (`🔴 DEX 매도 우위 N%`) | `notify/telegram.py` (render_alert `dex_stats` kwarg) |
+| **등급 반영** | `_dex_points(buy_ratio, liquidity)` — 매수 우위 +2 / 매도 우위 -2 / 저유동 -3 (독립 가감). breakdown 키 `dex`, sum(values)에 포함 | `collector/grading.py` (score_breakdown/calculate_grade/calculate_grade_with_breakdown/regrade_current) |
+| **DB 섀도 컬럼** | `touch_dex_liquidity_usd` / `touch_dex_volume_24h_usd` / `touch_dex_buy_ratio` 3개 (기록 전용, IS NULL 가드) | `storage/db.py` (`_OUTCOME_COLUMNS` + `record_touch_snapshot` kwargs) |
+
+**필터 안정성**: 발송 확정 후 rep 재채점(F3/DEX 통합)에만 반영 → 필터(min_grade) 통과 여부는 종전 등급 유지. 관찰 기간 알림 발송량 안정.
+
+**콜 예산**: 알림당 최대 2콜 (CoinGecko 매핑 첫회 + DexScreener). 매핑은 24h 캐시라 사실상 하루 1회. 발송당 실질 1콜 → 15/일 (DexScreener 300 req/min 대비 여유).
+
+**함정·현실**: (1) 순수 KR/JP 알트(WEMIX/XPLA 등 platforms 빈값)는 매핑 실패로 배지·등급 반영 없음(형평성 이슈 없음, 그냥 데이터 없음). (2) 소형 알트 노이즈 방지 위해 유동성 임계 100k$ 하한. (3) DEX 페어 유동성은 CEX·업비트 KRW 시장과 무관 — buy_ratio는 온체인 트레이더 판단만 반영.
+
+**회귀 테스트**: infra 11건(dex/mapping/render_alert 배지) + grading 3건(_dex_points/breakdown/regrade). infra 90건·grading 70건 통과.
+
 ## Coinalyze 파생 폴백 (2026-08-17)
 
 | 항목 | 데이터 | 반영 위치 |

@@ -457,7 +457,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  rep: dict = None, funding_rate: float = None,
                  funding_regime_flip: dict = None, supply: tuple = None,
                  position: tuple = None, kimchi_delta: float = None,
-                 adx14: float = None) -> str:
+                 adx14: float = None, dex_stats: dict = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -573,6 +573,21 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # BB Width 압축·팽창은 등급에만 반영, 알림 표기 없음(같은 사용자 결정).
     if adx14 is not None and adx14 >= 25:
         lines.append(f"📈 추세장 (ADX {adx14:.0f})")
+
+    # DEX 온체인 배지 (2026-08-17) — 저유동/매수·매도 우위만 노출(관성 지표 무표기).
+    # 매핑 없는 네이티브 코인(XRP/ADA/BTC 등) 또는 매핑 실패 시 dex_stats=None
+    # → 배지 미표시(형평성 이슈 없음). 임계는 등급 산식 _dex_points 와 동일:
+    # 유동성 <100k$ 저유동 경고, buy_ratio ≥0.65 매수 우위, ≤0.35 매도 우위.
+    if dex_stats:
+        _liq = dex_stats.get("liquidity_usd")
+        _bratio = dex_stats.get("buy_ratio_24h")
+        if _liq is not None and _liq < 100_000:
+            lines.append(f"💧 DEX 유동성 낮음 ({_liq/1000:.0f}k$)")
+        if _bratio is not None:
+            if _bratio >= 0.65:
+                lines.append(f"🟢 DEX 매수 우위 ({_bratio*100:.0f}%)")
+            elif _bratio <= 0.35:
+                lines.append(f"🔴 DEX 매도 우위 ({(1-_bratio)*100:.0f}%)")
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는
