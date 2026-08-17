@@ -99,7 +99,12 @@ SETTINGS = {
     # 늘릴 때는 반드시 '사후 게시(retro-post)' 검사를 통과시킬 것 — 신호 게시 후
     # 수 초~수십 초 만에 "TP1 hit"을 붙이는 사기 채널이 실사에서 3곳 나왔다.
     "telegram_source_enabled": True,
-    "telegram_source_channels": ["BitmexSignalsFee"],
+    # 2026-08-17 사용자 결정: 채널 2개 추가 (기존 1 → 3).
+    # · cryptosignals0rg — 양방향(long/short), R/R 명시, 손실 정직, Upbit ~50%
+    # · wolfoftrading — Upbit 겹침 ~80%(INJ/ETH/MANA/BTC), 밀도 낮음(주 1~2건)
+    # 둘 다 retro-post 검증 PASS. 예상 증가: cryptosignals0rg 0.5~1/일 +
+    # wolfoftrading 주 0~1건. 관찰 후 실측 채택 여부 재판단.
+    "telegram_source_channels": ["BitmexSignalsFee", "cryptosignals0rg", "wolfoftrading"],
     "telegram_source_sleep_sec": 5.0,    # 채널당 요청 간격. 비공식 경로라 TradingView
                                           # 페이싱(5.0)보다 느슨하게 가지 않는다.
     "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
