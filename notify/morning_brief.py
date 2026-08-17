@@ -196,6 +196,22 @@ def build_brief(conn, now: float, timeout: float) -> str:
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 옵션 컨텍스트 실패: %s", e)
 
+    # VIX (S&P 500 변동성 지수, FRED 무료) — 시장 공포 벤치마크
+    try:
+        vix = macro_mod.fetch_vix(conn, timeout)
+        if vix is not None:
+            lines.append(f"😱 VIX {vix:.1f}")
+    except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
+        logger.warning("[brief] VIX 실패: %s", e)
+
+    # 미 10년 국채 수익률 (FRED 무료) — 위험자산 밸류에이션 벤치마크
+    try:
+        y10 = macro_mod.fetch_ust_10y(conn, timeout)
+        if y10 is not None:
+            lines.append(f"🏦 미10년물 {y10:.2f}%")
+    except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
+        logger.warning("[brief] 10Y 국채 실패: %s", e)
+
     # 미국 증시 전일 등락 (1h 캐시, Yahoo Finance 무료)
     try:
         us = macro_mod.fetch_us_indices(conn, timeout)

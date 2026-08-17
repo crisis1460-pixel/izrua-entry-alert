@@ -369,6 +369,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 **필터 안정성**: F3 재채점은 발송 확정 후 rep 표시 등급에만 적용, 필터(min_grade) 통과 여부는 종전 등급 유지 → 관찰 기간(v5 08-16 배포) 알림 발송량 안정.
 
+## FRED 매크로 통합 (2026-08-17)
+
+| 항목 | 데이터 | 반영 위치 |
+|------|--------|-----------|
+| **FRED 공용 헬퍼** | `_fetch_fred_latest(series_id)` / `_fetch_fred_series(series_id, limit)` — 무료·이메일 가입만 (120 req/min·무제한 일), 키는 `.env` FRED_API_KEY | `monitor/macro.py` |
+| **US 지수 폴백** | Yahoo 우선 → 결측분만 FRED `SP500`/`NASDAQCOM` 최근 2개 종가 비율로 재계산 | `_fetch_us_indices_fresh()` |
+| **VIX 신규** | FRED `VIXCLS` (S&P 500 변동성) — 시장 공포 벤치마크. 1h DB 캐시 | `fetch_vix()`, 모닝 브리핑 (😱 VIX N) |
+| **10년 국채 신규** | FRED `DGS10` — 위험자산 밸류에이션 벤치마크. 1h DB 캐시 | `fetch_ust_10y()`, 모닝 브리핑 (🏦 미10년물 N%) |
+
+**결측 안전**: 키 미설정·API 실패 시 조용히 None → 해당 브리핑 행만 생략(종전 규칙 유지). 알림/등급 산식 무영향.
+
+**첫 실호출 검증(2026-08-17)**: VIX 14.63, 10Y 4.63% 정상 조회.
+
 ## 10라운드 전수검토 2차 수정 이력 (2026-08-17)
 
 | 심각도 | 버그 | 위치 | 수정 |

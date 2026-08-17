@@ -44,6 +44,8 @@ market_sentiment.get_sentiment = lambda conn: None
 options.fetch_btc_options_context = lambda timeout=10.0: None
 macro_mod.fetch_dxy = lambda conn, timeout=10.0: None
 macro_mod.fetch_us_indices = lambda conn, timeout=10.0: None
+macro_mod.fetch_vix = lambda conn, timeout=10.0: None
+macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: None
 
 # 텔레그램 발송 목(mock) — 발송문을 기록하고 성공/실패를 전환할 수 있다
 sent_log = []
@@ -111,6 +113,21 @@ check("B3b 달러지수 단독 줄(DXY 아님)", "달러지수 103.45" in text_f
 check("B3c BTC변동성 단독 줄(DVOL 아님)", "BTC변동성 52" in text_full and "DVOL" not in text_full)
 check("B3d S&P500 단독 줄", "S&P500 +0.87%" in text_full)
 check("B3e 나스닥 단독 줄", "나스닥 -0.34%" in text_full)
+
+# FRED VIX / 10Y 국채 (2026-08-17) — 데이터 있을 때 표시, 결측이면 생략
+macro_mod.fetch_vix = lambda conn, timeout=10.0: 18.4
+macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: 4.23
+with db.connect(TEST_DB) as conn:
+    text_fred = morning_brief.build_brief(conn, AT_9, timeout=1.0)
+check("B3m VIX 단독 줄", "VIX 18.4" in text_fred)
+check("B3n 미10년물 단독 줄", "미10년물 4.23%" in text_fred)
+# 결측 시 행 생략
+macro_mod.fetch_vix = lambda conn, timeout=10.0: None
+macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: None
+with db.connect(TEST_DB) as conn:
+    text_no_fred = morning_brief.build_brief(conn, AT_9, timeout=1.0)
+check("B3o VIX None 이면 행 생략", "VIX" not in text_no_fred)
+check("B3p 10년물 None 이면 행 생략", "미10년물" not in text_no_fred)
 # 한 줄에 두 항목이 섞이지 않는다 (· 합침 금지)
 for ln in text_full.split("\n"):
     if "달러지수" in ln:

@@ -19,6 +19,7 @@ from typing import Optional
 
 import requests
 
+from config import settings
 from storage import db
 from utils.time_kst import day_kst
 
@@ -26,6 +27,68 @@ logger = logging.getLogger("alert.macro")
 
 _DXY_CACHE_KEY = "macro_dxy"
 _DXY_CACHE_TTL_SEC = 3600.0  # 1시간 캐시 — DXY는 느리게 변함
+
+
+# ── FRED (St. Louis Fed) 공용 헬퍼 ──────────────────────────────────────
+# 무료·이메일 가입만·무제한(120 req/min). Yahoo 스크래핑이 429/구조변경으로
+# 실패할 때의 안정 폴백. 키는 .env 의 FRED_API_KEY (settings.secret 로 로드).
+# 단일 시계열의 최신 관측값(가장 최근 non-null)만 반환하는 얇은 래퍼.
+def _fetch_fred_latest(series_id: str, timeout: float = 10.0):
+    """FRED 시계열의 최신 non-null 관측값. 실패/미설정 시 None.
+    키 미설정도 예외가 아니라 조용히 None — 폴백 경로에서 안전하게 무시된다."""
+    key = settings.secret("FRED_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": key, "file_type": "json",
+                    "sort_order": "desc", "limit": 5},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            logger.warning("[macro] FRED %s HTTP %s", series_id, r.status_code)
+            return None
+        obs = r.json().get("observations", [])
+        for o in obs:  # 최신순 정렬로 왔으니 첫 non-null
+            v = o.get("value", ".")
+            if v and v != ".":
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    continue
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[macro] FRED %s 조회 실패: %s", series_id, e)
+        return None
+
+
+def _fetch_fred_series(series_id: str, timeout: float = 10.0, limit: int = 5):
+    """FRED 시계열의 최근 N개 (float, 최신순). 폴백 계산(전일 대비 등)용."""
+    key = settings.secret("FRED_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": key, "file_type": "json",
+                    "sort_order": "desc", "limit": limit},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None
+        vals = []
+        for o in r.json().get("observations", []):
+            v = o.get("value", ".")
+            if v and v != ".":
+                try:
+                    vals.append(float(v))
+                except (ValueError, TypeError):
+                    continue
+        return vals if vals else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[macro] FRED %s 시계열 조회 실패: %s", series_id, e)
+        return None
 
 
 # ── DXY (달러 인덱스) ────────────────────────────────────────────────────
@@ -103,10 +166,13 @@ def fetch_us_indices(conn, timeout: float = 10.0) -> Optional[dict]:
 
 
 def _fetch_us_indices_fresh(timeout: float) -> Optional[dict]:
-    """Yahoo Finance에서 S&P 500·나스닥 전일 등락률 조회."""
-    symbols = {"sp500": "^GSPC", "nasdaq": "^IXIC"}
+    """미국 증시 전일 등락률. Yahoo 우선(실시간 근사) → FRED 폴백(전일 종가).
+    Yahoo 는 429/구조변경으로 조용히 실패할 수 있어 FRED(FRED_API_KEY, 무료·무제한)
+    에서 SP500/NASDAQCOM 최근 2개 종가 비율로 등락률을 재계산해 결측을 메운다."""
+    yahoo_symbols = {"sp500": "^GSPC", "nasdaq": "^IXIC"}
+    fred_symbols = {"sp500": "SP500", "nasdaq": "NASDAQCOM"}
     result = {}
-    for key, ticker in symbols.items():
+    for key, ticker in yahoo_symbols.items():
         try:
             r = requests.get(
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
@@ -123,7 +189,68 @@ def _fetch_us_indices_fresh(timeout: float) -> Optional[dict]:
                 result[key] = round((float(price) / float(prev) - 1) * 100, 2)
         except Exception:  # noqa: BLE001
             continue
+    # Yahoo 결측분만 FRED 로 보강 — 이미 값이 있으면 실시간성이 더 신선하다
+    for key, series in fred_symbols.items():
+        if key in result:
+            continue
+        vals = _fetch_fred_series(series, timeout, limit=3)
+        if vals and len(vals) >= 2 and vals[1] > 0:
+            result[key] = round((vals[0] / vals[1] - 1) * 100, 2)
     return result if result else None
+
+
+# ── VIX (변동성 지수) — FRED VIXCLS ─────────────────────────────────
+_VIX_CACHE_KEY = "macro_vix"
+_VIX_CACHE_TTL_SEC = 3600.0
+
+
+def fetch_vix(conn, timeout: float = 10.0) -> Optional[float]:
+    """VIX(S&P 500 변동성 지수) 최신값. 1시간 DB 캐시.
+    FRED VIXCLS(무료·무제한) — 시장 공포 지표. 20 미만 저변동, 30+ 고공포."""
+    try:
+        raw = db.get_meta(conn, _VIX_CACHE_KEY)
+        if raw:
+            payload = json.loads(raw)
+            if time.time() - payload.get("at", 0) <= _VIX_CACHE_TTL_SEC:
+                return payload.get("value")
+    except Exception:  # noqa: BLE001
+        pass
+    value = _fetch_fred_latest("VIXCLS", timeout)
+    if value is not None:
+        value = round(float(value), 2)
+        try:
+            db.set_meta(conn, _VIX_CACHE_KEY,
+                        json.dumps({"at": time.time(), "value": value}))
+        except Exception:  # noqa: BLE001
+            pass
+    return value
+
+
+# ── 10년 국채 수익률 — FRED DGS10 ───────────────────────────────────
+_UST10Y_CACHE_KEY = "macro_ust10y"
+_UST10Y_CACHE_TTL_SEC = 3600.0
+
+
+def fetch_ust_10y(conn, timeout: float = 10.0) -> Optional[float]:
+    """미 10년 국채 수익률(%). 1시간 DB 캐시.
+    FRED DGS10(무료·무제한) — 위험자산 밸류에이션 벤치마크. 4%+ 부담, 3% 이하 완화."""
+    try:
+        raw = db.get_meta(conn, _UST10Y_CACHE_KEY)
+        if raw:
+            payload = json.loads(raw)
+            if time.time() - payload.get("at", 0) <= _UST10Y_CACHE_TTL_SEC:
+                return payload.get("value")
+    except Exception:  # noqa: BLE001
+        pass
+    value = _fetch_fred_latest("DGS10", timeout)
+    if value is not None:
+        value = round(float(value), 2)
+        try:
+            db.set_meta(conn, _UST10Y_CACHE_KEY,
+                        json.dumps({"at": time.time(), "value": value}))
+        except Exception:  # noqa: BLE001
+            pass
+    return value
 
 
 # ── BTC 레짐 (200일선 ± 3일 히스테리시스) ────────────────────────────────
