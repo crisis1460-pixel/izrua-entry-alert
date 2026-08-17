@@ -179,11 +179,18 @@ def build_brief(conn, now: float, timeout: float) -> str:
             else:
                 lines.append(f"💵 스테이블 {stable}B")
 
-    # 달러지수 (1h 캐시)
+    # 달러지수 (1h 캐시) — 강달러=위험자산 이탈, 약달러=위험자산 유리
+    # 임계 100/105 는 최근 5년 분포 중앙~상위 근처(DXY 기준).
     try:
         dxy = macro_mod.fetch_dxy(conn, timeout)
         if dxy is not None:
-            lines.append(f"💵 달러지수 {dxy:.2f}")
+            if dxy <= 100:
+                dxy_tag = "매수 유리"
+            elif dxy >= 105:
+                dxy_tag = "매수 부담"
+            else:
+                dxy_tag = "중립"
+            lines.append(f"💵 달러지수 {dxy:.2f} ({dxy_tag})")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] DXY 실패: %s", e)
 
@@ -196,17 +203,25 @@ def build_brief(conn, now: float, timeout: float) -> str:
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 옵션 컨텍스트 실패: %s", e)
 
-    # VIX (S&P 500 변동성 지수, FRED 무료) — 시장 공포 벤치마크
+    # VIX (S&P 500 변동성 지수, FRED 무료) — 저=평온·위험자산 유리, 고=공포
+    # 임계 20/30 은 VIX 업계 관례(20 미만 저변동, 30 이상 고공포).
     try:
         vix = macro_mod.fetch_vix(conn, timeout)
         if vix is not None:
-            lines.append(f"😱 VIX {vix:.1f}")
+            if vix < 20:
+                vix_tag = "매수 유리"
+            elif vix >= 30:
+                vix_tag = "매수 부담"
+            else:
+                vix_tag = "중립"
+            lines.append(f"😱 VIX {vix:.1f} ({vix_tag})")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] VIX 실패: %s", e)
 
     # 미 10년 국채 수익률 (FRED 무료) — 위험자산 밸류에이션 벤치마크
     # 라벨은 코인 관점 관례: 금리 낮으면 위험자산 유리, 높으면 안전자산 대체수단
     # 매력↑ → 코인 매수세 약화. 임계 3.5%/4.5%는 최근 5년 분포 중앙~상위 근처.
+    # 라벨 "미국채 10Y"는 좁은 화면(모바일 32자 폭) 줄바꿈 회피용 압축 표기.
     try:
         y10 = macro_mod.fetch_ust_10y(conn, timeout)
         if y10 is not None:
@@ -216,7 +231,7 @@ def build_brief(conn, now: float, timeout: float) -> str:
                 y10_tag = "매수 부담"
             else:
                 y10_tag = "중립"
-            lines.append(f"🏦 미국 10년 국채금리 {y10:.2f}% ({y10_tag})")
+            lines.append(f"🏦 미국채 10Y {y10:.2f}% ({y10_tag})")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 10Y 국채 실패: %s", e)
 

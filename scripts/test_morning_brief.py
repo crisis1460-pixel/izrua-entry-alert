@@ -109,7 +109,8 @@ options.fetch_btc_options_context = lambda timeout=10.0: {"dvol": 52.3}
 macro_mod.fetch_us_indices = lambda conn, timeout=10.0: {"sp500": 0.87, "nasdaq": -0.34}
 with db.connect(TEST_DB) as conn:
     text_full = morning_brief.build_brief(conn, AT_9, timeout=1.0)
-check("B3b 달러지수 단독 줄(DXY 아님)", "달러지수 103.45" in text_full and "DXY" not in text_full)
+check("B3b 달러지수 단독 줄(DXY 아님, 매수영향 라벨)",
+      "달러지수 103.45 (중립)" in text_full and "DXY" not in text_full)
 check("B3c BTC변동성 단독 줄(DVOL 아님)", "BTC변동성 52" in text_full and "DVOL" not in text_full)
 check("B3d S&P500 단독 줄", "S&P500 +0.87%" in text_full)
 check("B3e 나스닥 단독 줄", "나스닥 -0.34%" in text_full)
@@ -119,15 +120,15 @@ macro_mod.fetch_vix = lambda conn, timeout=10.0: 18.4
 macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: 4.23
 with db.connect(TEST_DB) as conn:
     text_fred = morning_brief.build_brief(conn, AT_9, timeout=1.0)
-check("B3m VIX 단독 줄", "VIX 18.4" in text_fred)
-check("B3n 미국 10년 국채금리 단독 줄", "미국 10년 국채금리 4.23% (중립)" in text_fred)
+check("B3m VIX 단독 줄(매수영향 라벨)", "VIX 18.4 (매수 유리)" in text_fred)
+check("B3n 미국채 10Y 단독 줄(매수영향 라벨)", "미국채 10Y 4.23% (중립)" in text_fred)
 # 결측 시 행 생략
 macro_mod.fetch_vix = lambda conn, timeout=10.0: None
 macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: None
 with db.connect(TEST_DB) as conn:
     text_no_fred = morning_brief.build_brief(conn, AT_9, timeout=1.0)
 check("B3o VIX None 이면 행 생략", "VIX" not in text_no_fred)
-check("B3p 10년물 None 이면 행 생략", "미국 10년 국채금리" not in text_no_fred)
+check("B3p 10Y None 이면 행 생략", "미국채 10Y" not in text_no_fred)
 # 한 줄에 두 항목이 섞이지 않는다 (· 합침 금지)
 for ln in text_full.split("\n"):
     if "달러지수" in ln:
