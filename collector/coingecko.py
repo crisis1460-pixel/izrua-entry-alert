@@ -321,8 +321,18 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
 
 
 def build_universe(force: bool = False) -> list:
-    """top-N ∩ 업비트 KRW. 캐시가 신선하면 그대로 반환.
-    반환 항목: {symbol, ticker, rank, name, price_usd, tier_icon}"""
+    """업비트 KRW 전체 종목 스캔 + CoinGecko 메타 병합 (2026-08-17 사용자 결정).
+
+    이전 방식: CoinGecko top-N ∩ Upbit KRW → LSK/VELODROME 등 시총 300위+ 는
+    후보 자체에서 제외돼 신규 채널(BitcoinBullets 등) 파싱 매칭율 저하.
+    새 방식: **Upbit KRW 전체 마켓이 곧 유니버스** (250~300종). CoinGecko top-N
+    은 rank/tier_icon 메타 부여 용도로만 활용 — 매칭 실패(top-N 밖)는
+    rank=None, tier_icon='·'(플레인) 로 편입.
+
+    반환 항목: {symbol, ticker, rank, name, price_usd, tier_icon}
+      · rank 는 CoinGecko 시총 순위 (top-N 밖 코인은 None)
+      · tier_icon 은 시총 등급 아이콘 ('💎🥇🥈🥉·')
+      · CoinGecko 매칭 실패 코인은 price_usd=None (터치 판정에 무영향)"""
     cache_path = settings.get("universe_cache_path")
     max_age = settings.get("universe_refresh_hours") * 3600
     timeout = settings.get("http_timeout_sec")
@@ -336,31 +346,44 @@ def build_universe(force: bool = False) -> list:
         top = fetch_top_coins(settings.get("universe_top_n"), timeout)
         krw = fetch_upbit_krw_symbols(timeout)
     except (requests.RequestException, KeyError, TypeError, ValueError):
-        # 2026-07-26 수리: 신선 캐시가 없어도(24h 지남/force) 완전 실패보다는 낡은
-        # 유니버스가 낫다 - 수집 스킵보다 폐기된 코인 몇 개 섞이는 편이 안전.
-        # 캐시조차 없으면(첫 실행) 원래 예외를 그대로 전파해 호출부가 이번 회차를
-        # 스킵하게 한다(run_collect.py 책임).
-        # 2026-07-28 수리: CoinGecko 레이트리밋 시 200+{"status":{...}} 에러바디를
-        # 주면 raise_for_status 는 통과하고 data[:top_n] 에서 KeyError — 이 케이스가
-        # RequestException 이 아니라 캐시 폴백을 건너뛰고 회차 전체를 스킵했다.
         stale = _load_cache_any_age(cache_path)
         if stale is not None:
             logger.warning("[cg] 유니버스 갱신 실패 - 만료된 캐시로 폴백(%d개)", len(stale))
             return stale
         raise
 
+    # CoinGecko top 결과를 symbol → meta 로 인덱싱 (Upbit 스캔 후 조회)
+    cg_meta = {c["symbol"]: c for c in top if c["symbol"] not in STABLECOINS}
+
+    # Upbit KRW 전체 마켓이 유니버스의 기반. 스테이블코인은 제외.
     universe = []
-    for c in top:
-        if c["symbol"] in STABLECOINS:
+    for sym in sorted(krw):
+        if sym in STABLECOINS:
             continue
-        if c["symbol"] in krw:
+        meta = cg_meta.get(sym)
+        if meta:
             universe.append({
-                "symbol": c["symbol"],
-                "ticker": f"KRW-{c['symbol']}",
-                "rank": c["rank"],
-                "name": c["name"],
-                "price_usd": c["price_usd"],
-                "tier_icon": c["tier_icon"],
+                "symbol": sym,
+                "ticker": f"KRW-{sym}",
+                "rank": meta["rank"],
+                "name": meta["name"],
+                "price_usd": meta["price_usd"],
+                "tier_icon": meta["tier_icon"],
+                "total_volume": meta.get("total_volume"),
+                "market_cap": meta.get("market_cap"),
+            })
+        else:
+            # CoinGecko top-N 밖 — LSK/VELODROME 등 소형 알트. rank·price·tier
+            # 는 미상이지만 알림 파이프라인(터치 판정·심볼 매칭) 은 정상 동작.
+            universe.append({
+                "symbol": sym,
+                "ticker": f"KRW-{sym}",
+                "rank": None,
+                "name": sym,
+                "price_usd": None,
+                "tier_icon": "·",
+                "total_volume": None,
+                "market_cap": None,
             })
 
     # 품질 필터는 fail-open(2026-08-11 검토 BUG3): 필터 내부의 예상 밖 예외가
