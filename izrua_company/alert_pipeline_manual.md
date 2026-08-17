@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-17 (전수 리뷰 버그 수정 11건)  
+> 마지막 업데이트: 2026-08-17 (뉴스 한글 번역 Papago 통합)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -411,6 +411,18 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 - options.py/liquidation.py: 스테일 캐시 최대 수명 1시간 상한 추가 (무기한 반환 방지)
 - run_cycle._check_audit_dump_stale: 무음 except → logger.debug 추가
 - test_price_logic T27: alert_min_grade C→D 설정 변경 정합 (settings override/restore)
+
+## 뉴스 한글 번역 (2026-08-17)
+
+| 항목 | 설명 |
+|------|------|
+| **번역 모듈** | `notify/translator.py` — Google Translate (비공식) 메인 + MyMemory 폴백 + 원문 유지 (3중 안전) |
+| **Google Translate** | 비공식 gtx 엔드포인트, 키 불필요, Gemini NMT 품질, 저볼륨 차단 리스크 없음 |
+| **MyMemory 폴백** | 키 불필요 5,000자/일, Google 실패 시 자동 전환 |
+| **설정** | `news_translate_enabled: True` (config/settings.py). API 키 불필요 |
+| **통합 위치** | `news_brief.maybe_send_news_brief()` → `_summary()` 후 `translate_en_ko()` 호출 → `render_news_brief()` |
+| **캐시** | 인메모리 24h TTL (동일 원문 재번역 방지) |
+| **장애 안전** | 번역 전 경로 실패 시 원문 영어 그대로 발송 (알림 누락 없음) |
 
 ## FRED 매크로 통합 (2026-08-17)
 

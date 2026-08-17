@@ -21,6 +21,7 @@ from typing import Optional
 
 from config import settings
 from notify import telegram
+from notify.translator import translate_en_ko
 from storage import db
 from utils.time_kst import day_kst
 
@@ -139,6 +140,11 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
         return "skipped"
 
     summary = _summary(text)
+    if settings.get("news_translate_enabled"):
+        try:
+            summary = translate_en_ko(summary, timeout=settings.get("http_timeout_sec"))
+        except Exception as e:
+            logger.warning("[news] %s 번역 실패(원문 유지): %s", symbol, e)
     url = post.get("url") or ""
     try:
         text_out = telegram.render_news_brief(symbol, channel, summary, url)

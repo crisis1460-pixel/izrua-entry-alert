@@ -123,6 +123,7 @@ SETTINGS = {
     "news_alert_max_per_channel_per_day": 3,# 채널당 하루 상한
     "news_alert_coin_cooldown_hours": 24,   # 코인당 재발송 최소 간격
     "news_alert_min_length": 60,            # 원문 60자 미만은 노이즈로 스킵
+    "news_translate_enabled": True,          # 뉴스 요약 한글 번역 (Papago→MyMemory 폴백→원문)
 
     # 알림 트리거
     "preview_band_pct": 1.0,             # entry 대비 이 % 이내 접근 시 예고
