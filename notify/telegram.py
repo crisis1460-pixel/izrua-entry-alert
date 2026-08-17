@@ -159,7 +159,7 @@ def _source_line(post_urls) -> str:
     return line
 
 # ── 발송 레이트리밋 (2026-08-13) ────────────────────────────────────
-_SEND_MIN_INTERVAL_SEC = 1.0
+_SEND_MIN_INTERVAL_SEC = 1.5
 _last_send_at = 0.0
 
 # ── 재시도 정책 상수 (2026-07-26 수리) ──────────────────────────────
@@ -271,9 +271,9 @@ def send(text: str, urgency: Literal["high", "low"] = "high",
             # message_id 파싱 실패 시에도 발송은 성공했으므로 truthy 값 반환 (>0 보장 위해 -1 회피)
             try:
                 mid = resp.json().get("result", {}).get("message_id")
-                return int(mid) if mid else 1
+                return int(mid) if mid else -1
             except (ValueError, TypeError, KeyError):
-                return 1
+                return -1
 
         if resp.status_code == 429 and retry < _RETRY_MAX:
             wait = _retry_after_sec(resp)

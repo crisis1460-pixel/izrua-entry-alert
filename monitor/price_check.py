@@ -22,7 +22,7 @@ from typing import Optional
 
 from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
 from config import settings
-from monitor import announcements, upbit
+from monitor import announcements, binance, upbit
 from notify import telegram
 from storage import alert_ledger, db
 
@@ -745,9 +745,9 @@ def run_once(now: float | None = None) -> dict:
             summary["checked"] += 1
             coin = tlevels[0]["coin_symbol"]
 
-            # 소급 저가: 엔트리가 현재가의 +5% 이내에 있을 때만 캔들 소모
+            # 소급 저가: 엔트리가 현재가의 +15% 이내에 있을 때만 캔들 소모
             need_low = any(
-                lv["entry_usd"] * usdt_krw >= current * 0.95 for lv in tlevels if lv.get("entry_usd")
+                lv["entry_usd"] * usdt_krw >= current * 0.85 for lv in tlevels if lv.get("entry_usd")
             )
             candles = _get_range(ticker, 30) if need_low else None
 
@@ -1000,8 +1000,11 @@ def run_once(now: float | None = None) -> dict:
                         logger.warning("[체크] %s 자체 성적 조회 실패(표시값 없이 진행): %s",
                                        coin, e)
                     # 52주 고저 + 김프 + 펀딩비는 발송 확정건에만 조회
-                    from monitor import binance
-                    week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
+                    week52 = None
+                    try:
+                        week52 = upbit.fetch_week52(ticker, cfg_get("http_timeout_sec"))
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 52주 조회 실패(무시): %s", coin, e)
                     # 자리 판정 (2026-08-07 RSI, 08-08 MA 확장) — 발송 확정건에만
                     # 2콜(일/주봉, MA 는 일봉 공유라 추가 콜 0). 조회·계산 실패는
                     # (None,None) → 행 생략, 발송은 계속. MA 비교가는 터치 시점
@@ -1040,7 +1043,11 @@ def run_once(now: float | None = None) -> dict:
                         # 있으므로 여기서 재초기화 불필요 (억제 터치 record 경로 안전).
                     kimchi = None
                     _snap_kimchi_delta = None
-                    usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
+                    try:
+                        usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s Binance 가격 조회 실패(무시): %s", coin, e)
+                        usd_global = None
                     if usd_global and usd_global > 0 and usdt_krw:
                         effective = current / usd_global
                         kimchi = (effective - usdt_krw) / usdt_krw * 100
@@ -1252,19 +1259,18 @@ def run_once(now: float | None = None) -> dict:
                         reply_to_message_id=_reply_to,
                     )
                     if _sent_mid:
-                        db.record_alert(conn, coin, kind, ids, day, now)
-                        # #6 스레딩 — preview 발송 성공 시 각 레벨에 message_id 저장.
-                        # 나중 touch 회차가 이 값을 reply_to 로 사용한다. touch 알림의
-                        # message_id 는 저장 안 함(현재 답글 걸 후속이 없음).
-                        if kind == "preview":
+                        alert_ledger.append(db_path, coin, kind, ids, now)
+                        try:
+                            db.record_alert(conn, coin, kind, ids, day, now)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s 알림 기록 실패(발송 완료, ledger 기록됨): %s",
+                                           coin, e)
+                        if kind == "preview" and _sent_mid > 0:
                             try:
                                 db.set_preview_message_id(conn, ids, _sent_mid)
                             except Exception as e:  # noqa: BLE001
                                 logger.warning("[체크] %s preview msgid 저장 실패(무시): %s",
                                                coin, e)
-                        # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
-                        # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
-                        alert_ledger.append(db_path, coin, kind, ids, now)
                         # 표시된 판정 2종 로깅 (2026-08-07 자가검증) — 터치 본알림만.
                         # 발송 성공 직후에 기록해 "표시된 것만 기록" 불변식 유지.
                         # ma200_above (08-08): 내부 축적 전용 — 알림 무노출.
@@ -1360,8 +1366,7 @@ def run_once(now: float | None = None) -> dict:
                         _snap_volume_rank = _volume_ranks().get(ticker)
                     if _snap_kimchi is None:
                         try:
-                            from monitor import binance as _binance_m8
-                            _usd_g = _binance_m8.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
+                            _usd_g = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
                             if _usd_g and _usd_g > 0 and usdt_krw:
                                 _snap_kimchi = (current / _usd_g - usdt_krw) / usdt_krw * 100
                         except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
@@ -2005,8 +2010,6 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
     스냅샷 대비 변화율을 계산해 임계 초과 시 별도 발송 — 터치와 무관한
     독립 이벤트. cfg_get/prices 미전달(구 호출부·테스트)이면 급증 검사만
     건너뛰고 적재는 그대로 수행(하위 호환)."""
-    from monitor import binance
-    from notify import telegram
     cfg_get = cfg_get or settings.get
     last = db.get_meta(conn, _META_LAST_OI_SNAP)
     if last is not None:

@@ -20,6 +20,7 @@ logger = logging.getLogger("alert.options")
 
 _DERIBIT_BASE = "https://www.deribit.com/api/v2"
 _CACHE_TTL_SEC = 300.0  # 5분 — 옵션 OI는 느리게 변함
+_CACHE_STALE_MAX_SEC = 3600.0  # 스테일 캐시 최대 수명
 _cache: dict = {"ts": 0.0, "data": None}
 
 
@@ -144,12 +145,16 @@ def fetch_btc_options_context(timeout: float = 10.0) -> Optional[dict]:
     dvol = _fetch_dvol(timeout)
 
     if not instruments:
-        return _cache.get("data")  # 실패 시 이전 캐시 반환
+        if _cache["data"] is not None and now - _cache["ts"] < _CACHE_STALE_MAX_SEC:
+            return _cache["data"]
+        return None
 
     pc = _calc_pc_ratio(instruments)
     mp = _calc_max_pain(instruments)
     if pc is None:
-        return _cache.get("data")
+        if _cache["data"] is not None and now - _cache["ts"] < _CACHE_STALE_MAX_SEC:
+            return _cache["data"]
+        return None
 
     result = {"pc_ratio": pc, "max_pain": mp, "dvol": dvol}
     _cache["ts"] = now

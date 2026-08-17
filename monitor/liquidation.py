@@ -21,6 +21,7 @@ logger = logging.getLogger("alert.liquidation")
 
 _API_BASE = "https://bykaranteli.com"
 _CACHE_TTL_SEC = 300.0  # 5분 — API 캐시와 동기화
+_CACHE_STALE_MAX_SEC = 3600.0  # 스테일 캐시 최대 수명
 _cache: dict = {"ts": 0.0, "data": None}
 
 _REGIME_MAP = {
@@ -48,7 +49,10 @@ def fetch_btc_liq_context(timeout: float = 10.0) -> Optional[dict]:
     if result is not None:
         _cache["ts"] = now
         _cache["data"] = result
-    return result or _cache.get("data")
+        return result
+    if _cache["data"] is not None and now - _cache["ts"] < _CACHE_STALE_MAX_SEC:
+        return _cache["data"]
+    return None
 
 
 def _fetch_pressure(timeout: float) -> Optional[dict]:

@@ -949,6 +949,8 @@ check("T26e 관찰집계 - 등급미달/발송실패는 아직 0건(T27/T28에�
 # 이 케이스는 감점(-6)을 되돌리면 41점 -> C가 돼 min_grade('C')를 통과한다 - 즉
 # "TP 감점 때문에 억제된" 표본이라 suppressed_grade_tp_penalty_only 도 함께 +1돼야 함
 # (2026-07-26 사용자 결정: 감점 효과를 분리 측정).
+_t27_saved_min_grade = settings.SETTINGS["alert_min_grade"]
+settings.SETTINGS["alert_min_grade"] = "C"
 with db.connect(TEST_DB) as conn:
     lv27 = dict(coin_symbol="ZGRD", ticker="KRW-ZGRD", direction="long",
                 entry_usd=5.0, sl_usd=None, tp_usd=5.025, rr=None, grade="B", score=60,
@@ -1013,6 +1015,8 @@ check("T28b 관찰집계 - 터치 raw +1(7→8), 발송실패 억제 +1", row28[
       and row28["suppressed_send_fail"] == 1)
 check("T28c 발송실패는 등급미달과 별도 집계(등급미달/TP감점 카운트 불변)",
       row28["suppressed_grade"] == 2 and row28["suppressed_grade_tp_penalty_only"] == 1)
+
+settings.SETTINGS["alert_min_grade"] = _t27_saved_min_grade
 
 # ── T29: 관찰 집계 DB 함수 단위 검증 (임시 DB, 손계산·프로덕션 DB 미접근) ──────
 TEST_DB29 = "cache/_test_obs.db"

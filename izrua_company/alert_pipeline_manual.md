@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-17 (Tier1 3건 + Tier2 2건: preview→touch 스레딩 + 등급×장세 히트맵 파이프라인)  
+> 마지막 업데이트: 2026-08-17 (전수 리뷰 버그 수정 11건)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -398,6 +398,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 - notify/news_brief.py: level_ids 필드 재사용 계약 주석 명시
 - config/settings.py universe_top_n 주석 갱신 (의미 변경 반영)
 - test_price_logic VS5/VS6: SETTINGS override 로 임계 재조정에 견고
+
+**전수 리뷰 버그 수정 (2026-08-17 심야)**:
+- telegram.send(): mid 파싱 실패 폴백 1→-1 (Telegram mid=1 은 실제 메시지 — 스레딩 오염 방지)
+- telegram: _SEND_MIN_INTERVAL_SEC 1.0→1.5 (그룹 429 여유)
+- price_check: `from monitor import binance` 모듈 상단 이동 (_backfill_supply_1h NameError 수정)
+- price_check: fetch_week52·fetch_usdt_price 미래핑 HTTP → try/except 격리 (회차 전체 롤백 방지)
+- price_check: alert_ledger.append 를 db.record_alert 앞으로 이동 + DB 기록 try/except 격리
+- price_check: need_low 밴드 5%→15% (플래시크래시 소급 스캔 범위 확장)
+- price_check: preview msgid 저장 시 `_sent_mid > 0` 가드 (폴백 -1 저장 방지)
+- market_sentiment: all-None 딕셔너리 캐시 오염 방지 (전 API 실패 시 stale 반환)
+- options.py/liquidation.py: 스테일 캐시 최대 수명 1시간 상한 추가 (무기한 반환 방지)
+- run_cycle._check_audit_dump_stale: 무음 except → logger.debug 추가
+- test_price_logic T27: alert_min_grade C→D 설정 변경 정합 (settings override/restore)
 
 ## FRED 매크로 통합 (2026-08-17)
 

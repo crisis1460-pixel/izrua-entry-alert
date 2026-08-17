@@ -562,7 +562,8 @@ def _check_audit_dump_stale(db_path: str, now: float) -> None:
             from storage.audit_dump import META_LAST_DUMP
             last = db.get_meta(conn, META_LAST_DUMP)
             warned = db.get_meta(conn, _META_DUMP_STALE_WARNED)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[정체감시] 감사 덤프 meta 조회 실패: %s", e)
         return
     try:
         last_ts = float(last) if last else 0.0

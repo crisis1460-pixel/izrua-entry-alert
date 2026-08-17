@@ -139,8 +139,8 @@ def get_sentiment(conn) -> Optional[dict]:
         pass
 
     data = _fetch_fresh(settings.get("http_timeout_sec"))
-    if data is None:
-        return stale  # API 실패 시 구버전 반환 (None보다 낫다)
+    if data is None or all(v is None for v in data.values()):
+        return stale
     try:
         db.set_meta(conn, _CACHE_KEY, json.dumps({"at": time.time(), "data": data}))
     except Exception:  # noqa: BLE001
