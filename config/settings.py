@@ -104,7 +104,12 @@ SETTINGS = {
     # · wolfoftrading — Upbit 겹침 ~80%(INJ/ETH/MANA/BTC), 밀도 낮음(주 1~2건)
     # 둘 다 retro-post 검증 PASS. 예상 증가: cryptosignals0rg 0.5~1/일 +
     # wolfoftrading 주 0~1건. 관찰 후 실측 채택 여부 재판단.
-    "telegram_source_channels": ["BitmexSignalsFee", "cryptosignals0rg", "wolfoftrading"],
+    # 2026-08-17 BitcoinBullets 추가 (사용자 승인, 총 4채널). 리서치 결과
+    # SUSPECT 판정(SL HIT 게시 이력 미확인, 105K 구독·2018~ 운영, Entry/다단
+    # TP/SL 포맷 완비, Upbit 겹침 ~60% LSK/UNI/XRP/ETH/ARB/SOL/AAVE/TRX/WLD).
+    # 편입 후 2주 실측 (SL HIT 게시 여부·발송량·터치 도달률) 관찰 필요.
+    "telegram_source_channels": ["BitmexSignalsFee", "cryptosignals0rg",
+                                  "wolfoftrading", "BitcoinBullets"],
     "telegram_source_sleep_sec": 5.0,    # 채널당 요청 간격. 비공식 경로라 TradingView
                                           # 페이싱(5.0)보다 느슨하게 가지 않는다.
     "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
