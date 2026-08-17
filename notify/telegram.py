@@ -563,45 +563,48 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
                 lines.append(f"    └ 현재 {pos:.0f}% 지점")
 
-    # RSI 자리 판정 (2026-08-07): 52주 위치와 같은 '코인 자체 위치' 묶음이라
-    # 이 블록 끝에 붙인다. 수급 줄과 동일 문법 — 판정 + (근거·숫자) 한 줄.
-    if position and position[0]:
-        _pv, _pr = position
-        lines.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
+    # Zone 1 배지 재배치 (2026-08-17 E1, 사용자 결정 — 리스크 우선):
+    # 세 그룹으로 버퍼링 후 순서대로 렌더 (라인 수 불변, 순서만 변경).
+    #   [1] risk_badges (매수 부담·매수 주의) — 스윙 진입 판단 시 위험 신호 우선 스캔
+    #   [2] info_badges (라벨 없음: 자리·추세장) — 판단 근거 데이터
+    #   [3] positive_badges (매수 유리) — 확증 신호
+    # 각 그룹 내 순서는 데이터 소스별 자연 순서(DEX → 온체인 등) 유지.
+    risk_badges, info_badges, positive_badges = [], [], []
 
-    # 추세장 배지 (2026-08-17 F3, 사용자 결정): ADX(14) >= 25 일 때만 노출.
-    # 20 미만(횡보)·20~25(중립)은 표기 없음 — 등급 산식에는 반영(≥25 +3, <20 -2).
-    # BB Width 압축·팽창은 등급에만 반영, 알림 표기 없음(같은 사용자 결정).
-    if adx14 is not None and adx14 >= 25:
-        lines.append(f"📈 추세장 (ADX {adx14:.0f})")
-
-    # DEX 온체인 배지 (2026-08-17) — 저유동/매수·매도 우위만 노출(관성 지표 무표기).
-    # 매핑 없는 네이티브 코인(XRP/ADA/BTC 등) 또는 매핑 실패 시 dex_stats=None
-    # → 배지 미표시(형평성 이슈 없음). 임계는 등급 산식 _dex_points 와 동일:
-    # 유동성 <100k$ 저유동 경고, buy_ratio ≥0.65 매수세 강함, ≤0.35 매도세 강함.
-    # 매수자 관점 라벨(FRED/DXY/VIX/10Y 와 통일 — 매수 유리/부담/주의):
-    #   🟢 매수세 강함 → 관심 유입 = 매수 유리
-    #   🔴 매도세 강함 → 진입 즉시 반등 어려움 = 매수 부담
-    #   💧 저유동 → 진입 후 exit 어려움·러그 리스크 = 매수 주의
+    # DEX 저유동 (매수 주의) — 러그·exit 위험. 임계 <100k$ (grading._dex_points 와 동일).
     if dex_stats:
         _liq = dex_stats.get("liquidity_usd")
         _bratio = dex_stats.get("buy_ratio_24h")
         if _liq is not None and _liq < 100_000:
-            lines.append(f"💧 DEX 저유동 {_liq/1000:.0f}k$ (매수 주의)")
+            risk_badges.append(f"💧 DEX 저유동 {_liq/1000:.0f}k$ (매수 주의)")
+        # DEX 매수세/매도세 — 배타적 임계 (≥0.65 / ≤0.35). 사이(중립)는 무표기.
         if _bratio is not None:
             if _bratio >= 0.65:
-                lines.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% (매수 유리)")
+                positive_badges.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% (매수 유리)")
             elif _bratio <= 0.35:
-                lines.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% (매수 부담)")
+                risk_badges.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% (매수 부담)")
 
-    # 온체인 활성주소 30d 백분위 배지 (2026-08-17 Coin Metrics) — 무료 티어 커버
-    # 자산(BTC/ETH/XRP 등 18종)만 값. 극단(≤20 / ≥80)일 때만 노출, 중립 무표기.
-    # 매수자 관점 라벨(FRED/DEX 와 통일 — 매수 유리/부담).
+    # Coin Metrics 활성주소 30d 백분위 (2026-08-17). 무료 커버 138종만 값.
+    # ≥80 활발 (매수 유리) / ≤20 저조 (매수 부담) / 중립 무표기.
     if active_addr_pctile is not None:
         if active_addr_pctile >= 80:
-            lines.append(f"⛓ 온체인 활발 {active_addr_pctile:.0f}위 (매수 유리)")
+            positive_badges.append(f"⛓ 온체인 활발 {active_addr_pctile:.0f}위 (매수 유리)")
         elif active_addr_pctile <= 20:
-            lines.append(f"⛓ 온체인 저조 {active_addr_pctile:.0f}위 (매수 부담)")
+            risk_badges.append(f"⛓ 온체인 저조 {active_addr_pctile:.0f}위 (매수 부담)")
+
+    # 추세장 (2026-08-17 F3): ADX(14) ≥25 일 때만 표시. 라벨 없는 정보 배지.
+    if adx14 is not None and adx14 >= 25:
+        info_badges.append(f"📈 추세장 (ADX {adx14:.0f})")
+
+    # RSI 자리 판정 (2026-08-07). 라벨 없는 정보 배지.
+    if position and position[0]:
+        _pv, _pr = position
+        info_badges.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
+
+    # 렌더 순서: 리스크 → 정보 → 긍정 (사용자 결정, E1 옵션 2).
+    lines.extend(risk_badges)
+    lines.extend(info_badges)
+    lines.extend(positive_badges)
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는
