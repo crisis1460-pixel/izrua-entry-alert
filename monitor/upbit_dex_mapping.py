@@ -60,25 +60,24 @@ def _cg_headers() -> dict:
     return {"x-cg-demo-api-key": key} if key else {}
 
 
-def _resolve_cg_id(symbol: str, timeout: float) -> Optional[str]:
-    """Upbit 심볼 → CoinGecko id (첫 매칭 반환).
-    /coins/list?include_platform=true 를 한 번 조회해 인메모리 dict 구성."""
-    # 간단히: /search 엔드포인트가 심볼→id 매칭에 최적
+def _resolve_cg_id(symbol: str, timeout: float):
+    """Upbit 심볼 → (cg_id, cg_name) 튜플. 실패 시 (None, None).
+    cg_name 은 StockTwits 등 다른 소스의 심볼 충돌 검증(2026-08-17) 원천 데이터."""
     try:
         r = requests.get("https://api.coingecko.com/api/v3/search",
                          params={"query": symbol}, headers=_cg_headers(),
                          timeout=timeout)
         if r.status_code != 200:
-            return None
+            return None, None
         coins = (r.json() or {}).get("coins") or []
         # 정확히 심볼이 일치하는 첫 항목 (CoinGecko는 시총 순 정렬)
         for c in coins:
             if (c.get("symbol") or "").upper() == symbol.upper():
-                return c.get("id")
-        return None
+                return c.get("id"), c.get("name")
+        return None, None
     except Exception as e:  # noqa: BLE001
         logger.warning("[dex_map] CG search %s 실패: %s", symbol, e)
-        return None
+        return None, None
 
 
 def _fetch_platform_address(cg_id: str, timeout: float) -> Optional[str]:
@@ -117,14 +116,44 @@ def get_dex_address(coin_symbol: str, timeout: float = 10.0) -> Optional[str]:
             return addr if addr else None
 
     cg_id = entry.get("cg_id")
+    cg_name = entry.get("cg_name")
     if not cg_id:
-        cg_id = _resolve_cg_id(coin_symbol, timeout)
+        cg_id, cg_name = _resolve_cg_id(coin_symbol, timeout)
     if not cg_id:
-        cache[coin_symbol.upper()] = {"addr": "", "cg_id": "", "at": now}
+        cache[coin_symbol.upper()] = {"addr": "", "cg_id": "", "cg_name": "", "at": now}
         _save_cache(cache)
         return None
 
     addr = _fetch_platform_address(cg_id, timeout)
-    cache[coin_symbol.upper()] = {"addr": addr or "", "cg_id": cg_id, "at": now}
+    cache[coin_symbol.upper()] = {"addr": addr or "", "cg_id": cg_id,
+                                  "cg_name": cg_name or "", "at": now}
     _save_cache(cache)
     return addr if addr else None
+
+
+def get_cg_name(coin_symbol: str, timeout: float = 10.0) -> Optional[str]:
+    """Upbit 심볼 → CoinGecko 코인 name (StockTwits 심볼 충돌 검증용).
+    캐시 우선(get_dex_address 와 동일 캐시 재사용) → 없으면 CG search 1콜.
+    반환 예: SKY → 'Sky', BTC → 'Bitcoin', PEPE → 'Pepe'. 매칭 실패 시 None."""
+    cache = _load_cache()
+    entry = cache.get(coin_symbol.upper()) or {}
+    now = time.time()
+    at = entry.get("at") or 0
+    # 캐시 히트 조건: cg_name 이 필드에 있고(구형식 호환) TTL 안이면 반환
+    if "cg_name" in entry:
+        ttl = _CACHE_TTL_SEC if entry.get("cg_id") else _NEG_TTL_SEC
+        if now - at <= ttl:
+            return entry.get("cg_name") or None
+
+    # 캐시 미스·구형식 → 신선 조회 후 캐시 업데이트 (get_dex_address 와 동일 경로)
+    cg_id, cg_name = _resolve_cg_id(coin_symbol, timeout)
+    if not cg_id:
+        cache[coin_symbol.upper()] = {"addr": entry.get("addr", ""), "cg_id": "",
+                                       "cg_name": "", "at": now}
+        _save_cache(cache)
+        return None
+    # 기존 addr 는 보존(별개 조회 결과) — 다음 get_dex_address 호출까지 유효
+    cache[coin_symbol.upper()] = {**entry, "cg_id": cg_id, "cg_name": cg_name or "",
+                                   "at": entry.get("at", now)}
+    _save_cache(cache)
+    return cg_name or None

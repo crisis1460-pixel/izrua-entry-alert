@@ -15,6 +15,7 @@ UA 헤더 필수 — 미기입 시 403 반환.
 """
 
 import logging
+import re
 from typing import Optional
 
 import requests
@@ -26,7 +27,29 @@ _UA = "Mozilla/5.0 (izrua-bot; +https://github.com/crisis1460-pixel)"
 _MIN_TAGGED = 5   # 노이즈 컷 — 태그된 메시지가 이 미만이면 판정 유보
 
 
-def fetch_sentiment_stats(coin_symbol: str, timeout: float = 10.0) -> Optional[dict]:
+def _normalize_name(name: str) -> str:
+    """이름 정규화 — 심볼 충돌 검증(2026-08-17)용. 소문자 + 공백/특수문자 제거만.
+    접미('coin'/'token' 등) 제거는 위험(Sky/Skycoin 둘 다 'sky' 로 매칭되는 실측
+    오탐이 있어 폐기) — 엄격 완전 일치로 심볼 충돌 방지.
+    예: 'Sky' → 'sky', 'Skycoin' → 'skycoin' (다름 → 거부 ✓),
+        'Bitcoin' → 'bitcoin', 'USD Coin' → 'usdcoin'"""
+    if not name:
+        return ""
+    return re.sub(r"[\s\-_.]+", "", name.strip().lower())
+
+
+def _names_match(cg_name: str, stwits_title: str) -> bool:
+    """CoinGecko name 과 StockTwits symbol.title 이 같은 프로젝트를 지칭하는지.
+    정규화 후 완전 일치. Skycoin(별도 프로젝트) vs Sky(구 MKR) 심볼 충돌 방지."""
+    a = _normalize_name(cg_name)
+    b = _normalize_name(stwits_title)
+    if not a or not b:
+        return False
+    return a == b
+
+
+def fetch_sentiment_stats(coin_symbol: str, expected_name: Optional[str] = None,
+                          timeout: float = 10.0) -> Optional[dict]:
     """심볼별 최신 30건 스트림에서 감정 태그 집계.
     반환 {
       "total_msgs": int,          # 응답 메시지 수 (최대 30)
@@ -34,6 +57,11 @@ def fetch_sentiment_stats(coin_symbol: str, timeout: float = 10.0) -> Optional[d
       "bearish": int,             # Bearish 태그 수
       "bullish_ratio": float|None,# bullish / (bullish + bearish), 없거나 표본<5면 None
     } 또는 None (심볼 미존재·API 실패).
+
+    expected_name (2026-08-17 심볼 충돌 방지): CoinGecko 등 신뢰 소스가 준
+    코인 이름(예: SKY → 'Sky'). StockTwits 응답의 symbol.title 과 정규화 후
+    비교해 다른 프로젝트(예: SKY.X = 'Skycoin')면 None 반환. None 전달 시
+    검증 스킵(구 호출부 호환).
 
     bullish_ratio 임계 관례 (금융 소셜 심리 표준):
       ≥0.75 강한 매수 심리 (매수 유리 배지)
@@ -48,7 +76,16 @@ def fetch_sentiment_stats(coin_symbol: str, timeout: float = 10.0) -> Optional[d
         if r.status_code != 200:
             logger.warning("[stocktwits] %s HTTP %s", sym, r.status_code)
             return None
-        msgs = (r.json() or {}).get("messages") or []
+        payload = r.json() or {}
+        # 심볼 충돌 검증 (2026-08-17) — 실제 SKY 알림에서 발견된 SKY.X=Skycoin 오조회
+        # 방지. expected_name 이 None 이면 (구 호출부 호환) 검증 스킵.
+        if expected_name:
+            st_title = (payload.get("symbol") or {}).get("title") or ""
+            if not _names_match(expected_name, st_title):
+                logger.warning("[stocktwits] %s 심볼 충돌 (CG=%s vs ST=%s) → 폐기",
+                               sym, expected_name, st_title)
+                return None
+        msgs = payload.get("messages") or []
         if not msgs:
             return None
         bullish = bearish = 0

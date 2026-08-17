@@ -735,6 +735,35 @@ _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_b
                        stwits_bullish_ratio=0.50)
 check("ST6c 중립(0.30~0.75) → 배지 없음", "소셜" not in _txt)
 
+# ST7: 심볼 충돌 검증 (2026-08-17 실사고 대응) — expected_name != symbol.title
+# 정규화 후 불일치 시 응답 폐기. Sky(구 MKR) 알림이 SKY.X=Skycoin 데이터를 96%
+# Bullish 로 오라벨했던 사건.
+_st.requests.get = lambda *a, **k: _R(200, {
+    "symbol": {"title": "Skycoin"},
+    "messages": [{"entities": {"sentiment": {"basic": "Bullish"}}} for _ in range(10)]
+        + [{"entities": {"sentiment": {"basic": "Bearish"}}} for _ in range(1)]
+})
+check("ST7 심볼 충돌(CG=Sky vs ST=Skycoin) → None",
+      _st.fetch_sentiment_stats("SKY", expected_name="Sky") is None)
+# 정상 일치 케이스 — 값 반환
+_st.requests.get = lambda *a, **k: _R(200, {
+    "symbol": {"title": "Bitcoin"},
+    "messages": [{"entities": {"sentiment": {"basic": "Bullish"}}} for _ in range(10)]
+        + [{"entities": {"sentiment": {"basic": "Bearish"}}} for _ in range(2)]
+})
+_r = _st.fetch_sentiment_stats("BTC", expected_name="Bitcoin")
+check("ST7b 정상 일치(Bitcoin=Bitcoin) → 값 반환",
+      _r is not None and _r["bullish"] == 10)
+# expected_name=None → 검증 스킵 (구 호출부 호환)
+_r = _st.fetch_sentiment_stats("BTC")
+check("ST7c expected_name=None → 검증 스킵(구 호출부 호환)",
+      _r is not None and _r["bullish"] == 10)
+# 접미 유사 케이스 정확 처리 (Sky vs Skycoin 정규화 후 다름)
+check("ST7d 접미 유사(Sky vs Skycoin) 오탐 없음 — 접미 제거 로직 없음",
+      _st._normalize_name("Sky") == "sky"
+      and _st._normalize_name("Skycoin") == "skycoin"
+      and not _st._names_match("Sky", "Skycoin"))
+
 _st.requests.get = _orig_st_get
 
 

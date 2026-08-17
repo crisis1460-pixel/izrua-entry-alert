@@ -1170,11 +1170,19 @@ def run_once(now: float | None = None) -> dict:
                     # StockTwits 소셜 심리 (2026-08-17) — 발송 확정 터치에만 1콜.
                     # 심볼 미존재(WEMIX/KAIA 등)·태그 표본 <5 시 None (자연 스킵).
                     # SOL/SUI/APT/TAO/PEPE 등 Coin Metrics 미커버 알트 상당수 보완.
+                    # 심볼 충돌 검증(2026-08-17): CoinGecko name 을 expected_name 으로
+                    # 전달 → StockTwits symbol.title 과 정규화 후 완전 일치할 때만 채택.
+                    # 실사고: KRW-SKY(=Sky/구 MKR) 조회가 SKY.X(=Skycoin, 별개 프로젝트)
+                    # 로 넘어가 96% Bullish 오라벨. CG name 조회는 upbit_dex_mapping
+                    # 파일 캐시 재사용(24h/7d TTL) → 실호출 최소.
                     if touched:
                         try:
-                            from monitor import stocktwits
-                            _st = stocktwits.fetch_sentiment_stats(
+                            from monitor import stocktwits, upbit_dex_mapping
+                            _cg_name = upbit_dex_mapping.get_cg_name(
                                 coin, timeout=cfg_get("http_timeout_sec"))
+                            _st = stocktwits.fetch_sentiment_stats(
+                                coin, expected_name=_cg_name,
+                                timeout=cfg_get("http_timeout_sec"))
                             if _st:
                                 _snap_stwits = _st.get("bullish_ratio")
                         except Exception as e:  # noqa: BLE001
