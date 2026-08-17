@@ -15,9 +15,11 @@ logger = logging.getLogger("alert.translator")
 
 _GOOGLE_URL = "https://translate.googleapis.com/translate_a/single"
 _MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 _cache: dict[str, tuple[str, float]] = {}
 _CACHE_TTL = 86400.0
+_CACHE_MAX = 256
 
 
 def _google(text: str, timeout: float) -> Optional[str]:
@@ -30,6 +32,7 @@ def _google(text: str, timeout: float) -> Optional[str]:
             "dt": "t",
             "q": text,
         },
+        headers={"User-Agent": _UA},
         timeout=timeout,
     )
     if r.status_code != 200:
@@ -38,7 +41,8 @@ def _google(text: str, timeout: float) -> Optional[str]:
     data = r.json()
     if not data or not data[0]:
         return None
-    return "".join(seg[0] for seg in data[0] if seg and seg[0])
+    joined = "".join(seg[0] for seg in data[0] if seg and seg[0])
+    return joined if joined.strip() else None
 
 
 def _mymemory(text: str, timeout: float) -> Optional[str]:
@@ -54,7 +58,8 @@ def _mymemory(text: str, timeout: float) -> Optional[str]:
     if data.get("responseStatus") != 200:
         logger.warning("[번역] MyMemory status %s", data.get("responseStatus"))
         return None
-    return data["responseData"]["translatedText"]
+    translated = data["responseData"]["translatedText"]
+    return translated if translated and translated.strip() else None
 
 
 def translate_en_ko(text: str, timeout: float = 5.0) -> str:
@@ -83,5 +88,8 @@ def translate_en_ko(text: str, timeout: float = 5.0) -> str:
         logger.warning("[번역] 전 경로 실패 — 원문 유지")
         return text
 
+    if len(_cache) >= _CACHE_MAX:
+        oldest_key = min(_cache, key=lambda k: _cache[k][1])
+        del _cache[oldest_key]
     _cache[text] = (result, now)
     return result
