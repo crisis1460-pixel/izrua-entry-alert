@@ -4,13 +4,15 @@ Coin Metrics Community API — 온체인 활성 주소(30일 백분위).
 무료·무키·1.6 rps (10 req / 6s sliding window)·**CC 비상업 라이선스**
 (개인 알림봇은 문제 없음, 상업화 시 재검토 필요).
 
-커버 자산(2026-08-17 실측, 무료 티어, 총 43종):
-  L1: BTC/ETH/XRP/ADA/DOGE/LTC/BCH/ETC/BNB/TRX/DASH/ZEC/XTZ/EOS/XLM/ALGO/ICP
-  DeFi(ERC-20): LINK/UNI/AAVE/MKR/SNX/CRV/LDO/1INCH/YFI/SUSHI/COMP/BAT/OMG/
-                MANA/ZRX/LPT/REN/KNC/BAL/UMA/FTT/POWR
-  스테이블: USDT/USDC/BUSD/TUSD (알림 대상 아님, 화이트리스트만)
-Upbit KRW 유니버스 300 대비 실질 커버율 ~10% — 나머지 알트는 배지·등급 자연
-스킵. 미커버 자산(SOL/SUI/APT/TON/ARB/OP/RENDER/SEI/TIA 등)은 유료 티어 필요.
+커버 자산 (2026-08-17 카탈로그 전수 실측, 총 138종):
+- 카탈로그 API(`/catalog/assets`) 로 AdrActCnt·1d 지원 자산 138개 확보, 개별
+  호출 검증 138/138 통과. 무료 티어 완전 접근.
+- **여전히 미커버(카탈로그 자체에 없음)**: SOL, SUI, APT, TON, NEAR, ARB, OP,
+  RENDER, SEI, TIA, JUP, WLD, TAO, PEPE, ORDI 등 — 유료 티어 전용.
+
+자산 ID 매핑 (`_cm_asset_id`): Upbit 심볼(대문자) → Coin Metrics 소문자 자산
+ID. 우선순위: (1) bare form (btc/eth/xrp) → (2) *_eth 접미(shib_eth,
+matic_eth 등) → (3) *_native 접미(flow_native 등). 미커버는 None.
 
 지표: **AdrActCnt (활성 주소 수, 일봉)** 30일 창의 현재 값 백분위.
 - 백분위 ≤20 저조: 네트워크 관심 이탈 = 매수 부담 (-1점, 배지 표시)
@@ -37,19 +39,48 @@ _CACHE_TTL_SEC = 86400.0     # 24h — 일봉 지표라 하루 1회면 충분
 _NEG_TTL_SEC = 604800.0      # 7일 — 미커버 자산은 오래 캐시(재조회 억제)
 _META_PREFIX = "cm_addr_pct_"
 
-# 무료 티어 확인된 자산 (2026-08-17 실측, 총 43종). 나머지는 API 콜 자체 생략.
-# 유료 티어 필요 자산(SOL/SUI/APT/ARB/OP/RENDER 등)은 여기 없음 → None 반환.
+# 무료 티어 확인된 자산 (2026-08-17 카탈로그 전수 실측, 총 138종).
+# 나머지 자산(SOL/SUI/APT 등)은 카탈로그 자체에 없음 → 유료 티어 전용.
 COVERED = {
-    # L1 (17)
-    "btc", "eth", "xrp", "ada", "doge", "ltc", "bch", "etc", "bnb", "trx",
-    "dash", "zec", "xtz", "eos", "xlm", "algo", "icp",
-    # ERC-20 DeFi/유틸 (22)
-    "link", "uni", "aave", "mkr", "snx", "crv", "ldo", "1inch", "yfi", "sushi",
-    "comp", "bat", "omg", "mana", "zrx", "lpt", "ren", "knc", "bal", "uma",
-    "ftt", "powr",
-    # 스테이블(알림 대상 아님, 화이트리스트만) (4)
-    "usdt", "usdc", "busd", "tusd",
+    "1inch", "aave", "ada", "ae_eth", "aion_eth", "algo", "alpha", "ant",
+    "avaxc", "avaxp", "avaxx", "bal", "bat", "bch", "bnb", "bnb_eth", "bsv",
+    "btc", "btg", "btm_eth", "buidl_eth", "busd", "comp", "cro", "crv",
+    "crvusd_eth", "cvc", "dai", "dash", "dcr", "dgb", "doge", "dot", "drgn",
+    "elf", "eos", "eos_eth", "etc", "eth", "eurc_eth", "eurcv_eth", "fdusd_eth",
+    "flow_native", "frax_eth", "ftt", "fun", "fxc_eth", "gas", "gno", "gnt",
+    "gusd", "hbtc", "hedg", "ht", "husd", "icp", "icx_eth", "kcs", "knc", "ldo",
+    "lend", "leo_eos", "leo_eth", "link", "lpt", "lrc_eth", "ltc", "lusd_eth",
+    "maid", "mana", "matic_eth", "mkr", "nas_eth", "neo", "nxm", "omg", "pax",
+    "paxg", "pay", "perp", "pol_eth", "poly", "powr", "ppt", "pyusd_eth",
+    "qash", "qnt", "qtum_eth", "ren", "renbtc", "rep", "rev_eth", "sai",
+    "sdai_eth", "shib_eth", "snt", "snx", "srm", "steth_lido", "susde_eth",
+    "sushi", "swrv", "trx", "trx_eth", "tusd", "tusd_eth", "tusd_trx", "uma",
+    "uni", "usdc", "usdc_avaxc", "usdc_eth", "usdc_trx", "usdd_eth", "usde_eth",
+    "usdk", "usdm_eth", "usdt", "usdt_avaxc", "usdt_eth", "usdt_omni",
+    "usdt_trx", "vet_eth", "vtc", "wbtc", "weth", "wnxm", "wtc", "xaut", "xem",
+    "xlm", "xrp", "xtz", "xvg", "yfi", "zec", "zil_eth", "zrx",
 }
+
+
+def _cm_asset_id(coin_symbol: str):
+    """Upbit KRW 심볼 → Coin Metrics 자산 ID (bare → *_eth → *_native 순).
+    None 반환 = 미커버(예: SOL/SUI/APT/PEPE 등 유료 티어 전용).
+
+    예:
+      BTC → 'btc' (bare)
+      SHIB → 'shib_eth' (ERC-20 wrapped only)
+      MATIC → 'matic_eth' (구 폴리곤 ERC-20)
+      POL → 'pol_eth' (신 폴리곤 ERC-20)
+      FLOW → 'flow_native' (네이티브 체인)
+      SOL → None (카탈로그 자체에 없음)"""
+    s = coin_symbol.lower()
+    if s in COVERED:
+        return s
+    if f"{s}_eth" in COVERED:
+        return f"{s}_eth"
+    if f"{s}_native" in COVERED:
+        return f"{s}_native"
+    return None
 
 
 def _fetch_series(asset: str, timeout: float, days: int = 30) -> Optional[list]:
@@ -86,10 +117,12 @@ def fetch_active_addr_percentile(coin_symbol: str, conn=None,
     """활성 주소 수의 30일 백분위(0~100). 24h DB 캐시.
     미커버 자산·조회 실패 → None (배지·등급 자연 스킵).
 
+    Upbit 심볼 → Coin Metrics 자산 ID 매핑은 `_cm_asset_id()` 참고
+    (SHIB → shib_eth, MATIC → matic_eth, FLOW → flow_native 등 자동 별칭).
     백분위 = (현재값 이하 관측치 수) / 전체 × 100. 극단 20/80 임계로 배지·등급
     반영. conn 은 DB 캐시용 — None 이면 매번 API 콜(테스트 편의)."""
-    asset = coin_symbol.lower()
-    if asset not in COVERED:
+    asset = _cm_asset_id(coin_symbol)
+    if asset is None:
         return None  # 미커버 자산 — API 콜 자체 생략
     key = _META_PREFIX + asset
 
