@@ -158,8 +158,26 @@ def build_brief(conn, now: float, timeout: float) -> str:
             lines.append(f"😨 시장심리 {fng} ({label})")
         if sent.get("btc_dominance") is not None:
             lines.append(f"🌍 비트 점유율 {sent['btc_dominance']}%")
+        if sent.get("eth_dominance") is not None:
+            lines.append(f"💠 이더 점유율 {sent['eth_dominance']}%")
         if sent.get("usdt_dominance") is not None:
             lines.append(f"🪙 USDT 점유율 {sent['usdt_dominance']}%")
+        alt_s = sent.get("altcoin_season_index")
+        if alt_s is not None:
+            if alt_s >= 75:
+                alt_tag = "알트시즌"
+            elif alt_s <= 25:
+                alt_tag = "비트시즌"
+            else:
+                alt_tag = "중립"
+            lines.append(f"🌊 알트시즌 {alt_s} ({alt_tag})")
+        stable = sent.get("stablecoin_mcap_b")
+        stable_chg = sent.get("stablecoin_mcap_change_7d_pct")
+        if stable is not None:
+            if stable_chg is not None:
+                lines.append(f"💵 스테이블 {stable}B ({stable_chg:+.2f}%/7d)")
+            else:
+                lines.append(f"💵 스테이블 {stable}B")
 
     # 달러지수 (1h 캐시)
     try:

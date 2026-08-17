@@ -360,6 +360,36 @@ check("G14f regrade — 2단+ 무감점 / 0~1단·키부재 -3, calculate_grade 
       and regrade_current(dict(_lv_lad, tp_ladder_count=2), 100.0)
       == calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0, tp_ladder_count=2))
 
+# F3 (2026-08-17) — 시장 국면 가감점 (_regime_points 격리 검증)
+_lv_r = dict(author_followers=500, direction="long", entry_usd=100.0,
+             sl_usd=90.0, tp_usd=110.0, tp_ladder_count=3)
+_base_r = calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0, tp_ladder_count=3)[1]
+check("F3a ADX 임계 — ≥25 +3 / <20 -2 / 20~25 0 / None 0",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, adx14=30)[1], _base_r + 3)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, adx14=15)[1], _base_r - 2)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, adx14=22)[1], _base_r)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, adx14=None)[1], _base_r))
+check("F3b BB Width 백분위 — ≤20 압축 +2 / ≥80 팽창 -2 / 중간 0",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, bb_width_pctile=15)[1], _base_r + 2)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, bb_width_pctile=85)[1], _base_r - 2)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, bb_width_pctile=50)[1], _base_r))
+# 조합 + regrade + breakdown 키 격리
+_bd_r = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                        tp_ladder_count=3, adx14=30, bb_width_pctile=15)
+check("F3c 조합·regrade·breakdown — ADX+BB 합산 +5, 'regime' 키 격리",
+      _bd_r["regime"] == 5.0
+      and eq(sum(_bd_r.values()), _base_r + 5)
+      and eq(regrade_current(_lv_r, 100.0, adx14=30, bb_width_pctile=15)[1],
+             _base_r + 5)
+      and eq(regrade_current(_lv_r, 100.0)[1], _base_r))  # 미전달 = 0 (구 산식)
+
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

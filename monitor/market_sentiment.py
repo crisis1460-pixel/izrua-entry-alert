@@ -41,10 +41,12 @@ def _fetch_fresh(timeout: float) -> dict:
     result = {
         "btc_dominance": None,
         "usdt_dominance": None,
+        "eth_dominance": None,
         "fear_greed": None,
         "fear_greed_label": None,
         "altcoin_season_index": None,
         "stablecoin_mcap_b": None,
+        "stablecoin_mcap_change_7d_pct": None,
     }
 
     try:
@@ -58,8 +60,11 @@ def _fetch_fresh(timeout: float) -> dict:
             usdt_d = mcp.get("usdt")
             if usdt_d:
                 result["usdt_dominance"] = round(usdt_d, 1)
+            eth_d = mcp.get("eth")
+            if eth_d:
+                result["eth_dominance"] = round(eth_d, 1)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[sentiment] BTC.D/USDT.D 조회 실패: %s", e)
+        logger.warning("[sentiment] BTC.D/USDT.D/ETH.D 조회 실패: %s", e)
 
     try:
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=timeout)
@@ -71,17 +76,24 @@ def _fetch_fresh(timeout: float) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("[sentiment] F&G 조회 실패: %s", e)
 
-    # 스테이블코인 총 시총 (DeFiLlama, 무인증) — 시장 대기 자금 규모
+    # 스테이블코인 총 시총 + 7일 변화율 (DeFiLlama, 무인증) — 시장 대기 자금 규모
+    # 7일 변화가 +면 대기 매수 축적, -면 위험자산 이탈. 알트 스윙 타이밍 선행 지표.
     try:
-        r = requests.get("https://stablecoins.llama.fi/stablecoins?includePrices=false",
+        r = requests.get("https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=",
                          timeout=timeout)
         if r.status_code == 200:
-            total = sum(
-                a.get("circulating", {}).get("peggedUSD", 0)
-                for a in r.json().get("peggedAssets", [])
-            )
-            if total > 0:
-                result["stablecoin_mcap_b"] = round(total / 1e9, 1)
+            chart = r.json()
+            if isinstance(chart, list) and chart:
+                latest = chart[-1].get("totalCirculatingUSD", {}).get("peggedUSD")
+                if latest and latest > 0:
+                    result["stablecoin_mcap_b"] = round(latest / 1e9, 1)
+                # 7일 전(±1일 허용) 지점 찾아 변화율
+                if latest and len(chart) >= 8:
+                    prev = chart[-8].get("totalCirculatingUSD", {}).get("peggedUSD")
+                    if prev and prev > 0:
+                        result["stablecoin_mcap_change_7d_pct"] = round(
+                            (latest - prev) / prev * 100, 2
+                        )
     except Exception as e:  # noqa: BLE001
         logger.warning("[sentiment] 스테이블코인 시총 조회 실패: %s", e)
 

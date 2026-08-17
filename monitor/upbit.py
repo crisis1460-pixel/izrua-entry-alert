@@ -357,6 +357,94 @@ def atr20_pct(ohlc) -> Optional[float]:
         return None
 
 
+def adx14(ohlc) -> Optional[float]:
+    """Wilder ADX(14) — 방향성 강도. 25↑ 추세, 20↓ 횡보 통상 임계.
+
+    ohlc: _fetch_ohlc 반환((고,저,종), 과거→최신). 표본 < 2×14+1(28)이면 None.
+    +DM/-DM → TR → Wilder 평활 → DX → ADX(DX 의 Wilder 평활). 방식 통일(atr20_pct
+    와 동일한 평활)."""
+    period = 14
+    if not ohlc or len(ohlc) < period * 2 + 1:
+        return None
+    try:
+        plus_dm, minus_dm, trs = [], [], []
+        for i in range(1, len(ohlc)):
+            h, l, _c = ohlc[i]
+            ph, pl, pc = ohlc[i - 1]
+            up = h - ph
+            dn = pl - l
+            plus_dm.append(up if (up > dn and up > 0) else 0.0)
+            minus_dm.append(dn if (dn > up and dn > 0) else 0.0)
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        # Wilder smoothing 초기값(첫 period 합) → 이후 (prev - prev/period + curr)
+        atr = sum(trs[:period])
+        pdm = sum(plus_dm[:period])
+        mdm = sum(minus_dm[:period])
+        dxs = []
+        for i in range(period, len(trs)):
+            atr = atr - atr / period + trs[i]
+            pdm = pdm - pdm / period + plus_dm[i]
+            mdm = mdm - mdm / period + minus_dm[i]
+            if atr <= 0:
+                continue
+            pdi = 100.0 * pdm / atr
+            mdi = 100.0 * mdm / atr
+            denom = pdi + mdi
+            if denom <= 0:
+                continue
+            dxs.append(100.0 * abs(pdi - mdi) / denom)
+        if len(dxs) < period:
+            return None
+        adx = sum(dxs[:period]) / period
+        for dx in dxs[period:]:
+            adx = (adx * (period - 1) + dx) / period
+        return adx
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
+        return None
+
+
+def bb_width_pct(closes, period: int = 20, k: float = 2.0) -> Optional[float]:
+    """볼린저밴드 폭 (%SMA20) — (상단-하단)/중심 × 100. 낮을수록 압축.
+
+    통상 하위 20%면 압축 국면(변동성 폭발 전조)로 본다. 표본 < period 이면 None.
+    표준편차는 모집단 σ (numpy 없이 순수 파이썬으로 stdev — 표본 σ 와 대동소이,
+    지표 대소 비교엔 무관)."""
+    if not closes or len(closes) < period:
+        return None
+    try:
+        window = closes[-period:]
+        mean = sum(window) / period
+        variance = sum((x - mean) ** 2 for x in window) / period
+        std = variance ** 0.5
+        if mean <= 0:
+            return None
+        return (2 * k * std) / mean * 100.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def bb_width_percentile(closes, period: int = 20, lookback: int = 120) -> Optional[float]:
+    """최근 lookback 기간 내 현재 BB Width 의 백분위(0~100). 낮을수록 압축.
+
+    등급 가감점용 — "하위 20%" 판정을 절대값이 아닌 상대 순위로 하면 코인별
+    변동성 편차를 무시할 수 있다. 표본 < period + lookback 이면 None."""
+    if not closes or len(closes) < period + lookback:
+        return None
+    try:
+        widths = []
+        for end in range(period, len(closes) + 1):
+            widths.append(bb_width_pct(closes[:end], period))
+        widths = [w for w in widths if w is not None]
+        if len(widths) < lookback:
+            return None
+        recent = widths[-lookback:]
+        current = recent[-1]
+        rank = sum(1 for w in recent if w <= current)
+        return round(rank / len(recent) * 100.0, 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def fetch_position_data(market: str, timeout: float) -> dict:
     """자리 판정 입력 일괄 조회 — RSI(일/주/4h) + SMA(20/60/120/200).
     일봉 1콜을 RSI 와 MA 가 공유(2026-08-08 MA 확장 — 추가 API 콜 0).
@@ -379,6 +467,10 @@ def fetch_position_data(market: str, timeout: float) -> dict:
         "ma20": _sma(d, 20), "ma60": _sma(d, 60),
         "ma120": _sma(d, 120), "ma200": _sma(d, 200),
         "atr20_pct": atr20_pct(d_ohlc),
+        # F3: 알림엔 ADX(추세장 배지)만, 등급엔 ADX+BB Width 둘 다 (2026-08-17)
+        "adx14": adx14(d_ohlc),
+        "bb_width_pct": bb_width_pct(d, 20) if d else None,
+        "bb_width_pctile": bb_width_percentile(d, 20, 120) if d else None,
     }
 
 

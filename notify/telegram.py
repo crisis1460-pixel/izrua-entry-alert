@@ -429,7 +429,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  kimchi_pct: float = None, volume_rank: int = None,
                  rep: dict = None, funding_rate: float = None,
                  funding_regime_flip: dict = None, supply: tuple = None,
-                 position: tuple = None, kimchi_delta: float = None) -> str:
+                 position: tuple = None, kimchi_delta: float = None,
+                 adx14: float = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -539,6 +540,12 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     if position and position[0]:
         _pv, _pr = position
         lines.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
+
+    # 추세장 배지 (2026-08-17 F3, 사용자 결정): ADX(14) >= 25 일 때만 노출.
+    # 20 미만(횡보)·20~25(중립)은 표기 없음 — 등급 산식에는 반영(≥25 +3, <20 -2).
+    # BB Width 압축·팽창은 등급에만 반영, 알림 표기 없음(같은 사용자 결정).
+    if adx14 is not None and adx14 >= 25:
+        lines.append(f"📈 추세장 (ADX {adx14:.0f})")
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는

@@ -160,6 +160,29 @@ def tp_distance_points(direction: str, entry: Optional[float], target: Optional[
     return 0.0
 
 
+def _regime_points(adx14: Optional[float], bb_width_pctile: Optional[float]) -> float:
+    """F3 (2026-08-17) — 시장 국면 가감점.
+
+    ADX(14): 방향성 강도. >=25 추세장(+3), <20 횡보장(-2), 20~25 중립(0).
+    BB Width 백분위(0~100, 최근 120개 대비 현재): 낮을수록 압축.
+      <=20 압축 국면(+2, 변동성 폭발 전조), >=80 팽창 후반부(-2), 나머지 0.
+    각 값 None(표본 부족·조회 실패)은 0 — 등급 감점 아님(무해 폴백).
+
+    알림 표시 대상은 ADX 만(사용자 결정) — 등급 산식은 둘 다 반영."""
+    pts = 0.0
+    if adx14 is not None:
+        if adx14 >= 25:
+            pts += 3
+        elif adx14 < 20:
+            pts -= 2
+    if bb_width_pctile is not None:
+        if bb_width_pctile <= 20:
+            pts += 2
+        elif bb_width_pctile >= 80:
+            pts -= 2
+    return pts
+
+
 def score_breakdown(
     followers: Optional[float],
     direction: str,
@@ -170,15 +193,20 @@ def score_breakdown(
     author_closed_n: Optional[int] = None,
     author_closed_hits: Optional[int] = None,
     tp_ladder_count: Optional[int] = None,
+    adx14: Optional[float] = None,
+    bb_width_pctile: Optional[float] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
     calculate_grade()가 내부적으로 사용하며, 수집 시 분해 저장에도 직접 호출된다.
-    키: follower, proximity, tp_dist, data, author, ladder.  sum(values()) == 총점.
+    키: follower, proximity, tp_dist, data, author, ladder, regime.  sum(values()) == 총점.
 
     tp_ladder_count (2026-08-15 v5): levels.tp_ladder_count (extractor 가 센
     유효 TP 단계 수, 0 = 단일 목표/사다리 미상). None 도 0~1 과 같은 -3 —
-    '미상'과 '단일 목표'가 실측에서 같은 저성과 버킷(31.7%, n=104)이었다."""
+    '미상'과 '단일 목표'가 실측에서 같은 저성과 버킷(31.7%, n=104)이었다.
+
+    adx14/bb_width_pctile (2026-08-17 F3): 시장 국면 가감(_regime_points 참고).
+    수집 시엔 None (캔들 조회 안 함) — 발송 확정 후 rep 재채점에서만 값이 실린다."""
     bd: dict = {}
 
     f = followers or 0
@@ -234,6 +262,9 @@ def score_breakdown(
     # 종결 n=189 에서 2단+ win% 48.2 vs 0~1단 31.7 (+16.5%p). NULL/0/1 모두 -3.
     bd["ladder"] = LADDER_PENALTY if (tp_ladder_count or 0) < LADDER_MIN_STEPS else 0
 
+    # 시장 국면 (2026-08-17 F3) — ADX 추세강도 + BB Width 압축·팽창
+    bd["regime"] = _regime_points(adx14, bb_width_pctile)
+
     return bd
 
 
@@ -247,6 +278,8 @@ def calculate_grade(
     author_closed_n: Optional[int] = None,
     author_closed_hits: Optional[int] = None,
     tp_ladder_count: Optional[int] = None,
+    adx14: Optional[float] = None,
+    bb_width_pctile: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
@@ -260,7 +293,8 @@ def calculate_grade(
     버킷(31.7%, n=104)이라 동일 감점. 상세는 모듈 헤더 v5 항목."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
                          current_usd_price, author_closed_n, author_closed_hits,
-                         tp_ladder_count=tp_ladder_count)
+                         tp_ladder_count=tp_ladder_count,
+                         adx14=adx14, bb_width_pctile=bb_width_pctile)
     score = float(sum(bd.values()))
 
     rr = None
@@ -278,11 +312,13 @@ def calculate_grade(
 def calculate_grade_with_breakdown(
     followers, direction, entry, stop_loss, target, current_usd_price,
     author_closed_n=None, author_closed_hits=None, tp_ladder_count=None,
+    adx14=None, bb_width_pctile=None,
 ) -> tuple:
     """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
                          current_usd_price, author_closed_n, author_closed_hits,
-                         tp_ladder_count=tp_ladder_count)
+                         tp_ladder_count=tp_ladder_count,
+                         adx14=adx14, bb_width_pctile=bb_width_pctile)
     score = float(sum(bd.values()))
     rr = None
     if entry and stop_loss and target:
@@ -302,7 +338,12 @@ def meets_min_grade(grade: str, min_grade: str) -> bool:
         return False
 
 
-def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[str, float, Optional[float]]:
+def regrade_current(
+    level: dict,
+    current_usd_price: Optional[float],
+    adx14: Optional[float] = None,
+    bb_width_pctile: Optional[float] = None,
+) -> Tuple[str, float, Optional[float]]:
     """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
 
     배경(2026-07-26 감사): calculate_grade 의 가격근접도(최대 20점)는 채점 시점
@@ -330,4 +371,6 @@ def regrade_current(level: dict, current_usd_price: Optional[float]) -> Tuple[st
         author_closed_n=level.get("author_closed_n"),
         author_closed_hits=level.get("author_closed_hits"),
         tp_ladder_count=level.get("tp_ladder_count"),
+        adx14=adx14,
+        bb_width_pctile=bb_width_pctile,
     )

@@ -997,6 +997,8 @@ def run_once(now: float | None = None) -> dict:
                     _snap_position = None
                     _snap_ma200_above = None
                     _snap_mtf = None
+                    _snap_adx = None
+                    _snap_bbw_pctile = None
                     try:
                         _pd = upbit.fetch_position_data(
                             ticker, cfg_get("http_timeout_sec"))
@@ -1015,9 +1017,17 @@ def run_once(now: float | None = None) -> dict:
                         # ATR20% (2026-08-16 Tier2) — 같은 일봉 응답 공유(추가 콜 0),
                         # 터치 스냅샷 기록 전용. 조회 실패 시 위 except 가 잡아 None.
                         _snap_atr = _pd.get("atr20_pct")
+                        # F3 (2026-08-17): ADX + BB Width 백분위 — 알림 배지 및
+                        # rep 표시 등급 재채점 입력. 필터(min_grade)는 위 재채점
+                        # (line 820)에서 이미 통과 판정 완료 — 여기서는 표시 등급만
+                        # 재조정(관찰 기간 필터 안정성 유지).
+                        _snap_adx = _pd.get("adx14")
+                        _snap_bbw_pctile = _pd.get("bb_width_pctile")
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
+                        _snap_adx = None
+                        _snap_bbw_pctile = None
                     kimchi = None
                     _snap_kimchi_delta = None
                     usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
@@ -1122,6 +1132,19 @@ def run_once(now: float | None = None) -> dict:
                             _snap_unlock_warn = _unlocks.get(coin.upper())
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 언락 경고 조회 실패(무시): %s", coin, e)
+                    # F3 (2026-08-17): rep 표시 등급을 ADX/BB 반영해 재조정.
+                    # 필터는 이미 위에서 통과했으므로 표시 등급만 갱신 — 관찰 기간
+                    # 알림 발송 여부는 종전과 동일(필터 안정성 유지, 사용자 결정).
+                    if _snap_adx is not None or _snap_bbw_pctile is not None:
+                        try:
+                            _rg, _rs, _rr = regrade_current(
+                                rep, current_usd,
+                                adx14=_snap_adx,
+                                bb_width_pctile=_snap_bbw_pctile,
+                            )
+                            rep["grade"], rep["score"] = _rg, _rs
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s rep 재채점(F3) 실패(무시): %s", coin, e)
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
@@ -1131,7 +1154,8 @@ def run_once(now: float | None = None) -> dict:
                                                  funding_rate=_snap_funding,
                                                  funding_regime_flip=_snap_funding_flip,
                                                  supply=_snap_supply,
-                                                 position=_snap_position)
+                                                 position=_snap_position,
+                                                 adx14=_snap_adx)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로

@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-16 (모닝 브리핑 미국 시황 추가 + DXY/DVOL 한국어 라벨 → DB 무결성 라운드7 3건 → 10라운드 전수검토 즉시수정 5건)  
+> 마지막 업데이트: 2026-08-17 (Tier1 3건: ETH.D/알트시즌/스테이블7d 모닝 브리핑 + BB Squeeze/ADX 등급·알림 반영)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -340,6 +340,21 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | MEDIUM | Yahoo Finance `result[]` IndexError | `monitor/macro.py:68,119` | `(result or [{}])[0]` — 빈 리스트 응답 시 IndexError 방어 |
 | 데드코드 | `secrets_status()` 미사용 함수 | `config/settings.py` | 삭제 |
 | CI위험 | `test_tradingview_live.py` CI glob 노출 | `scripts/` | `probe_tradingview_live.py` 리네임 (실네트워크 테스트 CI 제외) |
+
+## Tier1 3건 개발 이력 (2026-08-17)
+
+| 항목 | 데이터/계산 | 반영 위치 |
+|------|------------|-----------|
+| **F1: ETH.D + 알트시즌** | CoinGecko `/global`의 `market_cap_percentage.eth`, ALT.S 이미 있음 | 모닝 브리핑에 렌더 (💠 이더 점유율, 🌊 알트시즌 N) |
+| **F2: 스테이블 시총+7d 변화** | DeFiLlama `/stablecoincharts/all`, 최신 vs 7일 전 % | 모닝 브리핑에 렌더 (💵 스테이블 XB (+Y%/7d)) |
+| **F3: BB Squeeze + ADX** | `upbit.py` adx14/bb_width_pct/bb_width_percentile (일봉 1콜 공유, 추가 API 콜 0) | 알림엔 ADX≥25 배지만(📈 추세장), 등급엔 ADX+BB 둘 다 (regime 키, ±2~3점) |
+
+**F3 등급 임계** (`_regime_points`):
+- ADX ≥25 +3 (추세장), <20 -2 (횡보), 20~25 0
+- BB Width 백분위 ≤20 +2 (압축·폭발 전조), ≥80 -2 (팽창 후반), 나머지 0
+- None 폴백 = 0 (감점 아님)
+
+**필터 안정성**: F3 재채점은 발송 확정 후 rep 표시 등급에만 적용, 필터(min_grade) 통과 여부는 종전 등급 유지 → 관찰 기간(v5 08-16 배포) 알림 발송량 안정.
 
 ## 10라운드 전수검토 2차 수정 이력 (2026-08-17)
 
