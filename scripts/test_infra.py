@@ -466,6 +466,80 @@ check("MFE/MAE: 재기록 방지", abs(_row[0] - 5.2) < 0.01)
 _mc.close()
 
 
+# ─── Coinalyze 폴백 (2026-08-17) ─────────────────────────────────────
+# monitor/coinalyze.py 단위 + binance.fetch_funding_rate 폴백 체인 결합.
+# 실제 API 콜 없이 requests.get 을 몽키패치해 응답만 시뮬.
+
+from monitor import coinalyze as _coin
+from monitor import binance as _bin
+
+# 원본 백업
+_orig_get = _coin.requests.get
+_orig_bin_get = _bin.requests.get
+_orig_secret = _coin.settings.secret
+
+
+def _restore():
+    _coin.requests.get = _orig_get
+    _bin.requests.get = _orig_bin_get
+    _coin.settings.secret = _orig_secret
+
+
+class _R:
+    def __init__(self, status, body):
+        self.status_code = status; self._body = body
+    def json(self): return self._body
+
+
+# CA1: 키 미설정 시 조용히 None
+_coin.settings.secret = lambda name: ""
+check("CA1 키 미설정 시 funding None", _coin.fetch_funding_rate("BTC") is None)
+check("CA1b 키 미설정 시 OI None", _coin.fetch_open_interest("BTC") is None)
+check("CA1c 키 미설정 시 OI change None", _coin.fetch_oi_change_24h("BTC") is None)
+
+# CA2: 키 있고 정상 응답
+_coin.settings.secret = lambda name: "test_key"
+_coin.requests.get = lambda *a, **k: _R(200, [{"symbol": "BTCUSDT_PERP.A",
+                                               "value": 0.008282, "update": 1}])
+check("CA2 funding 정상 파싱", abs(_coin.fetch_funding_rate("BTC") - 0.008282) < 1e-6)
+
+_coin.requests.get = lambda *a, **k: _R(200, [{"symbol": "BTCUSDT_PERP.A",
+                                               "value": 110322.228, "update": 1}])
+check("CA2b OI 정상 파싱", abs(_coin.fetch_open_interest("BTC") - 110322.228) < 0.01)
+
+# CA3: OI history 24h 변화율 계산
+_coin.requests.get = lambda *a, **k: _R(200, [{"symbol": "BTCUSDT_PERP.A",
+    "history": [{"t": 1, "o": 100, "h": 100, "l": 100, "c": 100.0},
+                {"t": 2, "o": 100, "h": 100, "l": 100, "c": 118.4}]}])
+check("CA3 OI 24h 변화율(+18.4%)",
+      abs(_coin.fetch_oi_change_24h("BTC") - 18.4) < 0.01)
+
+# CA3b: history 표본 부족 시 None
+_coin.requests.get = lambda *a, **k: _R(200, [{"symbol": "BTCUSDT_PERP.A",
+                                               "history": [{"t": 1, "c": 100}]}])
+check("CA3b history 1건 뿐이면 None", _coin.fetch_oi_change_24h("BTC") is None)
+
+# CA4: HTTP 오류 시 None
+_coin.requests.get = lambda *a, **k: _R(429, {"message": "rate limit"})
+check("CA4 HTTP 429 → None", _coin.fetch_funding_rate("BTC") is None)
+
+# CA5: binance.fetch_funding_rate 최종 폴백 — 위 4개(Binance/CG/Bybit/OKX)
+# 모두 실패해도 Coinalyze 성공하면 반환. Binance 경로들은 requests.get 을 다 실패로.
+_bin.requests.get = lambda *a, **k: _R(500, {})  # Binance/Bybit/OKX 전 경로 실패
+# CoinGecko 캐시는 별도 함수 — 강제로 None 반환
+_orig_cg_map = _bin._coingecko_binance_funding_map
+_bin._coingecko_binance_funding_map = lambda t: None
+# Coinalyze만 성공
+_coin.requests.get = lambda *a, **k: _R(200, [{"symbol": "BTCUSDT_PERP.A",
+                                               "value": 0.005, "update": 1}])
+_rate = _bin.fetch_funding_rate("BTC", 5.0)
+check("CA5 위 4개 폴백 실패 → Coinalyze 최종 폴백 성공",
+      _rate is not None and abs(_rate - 0.005) < 1e-6)
+_bin._coingecko_binance_funding_map = _orig_cg_map
+
+_restore()
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

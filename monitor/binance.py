@@ -118,11 +118,22 @@ def _coingecko_binance_funding_map(timeout: float) -> Optional[dict]:
 def fetch_deriv_snapshot(symbol: str, timeout: float) -> Optional[dict]:
     """CoinGecko(Binance) 파생 스냅샷 {fr, oi, pchg} — 없는 필드는 키 부재.
     수급 판정(derive_supply_verdict)과 OI 스냅샷 적재의 단일 출처.
-    실패/미상장 시 None."""
+    CoinGecko 미상장 → Coinalyze 폴백(2026-08-17, 30+ 파생 거래소 통합).
+    Coinalyze는 pchg를 별도 조회 필요 → oi/fr만 채운다(pchg는 None)."""
     m = _coingecko_binance_funding_map(timeout)
-    if not m:
-        return None
-    return m.get(f"{symbol.upper()}USDT")
+    snap = m.get(f"{symbol.upper()}USDT") if m else None
+    if snap:
+        return snap
+    # Coinalyze 폴백 — CoinGecko에 없는 소형 알트(주로 MEXC/Bitget/KuCoin 상장)
+    try:
+        from monitor import coinalyze  # 지연 로드
+        oi = coinalyze.fetch_open_interest(symbol, timeout)
+        fr = coinalyze.fetch_funding_rate(symbol, timeout)
+        if oi is not None or fr is not None:
+            return {"fr": fr, "oi": oi, "pchg": None}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[deriv] Coinalyze %s 폴백 실패: %s", symbol, e)
+    return None
 
 
 # 수급 판정 임계 (2026-08-07 사용자 결정: 펀딩+OI 를 결론 한 줄로 합성)
@@ -346,6 +357,16 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
             logger.warning("[funding] OKX %s HTTP %s", pair, r.status_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] OKX %s 실패: %s", pair, e)
+    # Coinalyze (2026-08-17) — 30+ 파생 거래소 통합 최종 폴백. 위 4개 모두 실패
+    # (=Binance/CoinGecko/Bybit/OKX 전부 미상장·차단)한 소형 알트만 도달.
+    # 이미 %단위 값 반환(*100 불필요). 키 미설정 시 조용히 None.
+    try:
+        from monitor import coinalyze  # 지연 로드 — 순환 임포트 회피
+        rate = coinalyze.fetch_funding_rate(symbol, timeout)
+        if rate is not None:
+            return rate
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[funding] Coinalyze %s 실패: %s", pair, e)
     return None
 
 

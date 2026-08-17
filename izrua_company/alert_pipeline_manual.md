@@ -382,6 +382,22 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 **첫 실호출 검증(2026-08-17)**: VIX 14.63, 10Y 4.63% 정상 조회.
 
+## Coinalyze 파생 폴백 (2026-08-17)
+
+| 항목 | 데이터 | 반영 위치 |
+|------|--------|-----------|
+| **Coinalyze 헬퍼** | `fetch_funding_rate()` / `fetch_open_interest()` / `fetch_oi_change_24h()` — 무료·40 req/min·이메일만, 키는 `.env` COINALYZE_API_KEY | `monitor/coinalyze.py` (신설) |
+| **펀딩 최종 폴백** | Binance→CoinGecko→Bybit→OKX 전 경로 실패 시 Coinalyze로 마지막 시도. 30+ 파생 거래소 통합 → 소형 알트 커버리지 확장 | `binance.fetch_funding_rate` 체인 확장 |
+| **OI/파생 스냅샷 폴백** | CoinGecko 미상장 알트 → Coinalyze `fetch_open_interest`/`fetch_funding_rate`로 `{fr, oi, pchg=None}` 반환 | `binance.fetch_deriv_snapshot` |
+
+**활성 조건**: 기존 4개 소스가 모두 결측인 경우에만 호출 → 주 경로가 정상 동작하는 대부분 케이스에서 API 콜 0. `touch_funding_rate`/`touch_oi_pct` 결측률 감소 = 등급 산식·수급 판정 축의 데이터 완성도 상승.
+
+**단위 검증(2026-08-17 실측)**: Coinalyze value 는 이미 %단위(BTC ~0.008, XRP ~-0.012 등). 기존 소스들은 raw decimal → `*100` 로 %단위 변환하는데, Coinalyze는 원시값 그대로 반환해 소스 간 단위 일치.
+
+**필터 안정성**: 기존 함수 시그니처·반환 형식 불변. 알림 필터·등급 산식 무영향.
+
+**회귀 테스트**: infra 6건(키 미설정·정상 파싱 3개·HTTP 오류·최종 폴백 체인).
+
 ## 10라운드 전수검토 2차 수정 이력 (2026-08-17)
 
 | 심각도 | 버그 | 위치 | 수정 |
