@@ -120,7 +120,7 @@ macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: 4.23
 with db.connect(TEST_DB) as conn:
     text_fred = morning_brief.build_brief(conn, AT_9, timeout=1.0)
 check("B3m VIX 단독 줄", "VIX 18.4" in text_fred)
-check("B3n 미국 10년 국채금리 단독 줄", "미국 10년 국채금리 4.23%" in text_fred)
+check("B3n 미국 10년 국채금리 단독 줄", "미국 10년 국채금리 4.23% (중립)" in text_fred)
 # 결측 시 행 생략
 macro_mod.fetch_vix = lambda conn, timeout=10.0: None
 macro_mod.fetch_ust_10y = lambda conn, timeout=10.0: None

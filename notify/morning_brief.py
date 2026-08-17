@@ -205,10 +205,18 @@ def build_brief(conn, now: float, timeout: float) -> str:
         logger.warning("[brief] VIX 실패: %s", e)
 
     # 미 10년 국채 수익률 (FRED 무료) — 위험자산 밸류에이션 벤치마크
+    # 라벨은 코인 관점 관례: 금리 낮으면 위험자산 유리, 높으면 안전자산 대체수단
+    # 매력↑ → 코인 매수세 약화. 임계 3.5%/4.5%는 최근 5년 분포 중앙~상위 근처.
     try:
         y10 = macro_mod.fetch_ust_10y(conn, timeout)
         if y10 is not None:
-            lines.append(f"🏦 미국 10년 국채금리 {y10:.2f}%")
+            if y10 <= 3.5:
+                y10_tag = "매수 유리"
+            elif y10 >= 4.5:
+                y10_tag = "매수 부담"
+            else:
+                y10_tag = "중립"
+            lines.append(f"🏦 미국 10년 국채금리 {y10:.2f}% ({y10_tag})")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 10Y 국채 실패: %s", e)
 
