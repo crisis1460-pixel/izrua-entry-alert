@@ -208,7 +208,7 @@ def build_brief(conn, now: float, timeout: float) -> str:
     try:
         y10 = macro_mod.fetch_ust_10y(conn, timeout)
         if y10 is not None:
-            lines.append(f"🏦 미10년물 {y10:.2f}%")
+            lines.append(f"🏦 미국 10년 국채금리 {y10:.2f}%")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 10Y 국채 실패: %s", e)
 
