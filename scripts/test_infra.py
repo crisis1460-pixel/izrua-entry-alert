@@ -679,6 +679,65 @@ check("CM7c 중립(20~80) → 배지 없음", "온체인" not in _txt)
 _cm.requests.get = _orig_cm_get
 
 
+# ─── StockTwits 소셜 심리 (2026-08-17) ──────────────────────────────
+from monitor import stocktwits as _st
+_orig_st_get = _st.requests.get
+
+# ST1: 정상 응답 집계 (Bullish 10 / Bearish 5 → ratio 10/15 = 0.667)
+_st.requests.get = lambda *a, **k: _R(200, {"messages": [
+    {"entities": {"sentiment": {"basic": "Bullish"}}} for _ in range(10)
+] + [
+    {"entities": {"sentiment": {"basic": "Bearish"}}} for _ in range(5)
+] + [
+    {"entities": None} for _ in range(5)
+]})
+_r = _st.fetch_sentiment_stats("BTC")
+check("ST1 정상 파싱 (Bullish 10 · Bearish 5)",
+      _r["bullish"] == 10 and _r["bearish"] == 5
+      and abs(_r["bullish_ratio"] - 0.667) < 0.001)
+
+# ST2: 태그 표본 <5 → bullish_ratio None
+_st.requests.get = lambda *a, **k: _R(200, {"messages": [
+    {"entities": {"sentiment": {"basic": "Bullish"}}} for _ in range(2)
+] + [
+    {"entities": None} for _ in range(28)
+]})
+_r = _st.fetch_sentiment_stats("XYZ")
+check("ST2 태그 표본 <5 → bullish_ratio None (판정 유보)",
+      _r["bullish"] == 2 and _r["bullish_ratio"] is None)
+
+# ST3: 404 심볼 미존재 (WEMIX/KAIA 등) → None
+_st.requests.get = lambda *a, **k: _R(404, {})
+check("ST3 404 심볼 미존재 → None", _st.fetch_sentiment_stats("KAIA") is None)
+
+# ST4: 빈 messages → None
+_st.requests.get = lambda *a, **k: _R(200, {"messages": []})
+check("ST4 빈 messages → None", _st.fetch_sentiment_stats("BTC") is None)
+
+# ST5: 등급 반영
+_hi = _gr._social_sentiment_points(0.80)
+_lo = _gr._social_sentiment_points(0.20)
+_mid = _gr._social_sentiment_points(0.50)
+_none = _gr._social_sentiment_points(None)
+check("ST5 소셜 극단 ±1 (≥0.75 +1 / ≤0.30 -1 / 중간·None 0)",
+      _hi == 1.0 and _lo == -1.0 and _mid == 0.0 and _none == 0.0)
+
+# ST6: telegram 배지 극단만 노출
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       stwits_bullish_ratio=0.85)
+check("ST6 매수세 강함(≥0.75) 배지 표시(매수 유리)",
+      "소셜 매수세" in _txt and "매수 유리" in _txt)
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       stwits_bullish_ratio=0.20)
+check("ST6b 매도세 강함(≤0.30) 배지 표시(매수 부담)",
+      "소셜 매도세" in _txt and "매수 부담" in _txt)
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       stwits_bullish_ratio=0.50)
+check("ST6c 중립(0.30~0.75) → 배지 없음", "소셜" not in _txt)
+
+_st.requests.get = _orig_st_get
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

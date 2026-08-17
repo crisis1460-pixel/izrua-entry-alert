@@ -430,6 +430,21 @@ check("CM2 breakdown 'onchain_addr' 키 격리 + regrade 전파",
       and eq(sum(_bd_cm.values()), _base_r + 1)
       and eq(regrade_current(_lv_r, 100.0, active_addr_pctile=85)[1], _base_r + 1))
 
+# StockTwits 소셜 심리 등급 반영 (2026-08-17)
+check("ST1 소셜 bullish_ratio 극단 ±1 (≥0.75 +1 / ≤0.30 -1 / 중간 0)",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, stwits_bullish_ratio=0.80)[1], _base_r + 1)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, stwits_bullish_ratio=0.20)[1], _base_r - 1)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, stwits_bullish_ratio=0.50)[1], _base_r))
+_bd_st = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, stwits_bullish_ratio=0.80)
+check("ST2 breakdown 'social' 키 격리 + regrade 전파",
+      _bd_st["social"] == 1.0
+      and eq(sum(_bd_st.values()), _base_r + 1)
+      and eq(regrade_current(_lv_r, 100.0, stwits_bullish_ratio=0.80)[1], _base_r + 1))
+
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

@@ -458,7 +458,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  funding_regime_flip: dict = None, supply: tuple = None,
                  position: tuple = None, kimchi_delta: float = None,
                  adx14: float = None, dex_stats: dict = None,
-                 active_addr_pctile: float = None) -> str:
+                 active_addr_pctile: float = None,
+                 stwits_bullish_ratio: float = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -591,6 +592,17 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
             positive_badges.append(f"⛓ 온체인 활발 {active_addr_pctile:.0f}위 (매수 유리)")
         elif active_addr_pctile <= 20:
             risk_badges.append(f"⛓ 온체인 저조 {active_addr_pctile:.0f}위 (매수 부담)")
+
+    # StockTwits 소셜 심리 (2026-08-17). SOL/SUI/APT/TAO/WLD/TIA 등 최근 유행 알트
+    # 커버 (Coin Metrics 미커버 자산 상당수 보완). 태그된 표본 <5는 이미 fetch
+    # 단계에서 None 반환. ≥0.75 강한 매수 심리 / ≤0.30 강한 매도 심리.
+    if stwits_bullish_ratio is not None:
+        if stwits_bullish_ratio >= 0.75:
+            positive_badges.append(
+                f"💬 소셜 매수세 {stwits_bullish_ratio*100:.0f}% (매수 유리)")
+        elif stwits_bullish_ratio <= 0.30:
+            risk_badges.append(
+                f"💬 소셜 매도세 {(1-stwits_bullish_ratio)*100:.0f}% (매수 부담)")
 
     # 추세장 (2026-08-17 F3): ADX(14) ≥25 일 때만 표시. 라벨 없는 정보 배지.
     if adx14 is not None and adx14 >= 25:

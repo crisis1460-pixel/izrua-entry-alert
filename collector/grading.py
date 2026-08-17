@@ -160,6 +160,22 @@ def tp_distance_points(direction: str, entry: Optional[float], target: Optional[
     return 0.0
 
 
+def _social_sentiment_points(stwits_bullish_ratio: Optional[float]) -> float:
+    """StockTwits 소셜 심리 가감점 (2026-08-17).
+
+    bullish_ratio (0~1) = Bullish / (Bullish + Bearish) — 태그된 표본 기준.
+    ≥0.75 강한 매수 심리 +1 (매수 유리)
+    ≤0.30 강한 매도 심리 -1 (매수 부담)
+    나머지·None(표본 부족·심볼 미존재) 0. 소셜은 노이즈 축이라 가중치 낮음(±1)."""
+    if stwits_bullish_ratio is None:
+        return 0.0
+    if stwits_bullish_ratio >= 0.75:
+        return 1.0
+    if stwits_bullish_ratio <= 0.30:
+        return -1.0
+    return 0.0
+
+
 def _onchain_activity_points(active_addr_pctile: Optional[float]) -> float:
     """Coin Metrics 활성주소 30d 백분위 가감점 (2026-08-17).
 
@@ -234,6 +250,7 @@ def score_breakdown(
     dex_buy_ratio: Optional[float] = None,
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
+    stwits_bullish_ratio: Optional[float] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
@@ -310,6 +327,9 @@ def score_breakdown(
     # Coin Metrics 활성주소 백분위 (2026-08-17) — 무료 티어 커버 자산만 값 있음
     bd["onchain_addr"] = _onchain_activity_points(active_addr_pctile)
 
+    # StockTwits 소셜 심리 (2026-08-17) — bullish_ratio 극단만 ±1
+    bd["social"] = _social_sentiment_points(stwits_bullish_ratio)
+
     return bd
 
 
@@ -328,6 +348,7 @@ def calculate_grade(
     dex_buy_ratio: Optional[float] = None,
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
+    stwits_bullish_ratio: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
@@ -345,7 +366,8 @@ def calculate_grade(
                          adx14=adx14, bb_width_pctile=bb_width_pctile,
                          dex_buy_ratio=dex_buy_ratio,
                          dex_liquidity_usd=dex_liquidity_usd,
-                         active_addr_pctile=active_addr_pctile)
+                         active_addr_pctile=active_addr_pctile,
+                         stwits_bullish_ratio=stwits_bullish_ratio)
     score = float(sum(bd.values()))
 
     rr = None
@@ -373,7 +395,8 @@ def calculate_grade_with_breakdown(
                          adx14=adx14, bb_width_pctile=bb_width_pctile,
                          dex_buy_ratio=dex_buy_ratio,
                          dex_liquidity_usd=dex_liquidity_usd,
-                         active_addr_pctile=active_addr_pctile)
+                         active_addr_pctile=active_addr_pctile,
+                         stwits_bullish_ratio=stwits_bullish_ratio)
     score = float(sum(bd.values()))
     rr = None
     if entry and stop_loss and target:
@@ -401,6 +424,7 @@ def regrade_current(
     dex_buy_ratio: Optional[float] = None,
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
+    stwits_bullish_ratio: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
 
@@ -434,4 +458,5 @@ def regrade_current(
         dex_buy_ratio=dex_buy_ratio,
         dex_liquidity_usd=dex_liquidity_usd,
         active_addr_pctile=active_addr_pctile,
+        stwits_bullish_ratio=stwits_bullish_ratio,
     )

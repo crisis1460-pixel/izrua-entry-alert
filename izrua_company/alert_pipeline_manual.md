@@ -382,6 +382,29 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 **첫 실호출 검증(2026-08-17)**: VIX 14.63, 10Y 4.63% 정상 조회.
 
+## StockTwits 소셜 심리 (2026-08-17)
+
+| 항목 | 데이터 | 반영 위치 |
+|------|--------|-----------|
+| **StockTwits 헬퍼** | `fetch_sentiment_stats(coin, timeout)` — 무료·무등록·200 req/hr, UA 헤더만 필요. 심볼 뒤에 `.X` 접미 (BTC.X, PEPE.X). 최신 30건 스트림에서 Bullish/Bearish 태그 집계 | `monitor/stocktwits.py` (신설) |
+| **커버 특성** | SOL/SUI/APT/TAO/WLD/TIA/PEPE/SHIB 등 최근 유행 알트 커버 강함 (Coin Metrics 미커버 자산 상당수 보완). WEMIX/KAIA 등 국내 알트는 심볼 미존재 or 태그 없음 → 자연 스킵 |
+| **노이즈 컷** | 태그된 표본 <5건 시 `bullish_ratio=None` (판정 유보) | `_MIN_TAGGED=5` |
+| **터치 시점 조회** | 발송 확정 터치에만 1콜. 15/일 × 1콜 = 15콜/일 (200 req/hr 여유) | `monitor/price_check.py` |
+| **알림 배지** | ≥0.75 `💬 소셜 매수세 N% (매수 유리)` / ≤0.30 `💬 소셜 매도세 N% (매수 부담)`. 중립 무표기 | `notify/telegram.py` E1 리스크/긍정 그룹 자동 배치 |
+| **등급 반영** | `_social_sentiment_points(ratio)` — ≥0.75 +1 / ≤0.30 -1 / None 0. 소셜은 노이즈 축이라 가중치 낮음(±1). breakdown 'social' 키 | `collector/grading.py` |
+| **DB 섀도** | `touch_stwits_bullish_ratio` (기록 전용, IS NULL 가드) | `storage/db.py` |
+
+**Reddit OAuth 대체 배경**: Reddit "Responsible Builder Policy" 로 신규 앱 생성 반복 실패 → StockTwits 로 전환 (사용자 결정, 2026-08-17). 사용자 준비 작업 0 + Bullish/Bearish 태그 이미 존재 → 노이즈 필터링 부담 완전 회피.
+
+**커버 상보성 (Coin Metrics + StockTwits)**:
+- Coin Metrics: BTC/ETH/XRP/ADA/DOGE/LTC 등 레거시 L1 138종 (활성 주소)
+- StockTwits: SOL/SUI/APT/TAO/WLD/TIA/PEPE/SHIB 등 유행 알트 (소셜 심리)
+- 두 축은 데이터 종류·커버 자산이 상보 → 유니버스 300 상당수 커버
+
+**필터 안정성**: rep 재채점만, min_grade 필터는 종전 유지. 관찰 기간 알림 발송량 안정.
+
+**회귀 테스트**: infra 8건(정상 파싱·표본 부족·404·빈 응답·등급·배지 3종) + grading 2건. infra 107·grading 74 통과.
+
 ## Coin Metrics 온체인 활성주소 (2026-08-17)
 
 | 항목 | 데이터 | 반영 위치 |

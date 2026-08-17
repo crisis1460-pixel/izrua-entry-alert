@@ -364,6 +364,9 @@ _OUTCOME_COLUMNS = {
     # Coin Metrics 활성주소 30d 백분위 (2026-08-17) — 무료 티어 커버 자산
     # (BTC/ETH/XRP 등 18종)만 값이 실림. 나머지는 NULL(자연 스킵).
     "touch_active_addr_pctile": "REAL",
+    # StockTwits 소셜 심리 (2026-08-17) — bullish_ratio (0~1) 또는 NULL.
+    # 태그된 표본 5건 미만·심볼 미존재 시 NULL(자연 스킵).
+    "touch_stwits_bullish_ratio": "REAL",
     # 글 발행→터치 경과 시간(h) 비정규화 = (터치시각-수집시각)/3600 +
     # 수집시점 글나이(post_age_minutes)/60. 신선도 창(168h→96-120h) 조이기
     # 근거 데이터(시들음 분석) — 레벨별 값(post_age_minutes 가 레벨마다 다름).
@@ -811,7 +814,8 @@ def record_touch_snapshot(conn, rows: list,
                           dex_liquidity_usd: Optional[float] = None,
                           dex_volume_24h_usd: Optional[float] = None,
                           dex_buy_ratio: Optional[float] = None,
-                          active_addr_pctile: Optional[float] = None) -> None:
+                          active_addr_pctile: Optional[float] = None,
+                          stwits_bullish_ratio: Optional[float] = None) -> None:
     """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 + 08-16 Tier2) — **기록 전용**.
 
     rows: [(level_id, grade, score, tp_usd, post_age_hours,
@@ -922,6 +926,12 @@ def record_touch_snapshot(conn, rows: list,
             f"UPDATE levels SET touch_active_addr_pctile=? "
             f"WHERE id IN ({ph}) AND touch_active_addr_pctile IS NULL",
             (float(active_addr_pctile), *ids))
+    # StockTwits 소셜 심리 (2026-08-17) — 클러스터 공통.
+    if stwits_bullish_ratio is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_stwits_bullish_ratio=? "
+            f"WHERE id IN ({ph}) AND touch_stwits_bullish_ratio IS NULL",
+            (float(stwits_bullish_ratio), *ids))
 
 
 def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:
