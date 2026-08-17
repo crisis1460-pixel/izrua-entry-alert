@@ -30,6 +30,23 @@ logger = logging.getLogger("alert.news_brief")
 _NEWS_KIND = "news"
 _TEXT_MAX = 250   # 원문 요약 상한(자)
 
+# 일반 영단어와 겹치는 심볼 — 뉴스 본문에서 코인이 아닌 맥락으로 자주 등장해 오탐.
+# 매매 시그널(parse_setup 성공)에는 영향 없음 — 뉴스 경로에서만 차단.
+_AMBIGUOUS_SYMBOLS = frozenset({
+    "OPEN", "SIGN", "GAS", "ID", "T", "W", "F", "G", "A",
+    "RE", "LA", "ME", "AI", "IO", "OP",
+    "HOME", "SUPER", "PUMP", "RED", "SKY", "TREE",
+    "MASK", "SUN", "MOVE", "ERA",
+})
+
+# 광고·프로모션 키워드 — 이 패턴이 본문에 있으면 뉴스가 아니라 홍보글.
+_PROMO_KEYWORDS = (
+    "bonus", "airdrop", "에어드롭", "보너스", "giveaway", "referral",
+    "join now", "sign up", "register now", "limited offer", "exclusive offer",
+    "MT5", "MT4", "자동화 시스템", "VIP channel", "premium channel",
+    "free trial", "discount code", "promo code",
+)
+
 # level_ids 필드 재사용 계약 (2026-08-17): news 알림은 매매 레벨 개념이 없어
 # alerts_log.level_ids 에 '단일 원소 = 채널명 문자열' 로 저장한다. record_alert
 # 는 정렬+CSV join 하므로 실제 저장값은 그대로 채널명. _rate_limit_ok 의 채널당
@@ -119,6 +136,10 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     if not settings.get("news_alert_enabled"):
         return "skipped"
 
+    if symbol.upper() in _AMBIGUOUS_SYMBOLS:
+        logger.debug("[news] %s 모호 심볼 스킵", symbol)
+        return "skipped"
+
     # title+description 결합 (2026-08-17 리뷰): 종전 description 우선 단일 선택은
     # description 이 짧고 title 이 헤드라인인 채널(BitcoinBullets 등)에서 조용히
     # 스킵. 심볼 매칭도 run_collect 에서 두 필드 결합으로 하므로 여기도 통일.
@@ -127,6 +148,11 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     text = (title + "\n" + desc).strip() if title and desc else (title or desc)
     min_len = settings.get("news_alert_min_length")
     if len(text) < min_len:
+        return "skipped"
+
+    text_lower = text.lower()
+    if any(kw in text_lower for kw in _PROMO_KEYWORDS):
+        logger.debug("[news] %s 프로모션 콘텐츠 스킵", symbol)
         return "skipped"
 
     now = now if now is not None else time.time()

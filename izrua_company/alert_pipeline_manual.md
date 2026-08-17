@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-17 (뉴스 한글 번역 Papago 통합)  
+> 마지막 업데이트: 2026-08-18 (뉴스 오탐 필터 추가)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -423,6 +423,14 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | **통합 위치** | `news_brief.maybe_send_news_brief()` → `_summary()` 후 `translate_en_ko()` 호출 → `render_news_brief()` |
 | **캐시** | 인메모리 24h TTL (동일 원문 재번역 방지) |
 | **장애 안전** | 번역 전 경로 실패 시 원문 영어 그대로 발송 (알림 누락 없음) |
+
+## 뉴스 오탐 필터 (2026-08-18)
+
+| 항목 | 설명 |
+|------|------|
+| **모호 심볼 차단** | OPEN, SIGN, GAS, ID, T, W 등 20개 일반 영단어 심볼을 뉴스 경로에서 제외 (매매 시그널 무영향) |
+| **프로모션 필터** | bonus, airdrop, MT5, VIP channel 등 광고 키워드 포함 시 스킵 |
+| **위치** | `notify/news_brief.py` — `_AMBIGUOUS_SYMBOLS` + `_PROMO_KEYWORDS` |
 
 ## FRED 매크로 통합 (2026-08-17)
 
