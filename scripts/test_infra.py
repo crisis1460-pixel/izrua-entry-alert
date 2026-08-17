@@ -591,24 +591,24 @@ _base_rep = _base_cluster[0]
 # 저유동
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 50_000, "buy_ratio_24h": 0.5})
-check("DX4 저유동성 <100k$ 배지 표시",
-      "DEX 유동성 낮음" in _txt and "50k$" in _txt)
-# 매수 우위
+check("DX4 저유동성 <100k$ 배지 표시(매수 주의 라벨)",
+      "DEX 저유동" in _txt and "50k$" in _txt and "매수 주의" in _txt)
+# 매수세 강함
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.70})
-check("DX4b 매수 우위 ≥65% 배지 표시",
-      "DEX 매수 우위" in _txt and "70%" in _txt)
-# 매도 우위
+check("DX4b 매수세 ≥65% 배지 표시(매수 유리 라벨)",
+      "DEX 매수세" in _txt and "70%" in _txt and "매수 유리" in _txt)
+# 매도세 강함
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.30})
-check("DX4c 매도 우위 (buy_ratio ≤35%) 배지 표시",
-      "DEX 매도 우위" in _txt and "70%" in _txt)  # (1-0.30)*100 = 70
+check("DX4c 매도세 (buy_ratio ≤35%) 배지 표시(매수 부담 라벨)",
+      "DEX 매도세" in _txt and "70%" in _txt and "매수 부담" in _txt)  # (1-0.30)*100 = 70
 # 중립 = 배지 없음
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.50})
-check("DX4d 중립(매수 우위 미달·유동성 충분) → DEX 배지 없음",
-      "DEX 매수 우위" not in _txt and "DEX 매도 우위" not in _txt
-      and "DEX 유동성" not in _txt)
+check("DX4d 중립(매수세 미달·유동성 충분) → DEX 배지 없음",
+      "DEX 매수세" not in _txt and "DEX 매도세" not in _txt
+      and "DEX 저유동" not in _txt)
 # dex_stats=None → 배지 미표시
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats=None)

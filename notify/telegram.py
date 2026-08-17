@@ -577,17 +577,21 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # DEX 온체인 배지 (2026-08-17) — 저유동/매수·매도 우위만 노출(관성 지표 무표기).
     # 매핑 없는 네이티브 코인(XRP/ADA/BTC 등) 또는 매핑 실패 시 dex_stats=None
     # → 배지 미표시(형평성 이슈 없음). 임계는 등급 산식 _dex_points 와 동일:
-    # 유동성 <100k$ 저유동 경고, buy_ratio ≥0.65 매수 우위, ≤0.35 매도 우위.
+    # 유동성 <100k$ 저유동 경고, buy_ratio ≥0.65 매수세 강함, ≤0.35 매도세 강함.
+    # 매수자 관점 라벨(FRED/DXY/VIX/10Y 와 통일 — 매수 유리/부담/주의):
+    #   🟢 매수세 강함 → 관심 유입 = 매수 유리
+    #   🔴 매도세 강함 → 진입 즉시 반등 어려움 = 매수 부담
+    #   💧 저유동 → 진입 후 exit 어려움·러그 리스크 = 매수 주의
     if dex_stats:
         _liq = dex_stats.get("liquidity_usd")
         _bratio = dex_stats.get("buy_ratio_24h")
         if _liq is not None and _liq < 100_000:
-            lines.append(f"💧 DEX 유동성 낮음 ({_liq/1000:.0f}k$)")
+            lines.append(f"💧 DEX 저유동 {_liq/1000:.0f}k$ (매수 주의)")
         if _bratio is not None:
             if _bratio >= 0.65:
-                lines.append(f"🟢 DEX 매수 우위 ({_bratio*100:.0f}%)")
+                lines.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% (매수 유리)")
             elif _bratio <= 0.35:
-                lines.append(f"🔴 DEX 매도 우위 ({(1-_bratio)*100:.0f}%)")
+                lines.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% (매수 부담)")
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는
