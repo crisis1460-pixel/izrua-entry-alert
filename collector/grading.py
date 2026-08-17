@@ -387,6 +387,7 @@ def calculate_grade_with_breakdown(
     author_closed_n=None, author_closed_hits=None, tp_ladder_count=None,
     adx14=None, bb_width_pctile=None,
     dex_buy_ratio=None, dex_liquidity_usd=None,
+    active_addr_pctile=None, stwits_bullish_ratio=None,
 ) -> tuple:
     """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
