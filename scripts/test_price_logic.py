@@ -2858,7 +2858,13 @@ check("VS4b 새 지표 렌더 - 최근 1시간/20시간 평균 라벨",
       and "24h" not in _vs_msg and "7일" not in _vs_msg)
 check("VS4c TP 스냅샷 없는 행(NULL) - TP 행 생략", "TP:" not in _vs_msg)
 
-# VS5: ratio < 5 는 미발송 (경계 미만)
+# VS5: ratio < multiplier 는 미발송 (경계 미만).
+# 2026-08-17 리뷰 대응: 종전 4.9x/5.0x 하드코딩은 완화(3.0) 후 stale — 실제 SETTINGS
+# 값을 override 해 임계 재조정(2.0/3.0)에도 회귀가 잡히게 한다.
+_vs_saved_mult = settings.SETTINGS["volume_spike_multiplier"]
+_vs_saved_min = settings.SETTINGS["volume_spike_min_krw_60m"]
+settings.SETTINGS["volume_spike_multiplier"] = 5.0   # VS5/VS5b 는 5.0 임계 전제
+settings.SETTINGS["volume_spike_min_krw_60m"] = 200_000_000
 with db.connect(_VS_DB) as conn:
     db.add_volume_watch(conn, "KRW-VSB", "VSB", _vs_now,
                         band_low_krw=900.0, band_high_krw=1200.0)
@@ -2888,13 +2894,16 @@ with db.connect(_VS_DB) as conn:
     db.add_volume_watch(conn, "KRW-VSC", "VSC", _vs_now,
                         band_low_krw=90.0, band_high_krw=120.0)
     conn.commit()
-_vs_vol["val"] = {"last_60m": 3e7, "avg_20h": 5e6}    # 6.0x 지만 0.3억 < 하한 2억
+_vs_vol["val"] = {"last_60m": 3e7, "avg_20h": 5e6}    # 6.0x 지만 0.3억 < 하한 2억(override)
 _vs_run({"KRW-VSC": 100.0})
 check("VS6 저유동 절대 하한 가드 - 6.0x 여도 미발송",
       len(sent_messages) == sent_before_vs + 2 and _vs_row("KRW-VSC")["alerted"] == 0)
 with db.connect(_VS_DB) as conn:   # 다음 케이스 오염 방지 - 활성 잔여 행 정리
     db.remove_volume_watch(conn, "KRW-VSC")
     conn.commit()
+# VS5~VS6 임계 override 복원 — 이후 VS7+ 는 SETTINGS 원값 사용
+settings.SETTINGS["volume_spike_multiplier"] = _vs_saved_mult
+settings.SETTINGS["volume_spike_min_krw_60m"] = _vs_saved_min
 
 # VS7: TP1 위 이탈(현재가 > band_high) - 행 삭제·무알림·거래량 API 미호출
 with db.connect(_VS_DB) as conn:

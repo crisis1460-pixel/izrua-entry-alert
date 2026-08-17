@@ -29,27 +29,44 @@ logger = logging.getLogger("alert.news_brief")
 _NEWS_KIND = "news"
 _TEXT_MAX = 250   # 원문 요약 상한(자)
 
+# level_ids 필드 재사용 계약 (2026-08-17): news 알림은 매매 레벨 개념이 없어
+# alerts_log.level_ids 에 '단일 원소 = 채널명 문자열' 로 저장한다. record_alert
+# 는 정렬+CSV join 하므로 실제 저장값은 그대로 채널명. _rate_limit_ok 의 채널당
+# 상한 SELECT 도 `level_ids=? (channel)` 로 raw equality 매칭. 이 계약을 깨는
+# 리팩터(JSON 배열 저장, 다중 채널 aggregation 등)는 여기와 storage/db.py
+# record_alert 두 파일 동시 수정 필요. 별도 news_log 테이블 신설이 정공법이나
+# 4개 필드 알림 규모라 재사용 유지.
+
+# 회차 단위 module-level short-circuit (2026-08-17 효율 개선): 상한 도달 후
+# 남은 후보 전부 skip 하면서도 매번 3 SELECT 를 태우던 문제 방지. 회차마다
+# maybe_send_news_brief 첫 호출 시 오늘 카운트 1회 조회 후 캐시.
+_SESSION_STATE = {"day": None, "global_reached": False, "ch_reached": set()}
+
+
+def _reset_session_state(today: str) -> None:
+    """새 KST 일 진입 시 세션 캐시 리셋."""
+    if _SESSION_STATE["day"] != today:
+        _SESSION_STATE["day"] = today
+        _SESSION_STATE["global_reached"] = False
+        _SESSION_STATE["ch_reached"] = set()
+
 
 def _rate_limit_ok(conn, coin: str, channel: str, now: float) -> tuple:
-    """(허용여부, 사유) — 하루 상한·채널 상한·코인 24h 상한 3중 게이트."""
+    """(허용여부, 사유) — 3중 게이트. 순서: 코인 24h → 채널 → 글로벌 (효율).
+    가장 자주 트립되는 게이트(같은 코인 재게시)를 먼저 짚어 short-circuit."""
     today = day_kst(now)
-    max_global = settings.get("news_alert_max_global_per_day") or 5
-    max_ch = settings.get("news_alert_max_per_channel_per_day") or 3
-    coin_cooldown_h = settings.get("news_alert_coin_cooldown_hours") or 24
+    _reset_session_state(today)
+    max_global = settings.get("news_alert_max_global_per_day")
+    max_ch = settings.get("news_alert_max_per_channel_per_day")
+    coin_cooldown_h = settings.get("news_alert_coin_cooldown_hours")
 
-    n_global = db.count_all_alerts_today(conn, today, kind=_NEWS_KIND)
-    if n_global >= max_global:
-        return False, f"글로벌 상한 {max_global}건 도달({n_global})"
+    # 회차 단위 도달 플래그 — 상한 도달 후 남은 후보에 3 SELECT 반복 방지
+    if _SESSION_STATE["global_reached"]:
+        return False, "글로벌 상한(세션 캐시)"
+    if channel in _SESSION_STATE["ch_reached"]:
+        return False, f"채널({channel}) 상한(세션 캐시)"
 
-    # 채널당 상한 — level_ids 에 채널명을 문자열로 저장하는 관례 이용
-    n_ch = conn.execute(
-        "SELECT COUNT(*) n FROM alerts_log WHERE day_kst=? AND kind=? AND level_ids=?",
-        (today, _NEWS_KIND, channel)
-    ).fetchone()["n"]
-    if n_ch >= max_ch:
-        return False, f"채널({channel}) 상한 {max_ch}건 도달"
-
-    # 코인당 24h 쿨다운
+    # 1) 코인 24h 쿨다운 — 뉴스 채널 특성상 같은 코인 반복 게시가 가장 흔한 트립
     since = now - coin_cooldown_h * 3600
     n_coin = conn.execute(
         "SELECT COUNT(*) n FROM alerts_log WHERE coin_symbol=? AND kind=? AND sent_at >= ?",
@@ -57,6 +74,21 @@ def _rate_limit_ok(conn, coin: str, channel: str, now: float) -> tuple:
     ).fetchone()["n"]
     if n_coin >= 1:
         return False, f"코인({coin}) 24h 쿨다운 중"
+
+    # 2) 채널당 하루 상한 — level_ids 필드 raw string 매칭(위 계약 참고)
+    n_ch = conn.execute(
+        "SELECT COUNT(*) n FROM alerts_log WHERE day_kst=? AND kind=? AND level_ids=?",
+        (today, _NEWS_KIND, channel)
+    ).fetchone()["n"]
+    if n_ch >= max_ch:
+        _SESSION_STATE["ch_reached"].add(channel)
+        return False, f"채널({channel}) 상한 {max_ch}건 도달"
+
+    # 3) 글로벌 하루 상한
+    n_global = db.count_all_alerts_today(conn, today, kind=_NEWS_KIND)
+    if n_global >= max_global:
+        _SESSION_STATE["global_reached"] = True
+        return False, f"글로벌 상한 {max_global}건 도달({n_global})"
 
     return True, "OK"
 
@@ -86,9 +118,14 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     if not settings.get("news_alert_enabled"):
         return "skipped"
 
-    text = post.get("description") or post.get("title") or ""
-    min_len = settings.get("news_alert_min_length") or 60
-    if len(text.strip()) < min_len:
+    # title+description 결합 (2026-08-17 리뷰): 종전 description 우선 단일 선택은
+    # description 이 짧고 title 이 헤드라인인 채널(BitcoinBullets 등)에서 조용히
+    # 스킵. 심볼 매칭도 run_collect 에서 두 필드 결합으로 하므로 여기도 통일.
+    title = (post.get("title") or "").strip()
+    desc = (post.get("description") or "").strip()
+    text = (title + "\n" + desc).strip() if title and desc else (title or desc)
+    min_len = settings.get("news_alert_min_length")
+    if len(text) < min_len:
         return "skipped"
 
     now = now if now is not None else time.time()

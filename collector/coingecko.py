@@ -246,6 +246,12 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
         rank_hist = _load_json_cache(rank_hist_path)
         for coin in universe:
             sym = coin["symbol"]
+            # 2026-08-17 rank=None 가드: build_universe 재작성으로 Upbit-only 소형
+            # 알트가 rank=None 으로 편입되는데, None 을 rank_hist 에 append 하면
+            # 아래 min()·subtract 에서 TypeError → fail-open 이 다른 5개 필터까지
+            # 무력화(리뷰 확인). None 은 rank_drop 판정 대상이 아니므로 스킵.
+            if coin.get("rank") is None:
+                continue
             entries = rank_hist.setdefault(sym, [])
             # 하루 1엔트리 강제(2026-08-11 검토 BUG2): 캐시 미스·force 재호출로
             # 같은 날 여러 번 실행돼도 len(entries) 가 "일수"로 유지되게 20h
@@ -282,24 +288,32 @@ def _apply_quality_filters(universe: list, now: float, timeout: float) -> list:
             excluded["warning"].append(sym)
             continue
 
-        if rank_drop_threshold:
+        if rank_drop_threshold and coin.get("rank") is not None:
+            # 2026-08-17 rank=None 스킵 (위 append 스킵과 동일 근거)
             entries = rank_hist.get(sym, [])
             # entries[:-1] 이 비지 않으려면 최소 2엔트리 필요 — min_hist 가 1 이하여도 안전
             if len(entries) >= max(rank_drop_min_hist, 2):
-                best_rank = min(e["rank"] for e in entries[:-1])  # 현재 제외한 과거 최고
-                if coin["rank"] - best_rank >= rank_drop_threshold:
-                    excluded["rank_drop"].append(sym)
-                    continue
+                # None 은 최소 산정에서도 제외 (이력에 섞였을 수 있음)
+                past_ranks = [e["rank"] for e in entries[:-1] if e.get("rank") is not None]
+                if past_ranks:
+                    best_rank = min(past_ranks)
+                    if coin["rank"] - best_rank >= rank_drop_threshold:
+                        excluded["rank_drop"].append(sym)
+                        continue
 
+        # 2026-08-17 min_volume/mcap None 안전 처리: build_universe 재작성으로
+        # CG top-N 밖 코인은 total_volume=None, market_cap=None. 종전 `or 0` 은
+        # None→0 으로 처리해 임계>0 활성 시 소형 알트 전량 배제. None 은 '측정
+        # 불가 → 통과' 로 취급(리뷰 확인). 임계는 CG 데이터 있는 코인만 적용.
         if min_volume_usd > 0:
-            vol = coin.get("total_volume") or 0
-            if vol < min_volume_usd:
+            vol = coin.get("total_volume")
+            if vol is not None and vol < min_volume_usd:
                 excluded["low_volume"].append(sym)
                 continue
 
         if min_mcap_usd > 0:
-            mcap = coin.get("market_cap") or 0
-            if mcap < min_mcap_usd:
+            mcap = coin.get("market_cap")
+            if mcap is not None and mcap < min_mcap_usd:
                 excluded["low_mcap"].append(sym)
                 continue
 

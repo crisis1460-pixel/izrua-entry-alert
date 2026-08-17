@@ -21,12 +21,13 @@
 **주기:** 24시간마다 갱신 (`universe_refresh_hours = 24`)  
 **결과:** `data/universe.json`
 
-### 1-1. 기본 선정
+### 1-1. 기본 선정 (2026-08-17 재설계)
 | 조건 | 내용 |
 |------|------|
-| 모집단 | CoinGecko 시총 상위 **300위** 이내 |
-| 상장 조건 | 업비트 KRW 마켓 교집합 |
+| 모집단 | **업비트 KRW 전체 마켓** (283종) — 종전 CG top-N ∩ Upbit 은 시총 300위+ 소형 알트 미포함 |
+| CG 메타 | CoinGecko 시총 상위 300위 매칭 시 rank/tier_icon/price_usd 부여, 밖은 rank=None·tier='·' |
 | 기본 제외 | 스테이블코인 (USDT, USDC, DAI 등 20종) |
+| 최종 크기 | ~191종 (품질 필터 후, LSK/MTL/KAITO 등 소형 알트 포함) |
 
 ### 1-2. 품질 필터 6종 (2026-08-13 확장)
 
@@ -146,7 +147,7 @@
 
 ### 게이트 1: 최소 등급
 ```
-등급 ≥ C    (alert_min_grade = "C")
+등급 ≥ D    (alert_min_grade = "D", 2026-08-17 사용자 결정: C→D 완화. 실측 승률 D 45% > C 36%)
 ```
 터치 시점에 현재가로 **재채점** 후 판정 (가격 근접도 점수 변동).
 2026-08-15: 재채점된 `touch_grade`/`touch_score` 를 DB 에 저장(첫 기록 우선,
@@ -169,7 +170,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 ### 게이트 4: 코인별 일일 발송 한도
 ```
-코인당 하루 최대 3회    (alert_max_per_coin_per_day = 3)
+코인당 하루 최대 5회    (alert_max_per_coin_per_day = 5, 2026-08-17: 3→5 완화)
 ```
 터치 알림에만 적용. 예고 알림(현재 비활성)은 미적용.
 
@@ -368,6 +369,35 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 - None 폴백 = 0 (감점 아님)
 
 **필터 안정성**: F3 재채점은 발송 확정 후 rep 표시 등급에만 적용, 필터(min_grade) 통과 여부는 종전 등급 유지 → 관찰 기간(v5 08-16 배포) 알림 발송량 안정.
+
+## 08-17 확장 배포 통합 이력 (되돌리기 카드)
+
+**한 사이클 안에 원자적으로 적용된 8건**. 부작용 발생 시 아래 값을 이전값으로 되돌려 롤백.
+
+| 항목 | 이전 | 현재 | 위치 |
+|------|------|------|------|
+| `alert_min_grade` | "C" | **"D"** | config/settings.py |
+| `alert_max_per_coin_per_day` | 3 | **5** | config/settings.py |
+| `volume_spike_multiplier` | 5.0 | **3.0** | config/settings.py |
+| `volume_spike_min_krw_60m` | 200_000_000 | **100_000_000** | config/settings.py |
+| `oi_spike_pct` | 15.0 | **10.0** | config/settings.py |
+| `telegram_source_channels` | 1개 | **4개** (+cryptosignals0rg, wolfoftrading, BitcoinBullets) | config/settings.py |
+| `build_universe` 방식 | CG top-N ∩ Upbit KRW (86종) | **Upbit KRW 전체 스캔** (191종) | collector/coingecko.py |
+| 뉴스·시황 알림 (`kind='news'`) | 없음 | **활성** (매매 셋업 파싱 실패 + 심볼 매칭 성공 → 원문 요약) | notify/news_brief.py, notify/telegram.render_news_brief |
+
+**예상 발송 증가**: 매매 +3~4/일 + 뉴스 +3~5/일 + spike +1~4/일 = **하루 +7~14건**.
+
+**관찰 기간**: 최소 3~5일. 위양성·피로 증가 시 우선순위대로 되돌리기: (1) alert_min_grade D→C (2) news_alert_enabled=False (3) spike 임계 복원.
+
+**리뷰 라운드 수정 이력 (2026-08-17 저녁)**:
+- coingecko._apply_quality_filters: rank=None TypeError 방어 (fail-open 방지, 6개 필터 무력화 위험 제거)
+- coingecko 필터: min_volume/min_mcap None 처리 명시 (`None` = 측정 불가 → 통과)
+- run_collect.py: `if had_setup is False:` 엄격 비교 (None=ingest 예외 시 뉴스 오탐 방지)
+- news_brief._summary: title+description 결합 (헤드라인만 있는 채널 스킵 방지)
+- news_brief._rate_limit_ok: 순서 재조정 (코인→채널→글로벌) + 세션 캐시 short-circuit
+- notify/news_brief.py: level_ids 필드 재사용 계약 주석 명시
+- config/settings.py universe_top_n 주석 갱신 (의미 변경 반영)
+- test_price_logic VS5/VS6: SETTINGS override 로 임계 재조정에 견고
 
 ## FRED 매크로 통합 (2026-08-17)
 

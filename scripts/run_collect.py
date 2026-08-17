@@ -31,7 +31,7 @@ from collector import coingecko, telegram_source, tradingview, watcher_stats
 from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
 from collector.grading import calculate_grade_with_breakdown
 from config import settings
-from notify import telegram
+from notify import news_brief, telegram
 from storage import db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -354,11 +354,12 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
             n_new += 1 if is_new else 0
             # 뉴스·시황 요약 알림 (2026-08-17) — 매매 셋업 파싱 실패지만 심볼은
             # 매칭된 게시글(시황·뉴스)을 별도 알림. 상한·쿨다운·설정 스위치는
-            # notify/news_brief.py 내부에서 처리. 전 실패 격리 — 뉴스 알림 실패가
-            # 수집 회차나 다른 채널을 죽이면 안 된다.
-            if not had_setup:
+            # notify/news_brief.py 내부에서 처리. 전 실패 격리.
+            # `is False` 엄격 비교(리뷰 확인): had_setup 은 성공=True / parse 실패=
+            # False / _ingest_idea 내부 예외=None. None(예외) 을 뉴스로 오라벨하면
+            # 유효 Entry+TP+SL 시그널이 SL/TP 없는 뉴스 카드로 발사됨.
+            if had_setup is False:
                 try:
-                    from notify import news_brief
                     news_brief.maybe_send_news_brief(conn, post, symbol, channel)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[tg] %s %s 뉴스 알림 실패(무시): %s",
