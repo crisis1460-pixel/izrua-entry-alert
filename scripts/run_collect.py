@@ -352,6 +352,17 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
                 source="telegram", lookup_followers=False)
             n_setup += 1 if had_setup else 0
             n_new += 1 if is_new else 0
+            # 뉴스·시황 요약 알림 (2026-08-17) — 매매 셋업 파싱 실패지만 심볼은
+            # 매칭된 게시글(시황·뉴스)을 별도 알림. 상한·쿨다운·설정 스위치는
+            # notify/news_brief.py 내부에서 처리. 전 실패 격리 — 뉴스 알림 실패가
+            # 수집 회차나 다른 채널을 죽이면 안 된다.
+            if not had_setup:
+                try:
+                    from notify import news_brief
+                    news_brief.maybe_send_news_brief(conn, post, symbol, channel)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[tg] %s %s 뉴스 알림 실패(무시): %s",
+                                   channel, symbol, e)
 
         # 채널 1개 끝날 때마다 확정 (2026-07-27 교차감사 M1). TradingView 루프와 같은
         # 이유 — 여기도 하드킬 사정권이고(채널당 5초 페이싱 × 채널 수), 채널 목록이

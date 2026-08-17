@@ -1316,6 +1316,31 @@ def render_reverse_release_alert(author: str, snaps: list) -> str:
     return "\n".join(lines)
 
 
+def render_news_brief(coin_symbol: str, channel: str, summary: str,
+                      url: str = "") -> str:
+    """뉴스·시황 요약 알림 (2026-08-17). 매매 시그널이 아닌 코인별 시황·뉴스
+    게시글의 원문 요약. `notify/news_brief.py::maybe_send_news_brief` 가 유일 호출부.
+
+    - 헤더: `📰 [뉴스·시황] SYMBOL`
+    - 메타: 채널 핸들
+    - 본문: 원문 앞 N자 (호출부에서 요약·클리핑 완료)
+    - 하단: 원문 링크 (있으면)"""
+    safe_sym = html.escape(coin_symbol or "?")
+    safe_ch = html.escape(channel or "?")
+    safe_sum = html.escape(summary or "")
+    lines = [
+        _SEP,
+        f"📰 <b>[뉴스·시황] {safe_sym}</b>",
+        f"채널: @{safe_ch}",
+        _SEP,
+        safe_sum,
+    ]
+    if url:
+        lines.append(_SEP)
+        lines.append(f'🔗 <a href="{html.escape(url)}">원문</a>')
+    return "\n".join(lines)
+
+
 def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float) -> str:
     """직전 회차와의 공백이 임계를 넘었을 때의 경고. gap_minutes: 감지된 공백(분),
     threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes)."""

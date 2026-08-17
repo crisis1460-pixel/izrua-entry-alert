@@ -767,6 +767,73 @@ check("ST7d 접미 유사(Sky vs Skycoin) 오탐 없음 — 접미 제거 로직
 _st.requests.get = _orig_st_get
 
 
+# ─── 뉴스·시황 요약 알림 (2026-08-17) ────────────────────────────────
+from notify import news_brief as _nb, telegram as _tg2
+from config import settings as _st_cfg
+
+_orig_send = _tg2.send
+_sent_log = []
+def _fake_send(text, urgency="high", reply_to_message_id=None):
+    _sent_log.append((text, urgency))
+    return 1
+_tg2.send = _fake_send
+
+# 임시 DB
+import tempfile
+_nb_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_nb_db)
+import sqlite3 as _sq
+_nbc = _sq.connect(_nb_db)
+_nbc.row_factory = _sq.Row
+
+# NB1: 정상 발송
+_p = {"description": "AAVE testing this text of 60+ chars long enough for min "
+                     "length filter passthrough here", "url": "https://t.me/x/1"}
+r = _nb.maybe_send_news_brief(_nbc, _p, "AAVE", "ch1", now=1786900000)
+_nbc.commit()
+check("NB1 정상 뉴스 알림 발송(ok)", r == "ok" and len(_sent_log) == 1)
+check("NB1b 렌더에 심볼·채널·요약 포함",
+      "[뉴스·시황] AAVE" in _sent_log[0][0] and "@ch1" in _sent_log[0][0]
+      and "urgency='low'" == f"urgency={_sent_log[0][1]!r}")
+
+# NB2: 코인당 24h 쿨다운 - 같은 코인 재발송 스킵
+_sent_log.clear()
+r = _nb.maybe_send_news_brief(_nbc, _p, "AAVE", "ch1", now=1786900000 + 60)
+check("NB2 같은 코인 24h 쿨다운(스킵)", r == "skipped" and len(_sent_log) == 0)
+
+# NB3: 다른 코인은 발송 가능 (같은 채널 계속)
+r = _nb.maybe_send_news_brief(_nbc, _p, "LINK", "ch1", now=1786900000 + 60)
+_nbc.commit()
+check("NB3 다른 코인은 정상 발송", r == "ok" and len(_sent_log) == 1)
+r = _nb.maybe_send_news_brief(_nbc, _p, "UNI", "ch1", now=1786900000 + 120)
+_nbc.commit()
+check("NB3b 3번째 발송 정상", r == "ok" and len(_sent_log) == 2)
+# 4번째: 채널당 상한 3건 도달
+r = _nb.maybe_send_news_brief(_nbc, _p, "ETH", "ch1", now=1786900000 + 180)
+check("NB4 채널당 하루 상한 3건 도달 → 스킵", r == "skipped")
+
+# NB5: 짧은 원문 스킵 (60자 미만)
+_sent_log.clear()
+_p_short = {"description": "짧은 글", "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_short, "BTC", "ch2", now=1786900000 + 300)
+check("NB5 원문 60자 미만 스킵", r == "skipped" and len(_sent_log) == 0)
+
+# NB6: enabled=False 시 발송 안 함
+_st_cfg.SETTINGS["news_alert_enabled"] = False
+r = _nb.maybe_send_news_brief(_nbc, _p, "SOL", "ch3", now=1786900000 + 400)
+check("NB6 news_alert_enabled=False 시 스킵", r == "skipped")
+_st_cfg.SETTINGS["news_alert_enabled"] = True
+
+# NB7: 요약 함수 — 원문이 250자 초과 시 클리핑 + "…"
+long_text = "A" * 500
+s = _nb._summary(long_text)
+check("NB7 요약 250자 이내 + … 마감", len(s) <= 260 and s.endswith("…"))
+
+_nbc.close()
+os.unlink(_nb_db)
+_tg2.send = _orig_send
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

@@ -114,6 +114,15 @@ SETTINGS = {
                                           # 페이싱(5.0)보다 느슨하게 가지 않는다.
     "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
 
+    # 뉴스·시황 요약 알림 (2026-08-17 사용자 요청) — 저자 채널의 매매 시그널이
+    # 아닌 코인별 시황·뉴스 게시글(extractor.parse_setup 실패 + 심볼 매칭 성공)
+    # 을 원문 요약으로 별도 알림. kind='news', 무음 발송, 매매 알림 상한과 별개.
+    "news_alert_enabled": True,
+    "news_alert_max_global_per_day": 5,     # 하루 총 상한 (매매 알림과 별도 카운트)
+    "news_alert_max_per_channel_per_day": 3,# 채널당 하루 상한
+    "news_alert_coin_cooldown_hours": 24,   # 코인당 재발송 최소 간격
+    "news_alert_min_length": 60,            # 원문 60자 미만은 노이즈로 스킵
+
     # 알림 트리거
     "preview_band_pct": 1.0,             # entry 대비 이 % 이내 접근 시 예고
     # 접근 예고 알림 발송 스위치 (2026-07-31 사용자 결정 — 질문카드).
