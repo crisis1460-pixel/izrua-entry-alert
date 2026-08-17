@@ -616,6 +616,69 @@ check("DX4e dex_stats=None → 배지 미표시(매핑 없는 코인 자연 처�
       "DEX" not in _txt)
 
 
+# ─── Coin Metrics 활성주소 백분위 (2026-08-17) ──────────────────────
+from monitor import coinmetrics as _cm
+_orig_cm_get = _cm.requests.get
+
+
+# CM1: 미커버 자산은 API 콜 없이 즉시 None
+_cm.requests.get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("must not call"))
+check("CM1 미커버 자산은 API 콜 없이 None", _cm.fetch_active_addr_percentile("SHIB") is None)
+
+# CM2: 커버 자산 정상 응답 → 백분위 계산 (30개 중 마지막 값이 최소)
+_cm.requests.get = lambda *a, **k: _R(200, {"data": [
+    {"asset": "btc", "time": f"2026-08-{i:02d}T00:00:00.000000000Z",
+     "AdrActCnt": str(1000000 - i * 1000)}
+    for i in range(1, 31)  # 999000 ~ 970000, 마지막(30번째)이 최소
+]})
+_pct = _cm.fetch_active_addr_percentile("btc", conn=None)
+# 마지막값 970000 이하인 관측치 수 = 1 (자기 자신) / 30 → 3.3%
+check("CM2 마지막이 최소면 백분위 매우 낮음", _pct is not None and _pct <= 5)
+
+# CM3: 마지막이 최대면 백분위 100
+_cm.requests.get = lambda *a, **k: _R(200, {"data": [
+    {"asset": "btc", "time": f"2026-08-{i:02d}T00:00:00.000000000Z",
+     "AdrActCnt": str(500000 + i * 1000)}
+    for i in range(1, 31)  # 501000 ~ 530000, 마지막이 최대
+]})
+_pct = _cm.fetch_active_addr_percentile("eth", conn=None)
+check("CM3 마지막이 최대면 백분위 100", _pct == 100.0)
+
+# CM4: 응답 표본 부족(<5개) → None
+_cm.requests.get = lambda *a, **k: _R(200, {"data": [
+    {"asset": "xrp", "time": "2026-08-16T00:00:00.000000000Z", "AdrActCnt": "100"}
+]})
+check("CM4 표본 부족(<5) → None", _cm.fetch_active_addr_percentile("xrp", conn=None) is None)
+
+# CM5: HTTP 오류 → None
+_cm.requests.get = lambda *a, **k: _R(500, {})
+check("CM5 HTTP 500 → None", _cm.fetch_active_addr_percentile("ada", conn=None) is None)
+
+# CM6: 등급 반영 — 백분위 극단 ±1
+from collector import grading as _gr
+_base_pts = _gr._onchain_activity_points(50)   # 중간 → 0
+_hi_pts = _gr._onchain_activity_points(85)     # ≥80 → +1
+_lo_pts = _gr._onchain_activity_points(15)     # ≤20 → -1
+_none_pts = _gr._onchain_activity_points(None) # None → 0
+check("CM6 활성주소 백분위 ≥80 +1 / ≤20 -1 / 중간·None 0",
+      _base_pts == 0.0 and _hi_pts == 1.0 and _lo_pts == -1.0 and _none_pts == 0.0)
+
+# CM7: telegram 배지 — 극단만 노출
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       active_addr_pctile=85.5)
+check("CM7 활발(≥80) 배지 표시(매수 유리)",
+      "온체인 활발" in _txt and "매수 유리" in _txt)
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       active_addr_pctile=12.0)
+check("CM7b 저조(≤20) 배지 표시(매수 부담)",
+      "온체인 저조" in _txt and "매수 부담" in _txt)
+_txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
+                       active_addr_pctile=50.0)
+check("CM7c 중립(20~80) → 배지 없음", "온체인" not in _txt)
+
+_cm.requests.get = _orig_cm_get
+
+
 # ─── 결과 ────────────────────────────────────────────────────────────
 
 print(f"\n{'='*40}")

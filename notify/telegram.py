@@ -457,7 +457,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  rep: dict = None, funding_rate: float = None,
                  funding_regime_flip: dict = None, supply: tuple = None,
                  position: tuple = None, kimchi_delta: float = None,
-                 adx14: float = None, dex_stats: dict = None) -> str:
+                 adx14: float = None, dex_stats: dict = None,
+                 active_addr_pctile: float = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -592,6 +593,15 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                 lines.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% (매수 유리)")
             elif _bratio <= 0.35:
                 lines.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% (매수 부담)")
+
+    # 온체인 활성주소 30d 백분위 배지 (2026-08-17 Coin Metrics) — 무료 티어 커버
+    # 자산(BTC/ETH/XRP 등 18종)만 값. 극단(≤20 / ≥80)일 때만 노출, 중립 무표기.
+    # 매수자 관점 라벨(FRED/DEX 와 통일 — 매수 유리/부담).
+    if active_addr_pctile is not None:
+        if active_addr_pctile >= 80:
+            lines.append(f"⛓ 온체인 활발 {active_addr_pctile:.0f}위 (매수 유리)")
+        elif active_addr_pctile <= 20:
+            lines.append(f"⛓ 온체인 저조 {active_addr_pctile:.0f}위 (매수 부담)")
 
     # 포지션 참고(📐 SL / R:R) 행은 삭제됨 (2026-08-03 사용자 결정) — SL 은 판정
     # 엔진 내부 기준선으로만 사용, 알림 화면에는 노출하지 않는다. rep.sl_usd/rr 는

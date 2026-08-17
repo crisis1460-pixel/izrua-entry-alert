@@ -954,6 +954,10 @@ def run_once(now: float | None = None) -> dict:
                 _snap_dex = None          # DEX Screener 스냅샷(dict) — 2026-08-17, 매핑 없는
                                           # 네이티브 코인(XRP/ADA/BTC 등)·매핑 실패는 None,
                                           # 알림 배지·등급·기록 세 경로 전부 자연 스킵
+                _snap_addr_pct = None     # Coin Metrics 활성주소 30d 백분위 (2026-08-17) —
+                                          # 무료 티어 커버 자산(BTC/ETH/XRP 등 18종)만 값,
+                                          # 미커버는 None (자연 스킵). 24h DB 캐시로 알림당
+                                          # 실효 API 콜 0~1.
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -1149,13 +1153,24 @@ def run_once(now: float | None = None) -> dict:
                                     _addr, cfg_get("http_timeout_sec"))
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s DEX 조회 실패(무시): %s", coin, e)
+                    # Coin Metrics 활성주소 백분위 (2026-08-17) — 발송 확정 터치에만
+                    # 조회 시도. 미커버 자산(대부분 알트)은 함수 내부에서 즉시 None
+                    # 반환(API 콜 0). 24h DB 캐시로 커버 자산도 하루 첫 알림만 실호출.
+                    if touched:
+                        try:
+                            from monitor import coinmetrics
+                            _snap_addr_pct = coinmetrics.fetch_active_addr_percentile(
+                                coin, conn=conn, timeout=cfg_get("http_timeout_sec"))
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s Coin Metrics 조회 실패(무시): %s",
+                                           coin, e)
                     # F3 (2026-08-17): rep 표시 등급을 ADX/BB/DEX 반영해 재조정.
                     # 필터는 이미 위에서 통과했으므로 표시 등급만 갱신 — 관찰 기간
                     # 알림 발송 여부는 종전과 동일(필터 안정성 유지, 사용자 결정).
                     _dex_bratio = (_snap_dex or {}).get("buy_ratio_24h")
                     _dex_liq = (_snap_dex or {}).get("liquidity_usd")
                     if (_snap_adx is not None or _snap_bbw_pctile is not None
-                            or _snap_dex is not None):
+                            or _snap_dex is not None or _snap_addr_pct is not None):
                         try:
                             _rg, _rs, _rr = regrade_current(
                                 rep, current_usd,
@@ -1163,10 +1178,12 @@ def run_once(now: float | None = None) -> dict:
                                 bb_width_pctile=_snap_bbw_pctile,
                                 dex_buy_ratio=_dex_bratio,
                                 dex_liquidity_usd=_dex_liq,
+                                active_addr_pctile=_snap_addr_pct,
                             )
                             rep["grade"], rep["score"] = _rg, _rs
                         except Exception as e:  # noqa: BLE001
-                            logger.warning("[체크] %s rep 재채점(F3/DEX) 실패(무시): %s", coin, e)
+                            logger.warning("[체크] %s rep 재채점(F3/DEX/온체인) 실패(무시): %s",
+                                           coin, e)
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
@@ -1178,7 +1195,8 @@ def run_once(now: float | None = None) -> dict:
                                                  supply=_snap_supply,
                                                  position=_snap_position,
                                                  adx14=_snap_adx,
-                                                 dex_stats=_snap_dex)
+                                                 dex_stats=_snap_dex,
+                                                 active_addr_pctile=_snap_addr_pct)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
@@ -1427,7 +1445,8 @@ def run_once(now: float | None = None) -> dict:
                             # 값 있음(예고·억제 터치는 None). 매핑 없는 네이티브도 None.
                             dex_liquidity_usd=(_snap_dex or {}).get("liquidity_usd"),
                             dex_volume_24h_usd=(_snap_dex or {}).get("volume_24h_usd"),
-                            dex_buy_ratio=(_snap_dex or {}).get("buy_ratio_24h"))
+                            dex_buy_ratio=(_snap_dex or {}).get("buy_ratio_24h"),
+                            active_addr_pctile=_snap_addr_pct)
                     except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                         logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
                                        coin, e)

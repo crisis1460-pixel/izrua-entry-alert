@@ -382,6 +382,25 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 **첫 실호출 검증(2026-08-17)**: VIX 14.63, 10Y 4.63% 정상 조회.
 
+## Coin Metrics 온체인 활성주소 (2026-08-17)
+
+| 항목 | 데이터 | 반영 위치 |
+|------|--------|-----------|
+| **Coin Metrics 헬퍼** | `fetch_active_addr_percentile(coin, conn)` — 무료·무키·1.6 rps·CC 비상업. AdrActCnt 30일 창의 현재값 백분위(0~100). 24h DB 캐시 / 미커버 7일 캐시 | `monitor/coinmetrics.py` (신설) |
+| **커버 자산 (18종)** | BTC/ETH/XRP/ADA/DOGE/LTC/BCH/ETC/BNB/TRX/DASH/ZEC/XTZ/EOS/XLM/LINK/UNI/AAVE (실측). SOL/AVAX/MATIC/SHIB/PEPE 등은 유료 티어 → API 콜 없이 즉시 None | `COVERED` 화이트리스트 |
+| **터치 시점 조회** | 발송 확정 터치에만 조회. 미커버 자산은 API 콜 0, 커버 자산은 24h DB 캐시로 하루 첫 알림만 실호출 | `monitor/price_check.py` |
+| **알림 배지** | 극단만 노출 (백분위 ≥80 `⛓ 온체인 활발 N위 (매수 유리)` / ≤20 `⛓ 온체인 저조 N위 (매수 부담)`). 중립(20~80) 무표기 | `notify/telegram.py` render_alert `active_addr_pctile` kwarg |
+| **등급 반영** | `_onchain_activity_points(pctile)` — ≥80 +1 / ≤20 -1 / None 0. 가중치 낮은(±1) 이유는 커버율 5% (유니버스 형평성 유지) | `collector/grading.py` breakdown 'onchain_addr' 키 |
+| **DB 섀도** | `touch_active_addr_pctile` (기록 전용, IS NULL 가드) | `storage/db.py` |
+
+**필터 안정성**: rep 재채점에만 반영, 필터(min_grade) 통과 여부는 종전 유지. 관찰 기간 알림 발송량 안정.
+
+**커버 한계**: 유니버스 300 중 실질 ~16종(BNB/DASH는 Upbit 미상장) → 알트 대부분 배지·등급 반영 없음(자연 스킵). BTC/ETH/XRP 등 메이저 터치 시에만 신호 노출.
+
+**콜 예산**: 미커버 자산은 함수 진입에서 즉시 None → API 콜 0. 커버 자산도 24h 캐시로 하루 자산당 1콜 → 극단적으로 커버 16종이 하루 각 1회 → 16콜/일 (1.6 rps = 9600콜/일 대비 여유).
+
+**회귀 테스트**: infra 8건(미커버 스킵·백분위 계산·표본 부족·HTTP 오류·등급·배지 3종) + grading 2건. infra 98·grading 72 전 통과.
+
 ## DEX Screener 통합 (2026-08-17)
 
 | 항목 | 데이터 | 반영 위치 |

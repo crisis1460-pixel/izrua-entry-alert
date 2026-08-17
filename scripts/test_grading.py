@@ -415,6 +415,21 @@ check("DEX3 조합·regrade·breakdown — buy_ratio +2 + 저유동 -3 = -1, 'de
                              dex_liquidity_usd=50_000)[1], _base_r - 1)
       and eq(regrade_current(_lv_r, 100.0)[1], _base_r))  # 미전달 = 0
 
+# Coin Metrics 활성주소 백분위 등급 반영 (2026-08-17)
+check("CM1 활성주소 백분위 극단 ±1 (≥80 +1 / ≤20 -1 / 중간 0)",
+      eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, active_addr_pctile=85)[1], _base_r + 1)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, active_addr_pctile=15)[1], _base_r - 1)
+      and eq(calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, active_addr_pctile=50)[1], _base_r))
+_bd_cm = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, active_addr_pctile=85)
+check("CM2 breakdown 'onchain_addr' 키 격리 + regrade 전파",
+      _bd_cm["onchain_addr"] == 1.0
+      and eq(sum(_bd_cm.values()), _base_r + 1)
+      and eq(regrade_current(_lv_r, 100.0, active_addr_pctile=85)[1], _base_r + 1))
+
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)
