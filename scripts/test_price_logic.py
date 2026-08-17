@@ -80,10 +80,11 @@ sent_messages = []
 sent_urgency = []   # 무음/유음 분리 검증용 (2026-07-27): 터치=high, 예고=low
 
 
-def _stub_send(text, urgency="high"):
+def _stub_send(text, urgency="high", reply_to_message_id=None):
     sent_messages.append(text)
     sent_urgency.append(urgency)
-    return True
+    # 반환 타입 (2026-08-17 #6): Optional[int]. 성공 시 message_id (양수 정수).
+    return 1
 
 
 telegram.send = _stub_send
@@ -1002,7 +1003,7 @@ with db.connect(TEST_DB) as conn:
 fake["low"] = fake["high"] = fake["candles"] = None
 fake["price"] = 10.0 * USDT_KRW * 0.999  # 터치 + 등급 통과권(S) - 발송만 실패시킴
 _prev_send = telegram.send
-telegram.send = lambda text, urgency="high": False
+telegram.send = lambda text, urgency="high", reply_to_message_id=None: None
 sent_before28 = len(sent_messages)
 price_check.run_once(now + 1320)
 telegram.send = _prev_send
@@ -1714,7 +1715,7 @@ with db.connect(TEST_DB) as conn:
     conn.execute("DELETE FROM meta WHERE key LIKE 'announcement%'")
 _zil_f = _an_level("ZIL", 0.013, "an_fail")   # watching 만 보유 - 가장 흔한 형태
 sent_messages.clear()
-telegram.send = lambda text, urgency="high": False  # 텔레그램 일시 장애
+telegram.send = lambda text, urgency="high", reply_to_message_id=None: None  # 텔레그램 일시 장애
 with db.connect(TEST_DB) as conn:
     r11 = announcements.check_announcements(conn, now, settings.get)
     _an_pending_raw = db.get_meta(conn, "announcement_pending_alerts")

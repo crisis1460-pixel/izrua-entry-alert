@@ -106,27 +106,92 @@ conn2.close()
 import notify.telegram as tg
 
 short_msg = "짧은 메시지"
-with patch.object(tg, "send", return_value=True) as mock_send:
+# 반환 타입 (2026-08-17 #6): Optional[int]. 성공=message_id(양수), 실패=None.
+with patch.object(tg, "send", return_value=1) as mock_send:
     result = tg._split_send(short_msg, "low")
     check("_split_send: 짧은 메시지 → send 1회", mock_send.call_count == 1)
-    check("_split_send: 짧은 메시지 → True", result is True)
+    check("_split_send: 짧은 메시지 → 첫 msg_id 반환", result == 1)
 
 long_lines = [f"라인{i:04d} " + "x" * 80 for i in range(100)]
 long_msg = "\n".join(long_lines)
 assert len(long_msg) > 4096
-with patch.object(tg, "send", return_value=True) as mock_send:
+with patch.object(tg, "send", return_value=42) as mock_send:
     with patch("time.sleep"):
         result = tg._split_send(long_msg, "high")
     check("_split_send: 긴 메시지 → 다건 분할", mock_send.call_count >= 2)
-    check("_split_send: 전부 성공 → True", result is True)
+    check("_split_send: 전부 성공 → 첫 msg_id 반환", result == 42)
     for call_args in mock_send.call_args_list:
         chunk = call_args[0][0]
         check(f"_split_send: 청크 ≤4096 ({len(chunk)}자)", len(chunk) <= 4096)
 
-with patch.object(tg, "send", side_effect=[True, False, True]) as mock_send:
+with patch.object(tg, "send", side_effect=[10, None, 30]) as mock_send:
     with patch("time.sleep"):
         result = tg._split_send(long_msg, "low")
-    check("_split_send: 일부 실패 → False", result is False)
+    check("_split_send: 일부 실패 → None", result is None)
+
+
+# ─── #6 preview→touch 스레딩 (2026-08-17) ─────────────────────────────
+# preview_message_id 저장/조회 함수 격리 검증. run_once 통합 테스트는
+# test_price_logic 의 다른 경로가 커버(스텁 send 가 reply_to_message_id 수용).
+import tempfile, os
+from storage import db as _dbmod
+_thread_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+try:
+    _dbmod.init_db(_thread_db)
+    with _dbmod.connect(_thread_db) as conn:
+        cur = conn.execute(
+            "INSERT INTO levels (coin_symbol, ticker, entry_usd, direction, status, "
+            "signal_key, collected_at) VALUES ('X','KRW-X',1.0,'long','watching','k',900)")
+        _lid = cur.lastrowid
+        conn.commit()
+        check("#6a get_preview_message_id — 미저장 상태 None",
+              _dbmod.get_preview_message_id(conn, [_lid]) is None)
+        _dbmod.set_preview_message_id(conn, [_lid], 55555)
+        conn.commit()
+        check("#6b set/get preview_message_id — 저장 후 정확 조회",
+              _dbmod.get_preview_message_id(conn, [_lid]) == 55555)
+        _dbmod.set_preview_message_id(conn, [_lid], 99999)
+        conn.commit()
+        check("#6c IS NULL 가드 — 재저장 무시(첫 값 유지, 재발송 경합 대비)",
+              _dbmod.get_preview_message_id(conn, [_lid]) == 55555)
+finally:
+    os.unlink(_thread_db)
+
+
+# ─── #5 등급×장세 히트맵 (2026-08-17) ─────────────────────────────────
+# 렌더 격리(표본 부족 자동 스킵) + DB 집계(regime 분류) 검증.
+_hm_small = {"cells": {("A", "trend"): {"n": 3, "hit": 0.5, "mfe": 5.0}}}
+check("#5a 셀 n<5 이면 섹션 통째 스킵(표본 도달 전 자동 침묵)",
+      tg._regime_heatmap_section(_hm_small) == [])
+_hm_ok = {"cells": {
+    ("S", "trend"): {"n": 8, "hit": 0.75, "mfe": 12.0},
+    ("A", "range"): {"n": 5, "hit": 0.20, "mfe": 3.0},
+}}
+_hm_lines = tg._regime_heatmap_section(_hm_ok)
+check("#5b n>=5 셀만 표시 (S/trend + A/range 표시)",
+      any("75%" in l for l in _hm_lines) and any("20%" in l for l in _hm_lines))
+
+_hm_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+try:
+    _dbmod.init_db(_hm_db)
+    with _dbmod.connect(_hm_db) as conn:
+        # A/trend(ADX 30) 승·패 각 1건, A/squeeze(BB 15) 승 1건
+        for _adx, _bbp, _out, _mfe in [(30, 15, "tp1", 10), (30, 50, "sl", -2)]:
+            conn.execute(
+                "INSERT INTO levels (coin_symbol, ticker, entry_usd, direction, status, "
+                "signal_key, collected_at, touch_grade, touch_adx14, "
+                "touch_bb_width_pctile, outcome, resolved_at, mfe_pct) "
+                "VALUES ('X','KRW-X',1.0,'long','resolved',?,900,'A',?,?,?,1000,?)",
+                (f"k{_adx}{_bbp}{_out}", _adx, _bbp, _out, _mfe))
+        conn.commit()
+        _hm = _dbmod.get_regime_heatmap(conn)
+        check("#5c DB 집계 — ADX>=25 → trend 셀, ADX<20 → range, BB<=20 → squeeze 병립",
+              ("A", "trend") in _hm["cells"] and _hm["cells"][("A", "trend")]["n"] == 2
+              and _hm["cells"][("A", "trend")]["hit"] == 0.5
+              and ("A", "squeeze") in _hm["cells"]
+              and _hm["cells"][("A", "squeeze")]["n"] == 1)
+finally:
+    os.unlink(_hm_db)
 
 
 # ─── _fetch_fapi_ratio (binance) ─────────────────────────────────────

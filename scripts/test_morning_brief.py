@@ -50,9 +50,10 @@ sent_log = []
 _send_result = {"ok": True}
 
 
-def _fake_send(text, urgency="high"):
+def _fake_send(text, urgency="high", reply_to_message_id=None):
     sent_log.append(text)
-    return _send_result["ok"]
+    # 반환 타입 (2026-08-17 #6): Optional[int]. 성공 시 정수, 실패 시 None.
+    return 1 if _send_result["ok"] else None
 
 
 telegram.send = _fake_send

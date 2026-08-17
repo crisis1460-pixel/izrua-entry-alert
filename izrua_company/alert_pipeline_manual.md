@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-17 (Tier1 3건: ETH.D/알트시즌/스테이블7d 모닝 브리핑 + BB Squeeze/ADX 등급·알림 반영)  
+> 마지막 업데이트: 2026-08-17 (Tier1 3건 + Tier2 2건: preview→touch 스레딩 + 등급×장세 히트맵 파이프라인)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -340,6 +340,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | MEDIUM | Yahoo Finance `result[]` IndexError | `monitor/macro.py:68,119` | `(result or [{}])[0]` — 빈 리스트 응답 시 IndexError 방어 |
 | 데드코드 | `secrets_status()` 미사용 함수 | `config/settings.py` | 삭제 |
 | CI위험 | `test_tradingview_live.py` CI glob 노출 | `scripts/` | `probe_tradingview_live.py` 리네임 (실네트워크 테스트 CI 제외) |
+
+## Tier2 개발 이력 (2026-08-17)
+
+| 항목 | 데이터·기능 | 반영 위치 |
+|------|------------|-----------|
+| **#6 preview→touch 스레딩** | telegram.send 반환 bool→Optional[int], reply_to_message_id kwarg | notify/telegram.py, storage/db.py (preview_message_id 컬럼 + set/get 함수), monitor/price_check.py (touch 발송 시 조회·전달, preview 성공 시 저장) |
+| **#5 히트맵 파이프라인** | touch_adx14/touch_bb_width_pctile 스냅샷 축적, get_regime_heatmap 집계, 주간 리포트 섹션 | storage/db.py (2개 컬럼 + 집계 함수), notify/telegram.py (_regime_heatmap_section, 각 셀 n<5 자동 스킵), scripts/run_weekly_report.py (호출부) |
+
+**#6 스레딩 동작**: preview 알림 발송 성공 → 각 레벨 preview_message_id 저장 → 같은 클러스터 touch 시 조회해 reply_to_message_id 로 전달. Telegram UI 에서 예고→터치가 스레드로 연결. 예고 미발송·저장 실패는 종전대로 최상위 메시지로 발송(폴백).
+
+**#5 자동 침묵**: 각 셀 n<5 이면 셀 생략, 전체 셀 부족이면 섹션 통째 스킵 → 표본 도달(각 셀 최소 5건) 전까지 리포트에 아무것도 안 나옴. Universe300 관찰 완료(~8말) + 2~3주 축적 후 자연스럽게 활성화.
+
+**필터 안정성**: 두 기능 모두 알림 필터·등급 산식 무영향 (표시·기록 전용).
 
 ## Tier1 3건 개발 이력 (2026-08-17)
 

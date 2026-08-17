@@ -73,6 +73,9 @@ def send_report(db_path: str = None, now: float = None) -> bool:
         r_dist = distribution.r_multiple_distribution(r_rows)
         r_dist_by_grade = distribution.r_distribution_by_grade(r_rows)
         holding = distribution.holding_period_distribution(db.get_closed_holding_rows(conn))
+        # 등급×장세 히트맵 (2026-08-17 #5, 표시 전용) — touch_adx14/touch_bb_width_pctile
+        # 축적이 시작된 후에만 셀이 채워짐. 각 셀 n<5 이면 렌더러가 자동 스킵.
+        regime_heatmap = db.get_regime_heatmap(conn)
 
     total_rows = sum(len(rows) for rows in rows_by_author.values())
     text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
@@ -82,7 +85,8 @@ def send_report(db_path: str = None, now: float = None) -> bool:
                                          reverse_confirmed=reverse_confirmed,
                                          r_distribution=r_dist,
                                          r_distribution_by_grade=r_dist_by_grade,
-                                         holding_period=holding)
+                                         holding_period=holding,
+                                         regime_heatmap=regime_heatmap)
     ok = telegram.send(text)
 
     logger.info(

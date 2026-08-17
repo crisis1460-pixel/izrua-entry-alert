@@ -350,6 +350,12 @@ _OUTCOME_COLUMNS = {
     # DVOL(Deribit 30일 내재변동성 지수) 레벨 — 고/저변동 국면별 성과 분리용.
     # 발송 경로에서 이미 로드된 옵션 컨텍스트만 재사용 — 억제 터치는 NULL.
     "touch_dvol": "REAL",
+    # 시장 국면 스냅샷 (2026-08-17 F3, #5 히트맵 축) — 터치 시점 ADX(14)/BB
+    # Width 백분위(20/120). fetch_position_data 일봉 공유 → 추가 API 콜 0.
+    # 발송 경로만 값이 있고 억제 터치는 NULL(다른 touch_* 스냅과 동일 관례).
+    # #5 등급×장세 히트맵의 원천 데이터. 표본 도달 전에는 리포트 섹션 자동 스킵.
+    "touch_adx14": "REAL",
+    "touch_bb_width_pctile": "REAL",
     # 글 발행→터치 경과 시간(h) 비정규화 = (터치시각-수집시각)/3600 +
     # 수집시점 글나이(post_age_minutes)/60. 신선도 창(168h→96-120h) 조이기
     # 근거 데이터(시들음 분석) — 레벨별 값(post_age_minutes 가 레벨마다 다름).
@@ -432,6 +438,12 @@ _EXTRA_COLUMNS = {
     # 와 동일 포맷. 1h 경과 시점 시장 환경이 터치 당시와 얼마나 달라지는지 추적.
     # 발송 건에 한정하지 않고 status='touched' 전 건에 기록(억제 터치 포함).
     "touch_supply_1h": "TEXT",
+    # #6 스레딩 (2026-08-17) — preview 알림 발송 성공 시 텔레그램 message_id 저장.
+    # touch 본알림이 이 값을 reply_to_message_id 로 사용해 예고→터치를 스레드로
+    # 연결. NULL 이면 (a) preview 미발송(억제/구 행) 또는 (b) preview 발송 실패
+    # → touch 는 최상위 메시지로 발송(종전 동작). Telegram message_id 는 int64
+    # 범위지만 SQLite INTEGER 가 자동 확장하므로 별도 크기 제약 없음.
+    "preview_message_id": "INTEGER",
 }
 
 
@@ -709,6 +721,40 @@ def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
     )
 
 
+def set_preview_message_id(conn, level_ids, message_id: int) -> None:
+    """preview 알림 발송 성공 시 각 레벨의 preview_message_id 저장 (#6 스레딩, 2026-08-17).
+
+    같은 클러스터의 모든 레벨에 같은 message_id 를 심어, 나중에 touch 시
+    어느 레벨이 트리거되든 원 preview 에 답글로 붙일 수 있다.
+    최초 기록 우선(IS NULL 가드) — 같은 클러스터가 재예고돼도 첫 message_id 유지."""
+    if not level_ids or not message_id:
+        return
+    ph = ",".join("?" * len(level_ids))
+    conn.execute(
+        f"UPDATE levels SET preview_message_id=? "
+        f"WHERE id IN ({ph}) AND preview_message_id IS NULL",
+        (int(message_id), *level_ids),
+    )
+
+
+def get_preview_message_id(conn, level_ids) -> Optional[int]:
+    """터치 시 예고 알림 message_id 조회 (#6 스레딩, 2026-08-17).
+
+    클러스터 내 어떤 레벨이든 preview_message_id 가 있으면 그 값 반환 (같은
+    클러스터는 위 set_ 에서 동일 값을 심어놨으므로 first-non-null 로 충분).
+    없으면 None → touch 알림은 최상위 메시지로 발송(종전 동작 폴백)."""
+    if not level_ids:
+        return None
+    ph = ",".join("?" * len(level_ids))
+    row = conn.execute(
+        f"SELECT preview_message_id FROM levels "
+        f"WHERE id IN ({ph}) AND preview_message_id IS NOT NULL "
+        f"ORDER BY id LIMIT 1",
+        tuple(level_ids),
+    ).fetchone()
+    return int(row["preview_message_id"]) if row else None
+
+
 def mark_touched(conn, touches: list, now: Optional[float] = None,
                  usdt_krw: Optional[float] = None,
                  bid_ask_ratio: Optional[float] = None,
@@ -751,7 +797,9 @@ def record_touch_snapshot(conn, rows: list,
                           atr_pct: Optional[float] = None,
                           btc_regime: Optional[str] = None,
                           dvol: Optional[float] = None,
-                          grade_ver: Optional[str] = None) -> None:
+                          grade_ver: Optional[str] = None,
+                          adx14: Optional[float] = None,
+                          bb_width_pctile: Optional[float] = None) -> None:
     """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 + 08-16 Tier2) — **기록 전용**.
 
     rows: [(level_id, grade, score, tp_usd, post_age_hours,
@@ -828,6 +876,83 @@ def record_touch_snapshot(conn, rows: list,
             f"UPDATE levels SET touch_dvol=? "
             f"WHERE id IN ({ph}) AND touch_dvol IS NULL",
             (float(dvol), *ids))
+    # #5 히트맵 원천 (2026-08-17 F3) — 클러스터 공통 시장 국면.
+    if adx14 is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_adx14=? "
+            f"WHERE id IN ({ph}) AND touch_adx14 IS NULL",
+            (float(adx14), *ids))
+    if bb_width_pctile is not None:
+        conn.execute(
+            f"UPDATE levels SET touch_bb_width_pctile=? "
+            f"WHERE id IN ({ph}) AND touch_bb_width_pctile IS NULL",
+            (float(bb_width_pctile), *ids))
+
+
+def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:
+    """등급×장세 히트맵 집계 (2026-08-17 #5).
+
+    since_ts: 이 시각 이후 종결된 표본만 (None 이면 전체).
+    반환: {"cells": {(grade, regime): {"n": int, "hit": float, "mfe": float|None}}}
+    - grade: touch_grade (터치 시점 재채점 등급, v5+)
+    - regime:
+        'trend'   → touch_adx14 >= 25
+        'neutral' → 20 <= touch_adx14 < 25
+        'range'   → touch_adx14 < 20
+        'squeeze' → touch_bb_width_pctile <= 20 (별도 셀 — trend 와 겹칠 수 있으니 병립)
+    - hit: 이 셀의 outcome IN ('tp1','tp2','tp3','tp_only')/총 종결 = TP1+ 도달률
+    - mfe: 평균 mfe_pct (NULL 제외 후 산술평균, 표본 부족 시 None)
+
+    표본 부족(각 셀 n<5) 처리는 렌더러에서 함. 여기선 원시 집계만 반환."""
+    where = "WHERE status='resolved' AND touch_grade IS NOT NULL"
+    params: tuple = ()
+    if since_ts is not None:
+        where += " AND resolved_at >= ?"
+        params = (float(since_ts),)
+    rows = conn.execute(
+        f"SELECT touch_grade AS g, touch_adx14 AS adx, touch_bb_width_pctile AS bbp, "
+        f"outcome, mfe_pct FROM levels {where}",
+        params,
+    ).fetchall()
+    _WIN = {"tp1", "tp2", "tp3", "tp_only"}
+    from collections import defaultdict
+    agg = defaultdict(lambda: {"n": 0, "wins": 0, "mfe_sum": 0.0, "mfe_n": 0})
+    for r in rows:
+        g = r["g"]
+        if g not in ("S", "A", "B", "C", "D"):
+            continue
+        adx = r["adx"]
+        outcome = r["outcome"]
+        mfe = r["mfe_pct"]
+        regimes = []
+        if adx is not None:
+            if adx >= 25:
+                regimes.append("trend")
+            elif adx >= 20:
+                regimes.append("neutral")
+            else:
+                regimes.append("range")
+        bbp = r["bbp"]
+        if bbp is not None and bbp <= 20:
+            regimes.append("squeeze")
+        for regime in regimes:
+            key = (g, regime)
+            agg[key]["n"] += 1
+            if outcome in _WIN:
+                agg[key]["wins"] += 1
+            if mfe is not None:
+                agg[key]["mfe_sum"] += float(mfe)
+                agg[key]["mfe_n"] += 1
+    cells = {}
+    for key, a in agg.items():
+        if a["n"] == 0:
+            continue
+        cells[key] = {
+            "n": a["n"],
+            "hit": a["wins"] / a["n"],
+            "mfe": (a["mfe_sum"] / a["mfe_n"]) if a["mfe_n"] else None,
+        }
+    return {"cells": cells}
 
 
 def get_touch_quality_pending(conn, t_lo: float, t_hi: float, limit: int = 5) -> list:

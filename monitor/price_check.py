@@ -949,6 +949,8 @@ def run_once(now: float | None = None) -> dict:
                 _snap_atr = None          # ATR20%(일봉) — vol-스케일 라벨용 내부 축적 전용
                                           # (발송 경로 fetch_position_data 공유 시만 값,
                                           #  억제 터치는 None — 추가 API 콜 0 원칙)
+                _snap_adx = None          # ADX14 — #5 히트맵 원천 (2026-08-17 F3)
+                _snap_bbw_pctile = None   # BB Width 백분위(20/120) — 같은 원칙, 억제 터치=None
 
                 if send_ok:
                     # 자체 적중 성적 주입 (표본 5건↑일 때만 렌더러가 표시 — 2단계 자동 발동)
@@ -997,8 +999,6 @@ def run_once(now: float | None = None) -> dict:
                     _snap_position = None
                     _snap_ma200_above = None
                     _snap_mtf = None
-                    _snap_adx = None
-                    _snap_bbw_pctile = None
                     try:
                         _pd = upbit.fetch_position_data(
                             ticker, cfg_get("http_timeout_sec"))
@@ -1026,8 +1026,8 @@ def run_once(now: float | None = None) -> dict:
                     except Exception as e:  # noqa: BLE001
                         logger.warning("[체크] %s 자리 판정 실패(무시): %s", coin, e)
                         _snap_position = None
-                        _snap_adx = None
-                        _snap_bbw_pctile = None
+                        # _snap_adx/_snap_bbw_pctile 는 상위 스코프에서 None 초기화되어
+                        # 있으므로 여기서 재초기화 불필요 (억제 터치 record 경로 안전).
                     kimchi = None
                     _snap_kimchi_delta = None
                     usd_global = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
@@ -1166,11 +1166,34 @@ def run_once(now: float | None = None) -> dict:
                     # C등급 무음 푸시 (2026-08-15 Tier1): 터치 본알림도 대표 재채점
                     # 등급이 alert_sound_min_grade(B) 미만이면 무음 발송 — 내용·양식
                     # ·발송 여부 불변, 소리만 제거. 예고는 종전대로 무음 고정.
-                    if telegram.send(text,
-                                     urgency=(_touch_sound_urgency(
-                                         rep.get("grade"), cfg_get)
-                                         if touched else "low")):
+                    # #6 preview→touch 스레딩 (2026-08-17) — touch 본알림만 원 preview
+                    # 알림의 message_id 를 조회해 답글로 붙인다. 예고 미발송·미저장이면
+                    # None → 최상위 메시지로 발송(종전 동작 폴백). 조회 실패는 격리 —
+                    # 스레드 못 걸어도 알림 자체는 나가야 한다(원장 우선).
+                    _reply_to = None
+                    if touched:
+                        try:
+                            _reply_to = db.get_preview_message_id(conn, ids)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("[체크] %s preview msgid 조회 실패(무시): %s",
+                                           coin, e)
+                    _sent_mid = telegram.send(
+                        text,
+                        urgency=(_touch_sound_urgency(rep.get("grade"), cfg_get)
+                                 if touched else "low"),
+                        reply_to_message_id=_reply_to,
+                    )
+                    if _sent_mid:
                         db.record_alert(conn, coin, kind, ids, day, now)
+                        # #6 스레딩 — preview 발송 성공 시 각 레벨에 message_id 저장.
+                        # 나중 touch 회차가 이 값을 reply_to 로 사용한다. touch 알림의
+                        # message_id 는 저장 안 함(현재 답글 걸 후속이 없음).
+                        if kind == "preview":
+                            try:
+                                db.set_preview_message_id(conn, ids, _sent_mid)
+                            except Exception as e:  # noqa: BLE001
+                                logger.warning("[체크] %s preview msgid 저장 실패(무시): %s",
+                                               coin, e)
                         # 원장에도 남긴다 — DB 쪽은 경합에서 지면 사라지므로 이쪽이
                         # 재발송 차단의 실질적 방어선이다(storage/alert_ledger.py).
                         alert_ledger.append(db_path, coin, kind, ids, now)
@@ -1372,7 +1395,11 @@ def run_once(now: float | None = None) -> dict:
                             # 클러스터 공통 kwarg. v4 수집분이 v5 산식으로 터치
                             # 재채점된 행을 구분 가능하게 한다 — 소급 조임 자체는
                             # 의도된 재채점 의미론(v4 롤아웃 때와 동일, 문서화됨).
-                            grade_ver=cfg_get("grade_formula_ver"))
+                            grade_ver=cfg_get("grade_formula_ver"),
+                            # #5 히트맵 원천 (2026-08-17 F3) — 발송 경로 fetch_position_data
+                            # 공유, 억제 터치는 None(다른 touch_* 와 동일 관례).
+                            adx14=_snap_adx,
+                            bb_width_pctile=_snap_bbw_pctile)
                     except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                         logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
                                        coin, e)

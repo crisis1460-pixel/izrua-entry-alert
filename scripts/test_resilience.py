@@ -668,7 +668,8 @@ def _post_429_then_ok(url, json=None, timeout=None):
 requests.post = _post_429_then_ok
 _tg_sleep_calls.clear()
 res_a = telegram.send("hello")
-check("수리5a: 429 - retry_after 대기 후 재시도로 성공", res_a is True and len(_posts_a) == 2)
+# 반환 타입 (2026-08-17 #6): bool → Optional[int]. 성공 = int>0 (truthy), 실패 = None.
+check("수리5a: 429 - retry_after 대기 후 재시도로 성공", bool(res_a) and len(_posts_a) == 2)
 check("수리5a: retry_after(3초, 상한 이내) 그대로 대기",
       bool(_tg_sleep_calls) and abs(_tg_sleep_calls[-1] - 3.0) < 0.01)
 
@@ -702,8 +703,8 @@ requests.post = _post_500_always
 _tg_sleep_calls.clear()
 telegram._last_send_at = 0.0
 res_c = telegram.send("hi")
-check("수리5c: 5xx 계속 실패 - 재시도 소진 후 False(삼키고 False, 잡을 안 막음)",
-      res_c is False)
+check("수리5c: 5xx 계속 실패 - 재시도 소진 후 None(삼키고 falsy, 잡을 안 막음)",
+      res_c is None)
 check("수리5c: 총 시도 3회(최초 1 + 재시도 2)", len(_posts_c) == 3)
 backoff_sleeps_c = [s for s in _tg_sleep_calls if s in (1.0, 2.0)]
 check("수리5c: 5xx 백오프 1초→2초 순서", backoff_sleeps_c == [1.0, 2.0])
@@ -720,7 +721,7 @@ def _post_timeout(url, json=None, timeout=None):
 requests.post = _post_timeout
 _tg_sleep_calls.clear()
 res_d = telegram.send("hi")
-check("수리5d: 타임아웃 계속 - 재시도 소진 후 False", res_d is False and _calls_d["n"] == 3)
+check("수리5d: 타임아웃 계속 - 재시도 소진 후 None", res_d is None and _calls_d["n"] == 3)
 
 # 5e: 토큰 마스킹 - 예외 문자열에 토큰 URL 이 실려도 로그엔 남지 않는다
 _tg_handler = _ListLogHandler()
@@ -1060,7 +1061,7 @@ with db.connect(TEST_DB_CHAIN_CYCLE) as conn:
 _orig_fetch_prices = upbit_mod.fetch_prices
 _orig_send = telegram.send
 upbit_mod.fetch_prices = lambda mkts, t: {m: 1400.0 for m in mkts}  # 가격이 entry 대비 멀어 터치 없음
-telegram.send = lambda text, urgency="high": True
+telegram.send = lambda text, urgency="high", reply_to_message_id=None: 1
 
 _orig_verify = db.verify_outcome_chain
 db.verify_outcome_chain = lambda conn: (_ for _ in ()).throw(RuntimeError("체인4 고의 예외"))

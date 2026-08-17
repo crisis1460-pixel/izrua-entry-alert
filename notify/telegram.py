@@ -30,7 +30,7 @@ import logging
 import re
 import time
 import unicodedata
-from typing import Literal
+from typing import Literal, Optional
 
 import requests
 
@@ -204,8 +204,18 @@ _TG_MAX_LEN = 4096
 _KIMCHI_DELTA_TH = 0.5
 
 
-def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
-    """HTML 모드 발송. 성공 True. 토큰 미설정/재시도 소진 후 실패 시 False (예외 없음).
+def send(text: str, urgency: Literal["high", "low"] = "high",
+         reply_to_message_id: Optional[int] = None) -> Optional[int]:
+    """HTML 모드 발송. 성공 시 telegram message_id(int>0), 실패 시 None.
+
+    반환 타입 변경 이력(2026-08-17 #6 스레딩): 종전 bool 반환 → Optional[int].
+    기존 호출부 `if telegram.send(...)` 는 int>0/None 모두 bool 컨텍스트에서 동일
+    하게 동작(양수 truthy)하므로 하위 호환 유지. message_id 를 사용하려는 신규
+    호출부만 정수로 저장(preview→touch 스레딩용, storage/db.py preview_message_id).
+
+    reply_to_message_id: 원 메시지에 답글로 붙여 발송 — preview 알림의 message_id
+    를 넘기면 touch 알림이 UI 에서 스레드로 연결(사용자 UX 개선). None(기본) 은
+    최상위 메시지로 발송.
 
     4096자 초과 시 구분선(_SEP) 기준으로 자동 분할 전송한다.
 
@@ -213,8 +223,9 @@ def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
 
     재시도(2026-07-26): 429 는 retry_after(상한 10초) 대기 후, 5xx/타임아웃·연결
     오류는 1~2초 대기 후 재시도. 총 재시도 최대 _RETRY_MAX 회, 소진하면 기존처럼
-    조용히 False."""
+    조용히 None."""
     if len(text) > _TG_MAX_LEN:
+        # 분할 발송은 스레딩 대상 아님(첫 chunk 만 답글로 붙이면 나머지 어긋난다).
         return _split_send(text, urgency)
 
     global _last_send_at
@@ -227,12 +238,17 @@ def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
     chat_id = settings.secret("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         logger.warning("[tg] 토큰/chat_id 미설정 - 발송 생략 (내용 %d자)", len(text))
-        return False
+        return None
 
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
                "disable_web_page_preview": True}
     if urgency == "low":
         payload["disable_notification"] = True
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+        # 원 메시지가 삭제됐어도 답글 자체는 발송 (Telegram 관례) — 원장 스레드는
+        # 끊어져도 알림 자체는 잃지 않는 게 우선.
+        payload["allow_sending_without_reply"] = True
 
     retry = 0
     while True:
@@ -248,11 +264,16 @@ def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
                 retry += 1
                 continue
             logger.error("[tg] 발송 실패(재시도 소진): %s", _redact(str(e), token))
-            return False
+            return None
 
         if resp.status_code == 200:
             _last_send_at = time.time()
-            return True
+            # message_id 파싱 실패 시에도 발송은 성공했으므로 truthy 값 반환 (>0 보장 위해 -1 회피)
+            try:
+                mid = resp.json().get("result", {}).get("message_id")
+                return int(mid) if mid else 1
+            except (ValueError, TypeError, KeyError):
+                return 1
 
         if resp.status_code == 429 and retry < _RETRY_MAX:
             wait = _retry_after_sec(resp)
@@ -272,11 +293,13 @@ def send(text: str, urgency: Literal["high", "low"] = "high") -> bool:
 
         logger.error("[tg] 발송 실패 status=%s body=%s", resp.status_code,
                      _redact(resp.text[:200], token))
-        return False
+        return None
 
 
-def _split_send(text: str, urgency: str) -> bool:
-    """_SEP 경계에서 분할하여 다건 전송. 전부 성공해야 True."""
+def _split_send(text: str, urgency: str) -> Optional[int]:
+    """_SEP 경계에서 분할하여 다건 전송. 첫 chunk 의 message_id 반환(전부 성공 시),
+    하나라도 실패하면 None (2026-08-17 #6: 반환 타입 확장). 스레딩 대상은 아님 —
+    긴 메시지는 대부분 리포트/주간 통계로, 답글 관계를 걸 후속이 없다."""
     logger.info("[tg] %d자 → 분할 발송 시작", len(text))
     chunks, current = [], []
     for line in text.split("\n"):
@@ -288,16 +311,20 @@ def _split_send(text: str, urgency: str) -> bool:
             current.append(line)
     if current:
         chunks.append("\n".join(current))
+    first_mid = None
     ok = True
     for i, chunk in enumerate(chunks):
         if len(chunk) > _TG_MAX_LEN:
             chunk = chunk[:_TG_MAX_LEN - 20] + "\n… (truncated)"
         if i > 0:
             time.sleep(1.0)
-        if not send(chunk, urgency):
+        mid = send(chunk, urgency)
+        if not mid:
             ok = False
             logger.error("[tg] 분할 발송 %d/%d 실패", i + 1, len(chunks))
-    return ok
+        elif i == 0:
+            first_mid = mid
+    return first_mid if ok else None
 
 
 
@@ -855,6 +882,47 @@ def _r_distribution_section(dist: dict, by_grade: dict = None) -> list:
     return lines
 
 
+def _regime_heatmap_section(heatmap: dict, min_cell_n: int = 5) -> list:
+    """등급×장세 히트맵 섹션 (2026-08-17 #5).
+
+    heatmap 스키마: {"cells": {(grade, regime): {"n": int, "hit": float, "mfe": float}}}
+    - grade: 'S'|'A'|'B'|'C'|'D'
+    - regime: 'trend'(ADX>=25) | 'neutral'(20<=ADX<25) | 'range'(ADX<20) | 'squeeze'(BB pctile<=20)
+    - 각 셀에 표본 n 이 min_cell_n 미만이면 셀 자체 생략. 전체 셀이 부족하면 섹션 통째 스킵.
+
+    표시 전용 — 알림 필터·등급 산식에 영향 없음. 표본 도달(각 셀 최소 5건) 전까지는
+    자동으로 섹션이 출력되지 않아 리포트 노이즈 0."""
+    if not heatmap or not heatmap.get("cells"):
+        return []
+    cells = heatmap["cells"]
+    valid = {k: v for k, v in cells.items() if v.get("n", 0) >= min_cell_n}
+    if not valid:
+        return []
+    lines = [_SEP, f"🌡️ 등급×장세 히트맵 (터치 후 TP1 도달률, 각 셀 n≥{min_cell_n})"]
+    regime_order = [("trend", "추세"), ("neutral", "중립"), ("range", "횡보"),
+                    ("squeeze", "압축")]
+    regime_has = {r: any((g, r) in valid for g in ("S", "A", "B", "C", "D"))
+                  for r, _ in regime_order}
+    header_cols = [lbl for r, lbl in regime_order if regime_has.get(r)]
+    lines.append("  등급 | " + " | ".join(f"{c:^6}" for c in header_cols))
+    for grade in ("S", "A", "B", "C"):  # D 는 필터에서 걸러져 표본 없음이 대부분
+        cols = []
+        has_row = False
+        for r, _ in regime_order:
+            if not regime_has.get(r):
+                continue
+            cell = valid.get((grade, r))
+            if cell:
+                cols.append(f"{cell['hit'] * 100:>4.0f}%")
+                has_row = True
+            else:
+                cols.append("  -   ")
+        if has_row:
+            lines.append(f"  {grade:>4s}  | " + " | ".join(cols))
+    lines.append("ℹ️ 표시 전용 — 알림 필터·등급 산식 무영향")
+    return lines
+
+
 def _holding_period_section(hold: dict) -> list:
     """⏱️ 보유기간(터치→종결 경과) 분포 섹션 (2026-08-01 내부기능강화 리서치 영역4).
     미주입/표본 0 이면 빈 목록. **표시 전용** — 알림 필터에 영향 없음."""
@@ -880,7 +948,8 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          reverse_confirmed: set = None,
                          r_distribution: dict = None,
                          r_distribution_by_grade: dict = None,
-                         holding_period: dict = None) -> str:
+                         holding_period: dict = None,
+                         regime_heatmap: dict = None) -> str:
     """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
     → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
 
@@ -935,6 +1004,7 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
         lines.extend(_calibration_section(calibration_result, calibration_legacy))
         lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
         lines.extend(_holding_period_section(holding_period))
+        lines.extend(_regime_heatmap_section(regime_heatmap))
         lines.append(_SEP)
         return "\n".join(lines)
 
@@ -996,6 +1066,10 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
     # 등급 축과도 작성자 축과도 무관한 별도 관찰, 둘 다 표시 전용
     lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
     lines.extend(_holding_period_section(holding_period))
+
+    # ⑦ 등급×장세 히트맵 (2026-08-17 #5, 표시 전용) — 각 셀 n<5 이면 셀 생략,
+    # 전체 셀 부족이면 섹션 통째 스킵(표본 도달 전 자동 침묵)
+    lines.extend(_regime_heatmap_section(regime_heatmap))
 
     # ⑦ 안내: 표본부족 + 역신호 후보/확정
     if under_sample or n_anti or reverse_confirmed:
