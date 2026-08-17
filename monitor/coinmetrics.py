@@ -4,9 +4,13 @@ Coin Metrics Community API — 온체인 활성 주소(30일 백분위).
 무료·무키·1.6 rps (10 req / 6s sliding window)·**CC 비상업 라이선스**
 (개인 알림봇은 문제 없음, 상업화 시 재검토 필요).
 
-커버 자산(2026-08-17 실측, 무료 티어): BTC/ETH/XRP/ADA/DOGE/LTC/BCH/ETC/TRX/
-XTZ/EOS/XLM/LINK/UNI/AAVE/ZEC/BNB/DASH (~18종). Upbit KRW 유니버스 300 대비
-커버율 낮음(~5%) — 나머지 알트는 배지·등급 반영 자연 스킵.
+커버 자산(2026-08-17 실측, 무료 티어, 총 43종):
+  L1: BTC/ETH/XRP/ADA/DOGE/LTC/BCH/ETC/BNB/TRX/DASH/ZEC/XTZ/EOS/XLM/ALGO/ICP
+  DeFi(ERC-20): LINK/UNI/AAVE/MKR/SNX/CRV/LDO/1INCH/YFI/SUSHI/COMP/BAT/OMG/
+                MANA/ZRX/LPT/REN/KNC/BAL/UMA/FTT/POWR
+  스테이블: USDT/USDC/BUSD/TUSD (알림 대상 아님, 화이트리스트만)
+Upbit KRW 유니버스 300 대비 실질 커버율 ~10% — 나머지 알트는 배지·등급 자연
+스킵. 미커버 자산(SOL/SUI/APT/TON/ARB/OP/RENDER/SEI/TIA 등)은 유료 티어 필요.
 
 지표: **AdrActCnt (활성 주소 수, 일봉)** 30일 창의 현재 값 백분위.
 - 백분위 ≤20 저조: 네트워크 관심 이탈 = 매수 부담 (-1점, 배지 표시)
@@ -33,10 +37,19 @@ _CACHE_TTL_SEC = 86400.0     # 24h — 일봉 지표라 하루 1회면 충분
 _NEG_TTL_SEC = 604800.0      # 7일 — 미커버 자산은 오래 캐시(재조회 억제)
 _META_PREFIX = "cm_addr_pct_"
 
-# 무료 티어 확인된 자산 (2026-08-17 실측). 나머지는 첫 조회 시 실패로 판단해
-# 7일 negative cache — 유니버스 300 매 알림당 API 콜 낭비 방지.
-COVERED = {"btc", "eth", "xrp", "ada", "doge", "ltc", "bch", "etc", "bnb", "trx",
-           "dash", "zec", "xtz", "eos", "xlm", "link", "uni", "aave"}
+# 무료 티어 확인된 자산 (2026-08-17 실측, 총 43종). 나머지는 API 콜 자체 생략.
+# 유료 티어 필요 자산(SOL/SUI/APT/ARB/OP/RENDER 등)은 여기 없음 → None 반환.
+COVERED = {
+    # L1 (17)
+    "btc", "eth", "xrp", "ada", "doge", "ltc", "bch", "etc", "bnb", "trx",
+    "dash", "zec", "xtz", "eos", "xlm", "algo", "icp",
+    # ERC-20 DeFi/유틸 (22)
+    "link", "uni", "aave", "mkr", "snx", "crv", "ldo", "1inch", "yfi", "sushi",
+    "comp", "bat", "omg", "mana", "zrx", "lpt", "ren", "knc", "bal", "uma",
+    "ftt", "powr",
+    # 스테이블(알림 대상 아님, 화이트리스트만) (4)
+    "usdt", "usdc", "busd", "tusd",
+}
 
 
 def _fetch_series(asset: str, timeout: float, days: int = 30) -> Optional[list]:
