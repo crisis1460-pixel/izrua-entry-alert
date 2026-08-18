@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-18 (코드 다듬기 A·B·C 반영)  
+> 마지막 업데이트: 2026-08-18 (워쳐 SL률 연동 + VS 테스트 임계값 갱신)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -260,6 +260,9 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 터치 스냅샷 5+2종 (2026-08-15 Tier1, 08-16 리뷰 수정) | 발송·억제 무관 전 터치에 첫 기록 우선 저장. **진행 중 캔들 배제**(08-16 Fix1): 실시간 터치의 잠정 종가 편향 방지 → NULL 행은 `_backfill_touch_quality`가 완성 캔들로 소급(회차당 ≤5행). **멤버별 관통**(Fix2): 클러스터 상단이 아닌 각 레벨 자신의 엔트리 기준. **touch_grade_ver**(Fix5): 산식 버전 도장. 기록 컬럼: `touch_grade`/`touch_score`(재채점), `touch_penetration_pct`/`touch_closed_below`(품질), `touch_tp_usd`(TP 동결), `touch_post_age_hours`(글나이, t_anchor 기준 Fix3), `touch_grade_ver`. `db.record_touch_snapshot()` | `monitor/price_check.py` → `storage/db.py` (기록 전용) |
 | 터치 스냅샷 Tier2 3종 (2026-08-16) | `touch_atr_pct` — Wilder ATR(20)% (일봉 1콜 공유), `touch_btc_regime` — BTC vs 200일선 above/below (**관측일** 3일 히스테리시스 Fix6: 달력일→실관측 KST일, 같은 날 중복 1회 제한, 조회실패일 미카운트), `touch_dvol` — DVOL 수치(옵션 컨텍스트 재사용) | `monitor/upbit.py`·`macro.py`·`price_check.py` → `storage/db.py` (기록 전용) |
 | 주간 감사 misses 섹션 (2026-08-16) | grade_stats JSON `misses` — 최근 7일 실패 신호별 MFE/MAE·소요시간·터치 판정·자동 분류(즉시반전 MFE<1% / 이익반납 ≥2% / 중간 / 판정불가), 상한 30 + class_counts. `post_age_stats` — 글 나이 버킷별 적중률 (<24h/24-72h/72-120h/120h+) | `storage/audit_dump.py` (내부 전용) |
+| 워쳐 SL률 — 코인별 (2026-08-18) | `watcher_stats.load_watcher_data()` → `coin_sl_rates` — 워쳐 DB 7일 signal_tracking×chartist_stats JOIN, signal_hash 중복 제거. 터치 알림 뱃지 표시: ≥2건 시 info(기본)/risk(60%+). 4h 인프로세스 캐시, price_check 회차별 lazy-load | `collector/watcher_stats.py` → `monitor/price_check.py` → `notify/telegram.py` |
+| 워쳐 SL률 — 시장 전체 (2026-08-18) | `watcher_stats.load_watcher_data()` → `market_sl` — 전 코인 합산 SL률. ≥5건 시 모닝 브리핑에 📉 행 추가 | `collector/watcher_stats.py` → `notify/morning_brief.py` |
+| 작성자 적중률 로컬 연동 (2026-08-18) | `watcher_stats.load_author_stats()` (하위 호환 래퍼) — chartist_stats 적중률·팔로워·화이트리스트. `load_watcher_data()` 통합 호출로 전환, 단독 캐시 공유 | `collector/watcher_stats.py` (기존 수집 경로 유지) |
 | 피드백 Wilson 집계 (2026-08-16) | show_status "알림 피드백 (시험)" — 전체·등급별·작성자별(상위 10) up율 + Wilson 80% 하한. 10표 미만 판단 보류, 자동조치는 30표+ 정책 (표기 전용) | `scripts/show_status.py` |
 | 터치 품질 분석기 (2026-08-16) | `analyze_touch_quality.py` — 꼬리터치 vs 종가이탈 그룹별 + 침투 깊이 3버킷별 승률·ret_24h·MFE/MAE (그룹당 n≥20 도달 시 판정 — 첫 터치 vs 재확인 알림 전환의 자체 근거). 읽기 전용 CLI | `scripts/analyze_touch_quality.py` |
 | 캔들 종가 보존 (2026-08-15, Fix7) | `upbit.fetch_range_since` 반환 튜플 4→5원소 `(start, end, high, low, close)` — 뒤에 붙여 기존 인덱스 소비자 무영향. `_fetch_ohlc` **캔들별 가드**(Fix7): 필드 결손 캔들 개별 스킵, 나머지 보존(종전: 1개 불량이 전량 None) | `monitor/upbit.py` |

@@ -461,7 +461,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  position: tuple = None, kimchi_delta: float = None,
                  adx14: float = None, dex_stats: dict = None,
                  active_addr_pctile: float = None,
-                 stwits_bullish_ratio: float = None) -> str:
+                 stwits_bullish_ratio: float = None,
+                 watcher_coin_sl: dict = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -615,6 +616,19 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     if position and position[0]:
         _pv, _pr = position
         info_badges.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
+
+    # 워쳐 코인별 SL률 (최근 7일, 표본 2건 이상일 때만 표시)
+    if watcher_coin_sl and watcher_coin_sl.get("total", 0) >= 2:
+        _sl_r = watcher_coin_sl["sl_rate"]
+        _sl_t = watcher_coin_sl["total"]
+        _sl_m = watcher_coin_sl["misses"]
+        if _sl_r is not None:
+            if _sl_r >= 0.6:
+                risk_badges.append(
+                    f"📉 워쳐 SL률 {_sl_r*100:.0f}% (7일 {_sl_m}/{_sl_t}건)")
+            else:
+                info_badges.append(
+                    f"📉 워쳐 SL률 {_sl_r*100:.0f}% (7일 {_sl_m}/{_sl_t}건)")
 
     # 렌더 순서: 리스크 → 정보 → 긍정 (사용자 결정, E1 옵션 2).
     lines.extend(risk_badges)

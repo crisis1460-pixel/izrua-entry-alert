@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from analytics import clustering, ranking  # 순수 수학 모듈 (프로젝트 import 0 — 순환 없음)
+from collector import watcher_stats
 from config import settings
 from monitor import announcements, binance, upbit
 from notify import telegram
@@ -705,6 +706,19 @@ def run_once(now: float | None = None) -> dict:
                 vol_cache["ranks"] = upbit.fetch_volume_ranks(cfg_get("http_timeout_sec"))
             return vol_cache["ranks"]
 
+        # 워쳐 코인별 SL률 — 발송 시 1회 조회, 전 코인 공유 (4h 인프로세스 캐시)
+        _watcher_ctx = {"loaded": False, "coin_sl": {}}
+
+        def _watcher_coin_sl():
+            if not _watcher_ctx["loaded"]:
+                _watcher_ctx["loaded"] = True
+                try:
+                    wd = watcher_stats.load_watcher_data(cfg_get("http_timeout_sec"))
+                    _watcher_ctx["coin_sl"] = wd.get("coin_sl_rates") or {}
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[체크] 워쳐 SL률 조회 실패(무시): %s", e)
+            return _watcher_ctx["coin_sl"]
+
         # 토큰 언락 경고 — 발송 시 1회 조회, 전 코인 공유 (DeFiLlama 6h 캐시)
         _unlock_ctx = {"loaded": False, "data": None}
 
@@ -1230,7 +1244,8 @@ def run_once(now: float | None = None) -> dict:
                                                  adx14=_snap_adx,
                                                  dex_stats=_snap_dex,
                                                  active_addr_pctile=_snap_addr_pct,
-                                                 stwits_bullish_ratio=_snap_stwits)
+                                                 stwits_bullish_ratio=_snap_stwits,
+                                                 watcher_coin_sl=_watcher_coin_sl().get(coin))
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로

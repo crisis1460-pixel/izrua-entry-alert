@@ -248,6 +248,17 @@ def build_brief(conn, now: float, timeout: float) -> str:
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 미국 증시 실패: %s", e)
 
+    # 워쳐 시장 전체 SL률 (최근 7일, 표본 5건 이상일 때만 표시)
+    try:
+        from collector import watcher_stats
+        wd = watcher_stats.load_watcher_data(timeout)
+        msl = wd.get("market_sl")
+        if msl and msl.get("total", 0) >= 5 and msl.get("sl_rate") is not None:
+            lines.append(f"📉 워쳐 SL률 {msl['sl_rate']*100:.0f}%"
+                         f" (7일 {msl['misses']}/{msl['total']}건)")
+    except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
+        logger.warning("[brief] 워쳐 SL률 실패: %s", e)
+
     # 매크로 이벤트 7일 예고 (전부 표시)
     try:
         ev_lines = _macro_event_lines(now, conn)

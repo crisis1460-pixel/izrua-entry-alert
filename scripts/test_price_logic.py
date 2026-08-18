@@ -2849,15 +2849,15 @@ check("VS3 발송완료 행 리셋 시 밴드 교체",
       and _vsa3["band_high_krw"] == 13000.0)
 
 # VS4: 밴드 내 + ratio ≥5 + 절대 하한 통과 → 알림 발송 + alerted=1
-_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}   # 6.0x, 6억 ≥ 하한 0.5억
+_vs_vol["val"] = {"last_60m": 9e8, "avg_20h": 1e8}   # 9.0x, 9억 ≥ 하한 5억
 sent_before_vs = len(sent_messages)
 _vs_run({"KRW-VSA": 10000.0})
 _vs_msg = sent_messages[-1]
-check("VS4 밴드 내 + 6.0x 급증 - 알림 발송·발송표식",
+check("VS4 밴드 내 + 9.0x 급증 - 알림 발송·발송표식",
       len(sent_messages) == sent_before_vs + 1 and _vs_row("KRW-VSA")["alerted"] == 1
       and "거래량 급증" in _vs_msg and "VSA" in _vs_msg)
 check("VS4b 새 지표 렌더 - 최근 1시간/20시간 평균 라벨",
-      tg._truncate_line("    최근 1시간:  6.0억  (6.0x 급증)") in _vs_msg
+      tg._truncate_line("    최근 1시간:  9.0억  (9.0x 급증)") in _vs_msg
       and "20시간 평균:  1.0억" in _vs_msg
       and "24h" not in _vs_msg and "7일" not in _vs_msg)
 check("VS4c TP 스냅샷 없는 행(NULL) - TP 행 생략", "TP:" not in _vs_msg)
@@ -2934,7 +2934,7 @@ with db.connect(_VS_DB) as conn:
     conn.execute("INSERT INTO volume_watch (ticker, coin_symbol, added_at) "
                  "VALUES ('KRW-VSL', 'VSL', ?)", (_vs_now,))
     conn.commit()
-_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}
+_vs_vol["val"] = {"last_60m": 9e8, "avg_20h": 1e8}
 _vs_run({"KRW-VSL": 999999.0})                        # 밴드가 있었다면 명백한 이탈 가격
 check("VS9 레거시 NULL 밴드 - 이탈 판정 없이 감시 지속 + 급증 알림 정상",
       len(sent_messages) == sent_before_vs + 3 and _vs_row("KRW-VSL")["alerted"] == 1)
@@ -2946,7 +2946,7 @@ with db.connect(_VS_DB) as conn:
     db.add_volume_watch(conn, "KRW-VSF", "VSF", _vs_now,
                         band_low_krw=900.0, band_high_krw=1200.0)
     conn.commit()
-_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}    # 6.0x 급증 값이어도
+_vs_vol["val"] = {"last_60m": 9e8, "avg_20h": 1e8}    # 9.0x 급증 값이어도
 _vs_calls.clear()
 _vs_run({})
 check("VS9b 현재가 미보유+밴드 행 - 판정 유예(무발송·API 미호출·감시 유지)",
@@ -2996,7 +2996,7 @@ with db.connect(_VS_DB) as conn:
                         tp1_krw=10000.0, tp_count=3,
                         tps_krw="[10000.0, 11000.0, 13000.0]")
     conn.commit()
-_vs_vol["val"] = {"last_60m": 6e8, "avg_20h": 1e8}
+_vs_vol["val"] = {"last_60m": 9e8, "avg_20h": 1e8}
 _vs_run({"KRW-VST": 10500.0})
 check("VS13 다음 TP 동적 선정 - 현재가 위 2단계 TP 표시",
       _vs_row("KRW-VST")["alerted"] == 1
@@ -3039,11 +3039,11 @@ with db.connect(_VS_DB) as conn:
 _vs_vol["val"] = {"last_60m": 5.437e7, "avg_20h": 7.9e6}   # ETHFI 실측값
 _vs_before15 = len(sent_messages)
 _vs_run({"KRW-VSE2": 100.0})
-check("VS15 ETHFI 위양성 실사례(0.54억, 6.9x) - 2억 하한이 차단",
+check("VS15 ETHFI 위양성 실사례(0.54억, 6.9x) - 5억 하한이 차단",
       len(sent_messages) == _vs_before15 and _vs_row("KRW-VSE2")["alerted"] == 0)
-_vs_vol["val"] = {"last_60m": 2e8, "avg_20h": 3e7}         # 6.7x, 정확히 2억
+_vs_vol["val"] = {"last_60m": 5e8, "avg_20h": 5e7}         # 10.0x, 정확히 5억
 _vs_run({"KRW-VSE2": 100.0})
-check("VS15b 하한 정확 경계(2억) - 발송(이상 경계)",
+check("VS15b 하한 정확 경계(5억) - 발송(이상 경계)",
       len(sent_messages) == _vs_before15 + 1 and _vs_row("KRW-VSE2")["alerted"] == 1)
 
 upbit.fetch_rvol_1h = lambda m, t: None   # 기본 스텁 복원

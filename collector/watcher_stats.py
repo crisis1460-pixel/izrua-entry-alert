@@ -3,13 +3,15 @@
 
 upbit_bot signals/watcher_feed.py 의 아티팩트 다운로드 경로를 이식(간소화).
 WATCHER_GITHUB_TOKEN 이 없으면 조용히 빈 결과 반환 → 알림에는 '기록없음'/팔로워로 표시.
-가져오는 것: chartist_stats(적중률·건수), chartist_whitelist, author_cache(팔로워).
+가져오는 것: chartist_stats(적중률·건수), chartist_whitelist, author_cache(팔로워),
+signal_tracking(코인별·전체 SL률).
 """
 
 import io
 import logging
 import sqlite3
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 import requests
@@ -21,10 +23,10 @@ logger = logging.getLogger("alert.watcher_stats")
 _GITHUB_API = "https://api.github.com"
 _OWNER = "crisis1460-pixel"
 _REPO = "izrua_watcher"
-# 2026-07-23 수정: "watcher-db"로 추정해 짰다가 실제 이름과 달라 조용히 빈 결과만
-# 반환되고 있었다(적중률이 알림에 안 뜨던 근본 원인). 실제 이름은 upbit_bot
-# config.yaml watcher_feed.artifact_name 에서 확인한 "crypto-db".
 _ARTIFACT_NAME = "crypto-db"
+
+_cache: dict = {"data": None, "ts": 0}
+_CACHE_TTL = 3600 * 4
 
 
 def _headers(token: str) -> dict:
@@ -35,12 +37,11 @@ def _headers(token: str) -> dict:
     }
 
 
-def load_author_stats(timeout: float = 15.0) -> dict:
-    """반환: {username: {hit_rate, hit_count, whitelisted, followers}}. 실패 시 {}."""
+def _download_artifact(timeout: float = 15.0) -> bytes | None:
     token = settings.secret("WATCHER_GITHUB_TOKEN")
     if not token:
         logger.info("[watcher] 토큰 없음 - 작성자 통계 비활성화 (알림엔 기록없음 표시)")
-        return {}
+        return None
     try:
         url = f"{_GITHUB_API}/repos/{_OWNER}/{_REPO}/actions/artifacts"
         resp = requests.get(url, headers=_headers(token), params={"per_page": 50}, timeout=timeout)
@@ -49,85 +50,160 @@ def load_author_stats(timeout: float = 15.0) -> dict:
                 if a.get("name") == _ARTIFACT_NAME and not a.get("expired", True)]
         if not arts:
             logger.warning("[watcher] 아티팩트 없음")
-            return {}
+            return None
         arts.sort(key=lambda a: a.get("created_at", ""), reverse=True)
         art_id = arts[0]["id"]
 
         resp = requests.get(f"{url}/{art_id}/zip", headers=_headers(token), timeout=timeout * 2)
         resp.raise_for_status()
-        db_bytes = None
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             for name in zf.namelist():
                 if name.endswith(".db"):
-                    db_bytes = zf.read(name)
-                    break
-        if not db_bytes:
-            return {}
-        return _parse_db(db_bytes)
-    except Exception as e:  # noqa: BLE001 - 선택 기능 실패가 수집을 막으면 안 됨
-        logger.warning("[watcher] 작성자 통계 로드 실패(계속 진행): %s", e)
-        return {}
+                    return zf.read(name)
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[watcher] 아티팩트 다운로드 실패(계속 진행): %s", e)
+        return None
 
 
-def _parse_db(db_bytes: bytes) -> dict:
+def _parse_authors(c: sqlite3.Cursor) -> dict:
+    out: dict = {}
+    try:
+        hit_miss: dict = {}
+        for username, outcome, cnt in c.execute(
+            "SELECT username, outcome, COUNT(*) FROM chartist_stats "
+            "WHERE outcome IN ('hit','miss') GROUP BY username, outcome"
+        ).fetchall():
+            hit_miss.setdefault(username, {"hit": 0, "miss": 0})[outcome] = cnt
+        for username, hm in hit_miss.items():
+            total = hm["hit"] + hm["miss"]
+            out[username] = {
+                "hit_rate": (hm["hit"] / total) if total else None,
+                "hit_count": total,
+                "whitelisted": False,
+                "followers": None,
+            }
+    except sqlite3.OperationalError:
+        logger.warning("[watcher] chartist_stats 스키마 인식 실패 - 적중률 생략")
+
+    try:
+        for r in c.execute("SELECT username FROM chartist_whitelist").fetchall():
+            out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
+                                           "whitelisted": False, "followers": None})
+            out[r["username"]]["whitelisted"] = True
+    except sqlite3.OperationalError:
+        logger.warning("[watcher] chartist_whitelist 스키마 인식 실패 - 화이트리스트 생략")
+
+    try:
+        for r in c.execute("SELECT username, followers FROM author_cache").fetchall():
+            out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
+                                           "whitelisted": False, "followers": None})
+            out[r["username"]]["followers"] = r["followers"]
+    except sqlite3.OperationalError:
+        logger.warning("[watcher] author_cache 스키마 인식 실패 - 팔로워 생략")
+
+    return out
+
+
+def _parse_sl_rates(c: sqlite3.Cursor, days: int = 7) -> tuple:
+    """코인별 SL률 + 시장 전체 SL률.
+
+    Returns (coin_sl_rates, market_sl):
+        coin_sl_rates: {symbol: {hits, misses, total, sl_rate}}
+        market_sl: {hits, misses, total, sl_rate} or None
+    """
+    coin_sl: dict = {}
+    market_hits = market_misses = 0
+    try:
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S",
+                               time.gmtime(time.time() - 86400 * days))
+        rows = c.execute(
+            "SELECT st.coin_symbol, sub.outcome "
+            "FROM signal_tracking st "
+            "JOIN ("
+            "  SELECT signal_hash, MIN(outcome) AS outcome "
+            "  FROM chartist_stats "
+            "  WHERE outcome IN ('hit','miss') "
+            "  GROUP BY signal_hash"
+            ") sub ON st.signal_hash = sub.signal_hash "
+            "WHERE st.alerted_at >= ?",
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            sym = row["coin_symbol"]
+            outcome = row["outcome"]
+            coin_sl.setdefault(sym, {"hits": 0, "misses": 0})
+            if outcome == "hit":
+                coin_sl[sym]["hits"] += 1
+                market_hits += 1
+            else:
+                coin_sl[sym]["misses"] += 1
+                market_misses += 1
+        for sym, d in coin_sl.items():
+            d["total"] = d["hits"] + d["misses"]
+            d["sl_rate"] = d["misses"] / d["total"] if d["total"] else None
+    except sqlite3.OperationalError:
+        logger.warning("[watcher] signal_tracking 스키마 인식 실패 - SL률 생략")
+        return {}, None
+
+    market_total = market_hits + market_misses
+    market_sl = {
+        "hits": market_hits,
+        "misses": market_misses,
+        "total": market_total,
+        "sl_rate": market_misses / market_total if market_total else None,
+    } if market_total else None
+
+    return coin_sl, market_sl
+
+
+def _parse_all(db_bytes: bytes) -> dict:
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             f.write(db_bytes)
             tmp_path = f.name
-        # 2026-07-28 수리: sqlite3.DatabaseError("file is not a database") 는
-        # OperationalError 의 부모라 내부 핸들러를 통과 → conn.close() 미실행 →
-        # Windows 에서 finally 의 unlink 가 PermissionError. 이제 conn 을 닫는 책임을
-        # try/finally 로 명시해 어떤 예외에서도 close() 가 보장되도록 한다.
         conn = sqlite3.connect(tmp_path)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         try:
-            out: dict = {}
-            try:
-                # 2026-07-23 수정: 실제 스키마는 (username, outcome∈'hit'/'miss', ...) 행 단위.
-                # 워쳐 database.py::get_chartist_accuracy() 와 동일한 집계로 계산한다.
-                hit_miss: dict = {}
-                for username, outcome, cnt in c.execute(
-                    "SELECT username, outcome, COUNT(*) FROM chartist_stats "
-                    "WHERE outcome IN ('hit','miss') GROUP BY username, outcome"
-                ).fetchall():
-                    hit_miss.setdefault(username, {"hit": 0, "miss": 0})[outcome] = cnt
-                for username, hm in hit_miss.items():
-                    total = hm["hit"] + hm["miss"]
-                    out[username] = {
-                        "hit_rate": (hm["hit"] / total) if total else None,
-                        "hit_count": total,
-                        "whitelisted": False,
-                        "followers": None,
-                    }
-            except sqlite3.OperationalError:
-                # 스키마가 다르면(컬럼명 변화) 통계 없이 진행 — 치명 아님
-                logger.warning("[watcher] chartist_stats 스키마 인식 실패 - 적중률 생략")
-
-            try:
-                for r in c.execute("SELECT username FROM chartist_whitelist").fetchall():
-                    out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
-                                                   "whitelisted": False, "followers": None})
-                    out[r["username"]]["whitelisted"] = True
-            except sqlite3.OperationalError:
-                logger.warning("[watcher] chartist_whitelist 스키마 인식 실패 - 화이트리스트 생략")
-
-            try:
-                for r in c.execute("SELECT username, followers FROM author_cache").fetchall():
-                    out.setdefault(r["username"], {"hit_rate": None, "hit_count": 0,
-                                                   "whitelisted": False, "followers": None})
-                    out[r["username"]]["followers"] = r["followers"]
-            except sqlite3.OperationalError:
-                logger.warning("[watcher] author_cache 스키마 인식 실패 - 팔로워 생략")
-
-            logger.info("[watcher] 작성자 통계 %d명 로드", len(out))
-            return out
+            authors = _parse_authors(c)
+            coin_sl_rates, market_sl = _parse_sl_rates(c)
+            logger.info("[watcher] 작성자 %d명, 코인 SL %d종목 로드",
+                        len(authors), len(coin_sl_rates))
+            return {
+                "authors": authors,
+                "coin_sl_rates": coin_sl_rates,
+                "market_sl": market_sl,
+            }
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001
         logger.warning("[watcher] DB 파싱 실패: %s", e)
-        return {}
+        return {"authors": {}, "coin_sl_rates": {}, "market_sl": None}
     finally:
         if tmp_path and Path(tmp_path).exists():
             Path(tmp_path).unlink()
+
+
+def load_watcher_data(timeout: float = 15.0) -> dict:
+    """통합 로드. 4h 인프로세스 캐시.
+
+    Returns {authors: {}, coin_sl_rates: {}, market_sl: {} or None}.
+    """
+    now = time.time()
+    if _cache["data"] and (now - _cache["ts"]) < _CACHE_TTL:
+        return _cache["data"]
+    db_bytes = _download_artifact(timeout)
+    if not db_bytes:
+        empty = {"authors": {}, "coin_sl_rates": {}, "market_sl": None}
+        return empty
+    result = _parse_all(db_bytes)
+    _cache["data"] = result
+    _cache["ts"] = now
+    return result
+
+
+def load_author_stats(timeout: float = 15.0) -> dict:
+    """하위 호환 — 기존 호출부용."""
+    return load_watcher_data(timeout).get("authors", {})
