@@ -237,6 +237,9 @@ def connect(db_path: str) -> sqlite3.Connection:
     try:
         yield conn
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1779,7 +1782,7 @@ def record_mfe_mae(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
     row = conn.execute(
         "SELECT touch_atr_pct FROM levels WHERE id=?", (level_id,)
     ).fetchone()
-    if row and row["touch_atr_pct"]:
+    if row and row["touch_atr_pct"] and row["touch_atr_pct"] > 0.01:
         ratio = mfe_pct / row["touch_atr_pct"]
         conn.execute(
             "UPDATE levels SET touch_mfe_atr_ratio=? "
@@ -2290,7 +2293,7 @@ def _json_list(raw) -> list:
         return []
 
 
-def _json_str_list(raw) -> list:
+def json_str_list(raw) -> list:
     """JSON 문자열 → 문자열 리스트 (post_urls 등). 파싱 실패·None → 빈 리스트.
     2026-08-08 출처 링크 병합용 — _json_list 와 원소 타입만 다르다."""
     if not raw:
@@ -2377,8 +2380,8 @@ def add_volume_watch(conn, ticker: str, coin_symbol: str, now: float,
             m_tps_krw = tps_krw if row["tps_krw"] is None else row["tps_krw"]
             m_tp1 = tp1_krw if row["tp1_krw"] is None else row["tp1_krw"]
             m_count = tp_count if row["tp_count"] is None else row["tp_count"]
-        merged_urls = sorted(set(_json_str_list(row["post_urls"])
-                                 + _json_str_list(post_urls)))
+        merged_urls = sorted(set(json_str_list(row["post_urls"])
+                                 + json_str_list(post_urls)))
         m_urls = json.dumps(merged_urls) if merged_urls else row["post_urls"]
         conn.execute(
             """UPDATE volume_watch SET coin_symbol=?, band_low_krw=?, band_high_krw=?,

@@ -14,6 +14,8 @@ TradingView 아이디어 본문에서 트레이드 셋업(방향/엔트리/손�
 import re
 from typing import Optional
 
+from config import settings
+
 # 방향 키워드
 # 2026-08-01 검토 수정: \bbuy\b/\bsell\b 가 ICT/SMC 계열 트레이딩 용어 "buy-side
 # liquidity"/"sell-side liquidity"(매수측/매도측 유동성 — 방향과 무관한 시장구조
@@ -132,8 +134,8 @@ _LADDER_MAX_WINDOW = 200
 # 저장 게이트에서 제거하고 notify/telegram.py 의 "1/N" 표시 상한으로 이동했다 —
 # tp_ladder_count 가 v5 등급 산식에 들어가면서, 13단+ 진짜 사다리를 0(미상)으로
 # 뭉개면 사다리 감점(-3)을 잘못 물리기 때문. 저장은 참 개수, 표시만 12 컷.
-_SANITY_LO_MULT = 0.25
-_SANITY_HI_MULT = 4.0
+_SANITY_LO_MULT = settings.get("sanity_lo_mult")
+_SANITY_HI_MULT = settings.get("sanity_hi_mult")
 
 # 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)

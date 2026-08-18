@@ -158,7 +158,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
                                       settings.get("collect_interval_hours") * 3600,
                                       settings.get("collect_retry_minutes") * 60)
     except BaseException as e:  # noqa: BLE001 - 수집 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 주기 판정 실패 - {type(e).__name__}")
@@ -175,7 +175,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     try:
         runner(timeout_sec)
     except BaseException as e:  # noqa: BLE001 - 수집 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 실패(%.0f초, 나머지 단계는 계속): %s: %s",
                      time.time() - t0, type(e).__name__, e, exc_info=True)
@@ -197,7 +197,7 @@ def maybe_collect(db_path: str, now: float = None, force: bool = False,
     try:
         _mark(db_path, META_LAST_COLLECT, META_LAST_COLLECT_FAIL, now, success=True)
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 meta 기록 실패(수집 자체는 완료): %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 meta 기록 실패 - {type(e).__name__}")
@@ -236,7 +236,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
             last = db.get_meta(conn, META_LAST_COLLECT)
             warned_day = db.get_meta(conn, META_COLLECT_STALE_WARNED)
     except BaseException as e:  # noqa: BLE001 - 감시 자체가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 정체 감시 조회 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::수집 정체 감시 조회 실패 - {type(e).__name__}")
@@ -269,7 +269,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
         with db.connect(db_path) as conn:
             db.set_meta(conn, META_COLLECT_STALE_WARNED, day)
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 정체 경고 meta 기록 실패(발송 생략): %s: %s", type(e).__name__, e, exc_info=True)
         return "failed"
@@ -277,7 +277,7 @@ def maybe_alert_collect_stale(db_path: str, now: float = None) -> str:
     try:
         sent = telegram.send(text)
     except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("수집 정체 경고 발송 실패(meta는 기록됨): %s: %s", type(e).__name__, e, exc_info=True)
         sent = False
@@ -339,7 +339,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
         with db.connect(db_path) as conn:
             last = db.get_meta(conn, META_LAST_SNAPSHOT)
     except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("작성자 스냅샷 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::작성자 스냅샷 주기 판정 실패 - {type(e).__name__}")
@@ -358,7 +358,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
     try:
         n = (snapshot_runner or take_author_snapshot)(db_path, now)
     except BaseException as e:  # noqa: BLE001 - 스냅샷 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("작성자 스냅샷 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::작성자 스냅샷 실패 - {type(e).__name__}")
@@ -370,7 +370,7 @@ def maybe_author_snapshot(db_path: str, now: float = None, force: bool = False,
         with db.connect(db_path) as conn:
             db.set_meta(conn, META_LAST_SNAPSHOT, str(now))
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("작성자 스냅샷 meta 기록 실패(스냅샷 %d명 저장은 완료): %s: %s",
                      n, type(e).__name__, e, exc_info=True)
@@ -437,7 +437,7 @@ def _send_reverse_alert(text: str, kind: str, author: str) -> None:
     try:
         sent = telegram.send(text)
     except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("역신호 %s 경보 발송 예외(@%s, 기록은 유지): %s: %s",
                      kind, author, type(e).__name__, e, exc_info=True)
@@ -459,7 +459,7 @@ def maybe_reverse_check(db_path: str, now: float = None, enabled: bool = True) -
         with db.connect(db_path) as conn:
             res = _maybe_reverse_check(conn, now)
     except BaseException as e:  # noqa: BLE001 - 역신호 검사 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("역신호 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::역신호 판정 실패 - {type(e).__name__}")
@@ -493,7 +493,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
                                      settings.get("weekly_report_interval_hours") * 3600,
                                      settings.get("weekly_report_retry_minutes") * 60)
     except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("주간 리포트 주기 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::주간 리포트 주기 판정 실패 - {type(e).__name__}")
@@ -515,7 +515,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
             db.set_meta(conn, META_LAST_REPORT, str(now))
             db.set_meta(conn, META_LAST_REPORT_FAIL, "0")
     except BaseException as e:  # noqa: BLE001 - meta 선기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("주간 리포트 meta 선기록 실패: %s: %s", type(e).__name__, e, exc_info=True)
         print(f"::warning::주간 리포트 meta 선기록 실패 - {type(e).__name__}")
@@ -524,7 +524,7 @@ def maybe_weekly_report(db_path: str, now: float = None, force: bool = False,
     try:
         sent = (report_runner or _default_report_runner)()
     except BaseException as e:  # noqa: BLE001 - 리포트 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("주간 리포트 실패: %s: %s", type(e).__name__, e, exc_info=True)
         sent = False

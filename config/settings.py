@@ -230,6 +230,23 @@ SETTINGS = {
                                            # (= level_expiry_hours, 동시 생존 가능 상한)
     "confluence_min_clusters": 2,          # 작성자 클러스터 수가 이 미만이면 표시 생략
 
+    # 가격 sanity 배수 — extractor 파싱과 price_check 판정 양쪽에서 공유
+    "sanity_lo_mult": 0.25,
+    "sanity_hi_mult": 4.0,
+
+    # 재발송 차단 창 (초) — 같은 코인·종류·레벨 조합의 경합 재발송 방어
+    "resend_block_sec": 600.0,
+
+    # 텔레그램 발송 최소 간격 (초) — API 429 방어
+    "telegram_send_min_interval_sec": 1.5,
+
+    # TradingView 주기 전역 예산
+    "tv_cycle_detail_budget": 20,
+    "tv_cycle_profile_budget": 10,
+
+    # 텔레그램 소스 차단 쿨다운 (초)
+    "telegram_source_block_cooldown_sec": 1800.0,
+
     # 네트워크
     "http_timeout_sec": 10.0,
 

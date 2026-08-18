@@ -46,7 +46,8 @@ _API = "https://api.telegram.org/bot{token}/sendMessage"
 # Width 기준 그 문자열 표시폭 36칼럼, ━ 는 유니코드 공식 분류(1칸)와 달리
 # 이 폰트에서 와이드(2칸)로 렌더링) 로 이론상 안전선은 18개. 17개로 설정
 # (사용자 재조정 — 16에서 여유 있음을 확인 후 1개 상향).
-_SEP = "━━━━━━━━━━━━━━━━━"
+SEP = "━━━━━━━━━━━━━━━━━"
+_SEP = SEP
 
 # 그룹 채팅 폭 기준 한 줄 최대 표시폭(칼럼). 2026-08-08 사용자 결정: 이 폭을
 # 넘는 행은 줄바꿈하지 말고 넘는 지점 "직전까지"만 표시하고 나머지는 표기
@@ -159,7 +160,7 @@ def _source_line(post_urls) -> str:
     return line
 
 # ── 발송 레이트리밋 (2026-08-13) ────────────────────────────────────
-_SEND_MIN_INTERVAL_SEC = 1.5
+_SEND_MIN_INTERVAL_SEC = settings.get("telegram_send_min_interval_sec")
 _last_send_at = 0.0
 
 # ── 재시도 정책 상수 (2026-07-26 수리) ──────────────────────────────
@@ -167,13 +168,14 @@ _RETRY_MAX = 2                  # 총 재시도 최대 횟수(최초 시도 제�
 _RETRY_429_MAX_WAIT_SEC = 10.0  # 429 retry_after 상한
 _RETRY_BACKOFF_SEC = (1.0, 2.0)  # 5xx/타임아웃 - 재시도 회차별 대기(1회차 1초, 2회차 2초)
 
-_FNG_KR = {
+FNG_KR = {
     "Extreme Fear": "극공포",
     "Fear": "공포",
     "Neutral": "중립",
     "Greed": "탐욕",
     "Extreme Greed": "극탐욕",
 }
+_FNG_KR = FNG_KR
 
 
 def _redact(msg: str, token: str) -> str:
@@ -1176,12 +1178,16 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
     post_url (2026-08-08 사용자 결정): 해당 레벨의 원문 글 — 있으면 본알림과
     같은 형식의 출처 링크를 마지막 구분선 아래에 추가."""
     is_last = (tp_n >= tp_total)
-    pct = (tp_krw - entry_krw) / entry_krw * 100 if entry_krw and entry_krw > 0 else 0
     step_label = "🏁 최종목표 달성" if is_last else f"({tp_n}/{tp_total}단계)"
+    if entry_krw and entry_krw > 0:
+        pct = (tp_krw - entry_krw) / entry_krw * 100
+        price_line = f"    달성가:  {_fmt_krw(tp_krw)}원  ({pct:+.1f}%)"
+    else:
+        price_line = f"    달성가:  {_fmt_krw(tp_krw)}원"
     lines = [
         _SEP,
         f"✅ <b>[TP{tp_n} 적중]</b> <b>{html.escape(coin)}</b>  {step_label}",
-        f"    달성가:  {_fmt_krw(tp_krw)}원  ({pct:+.1f}%)",
+        price_line,
     ]
     if not is_last:
         lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")

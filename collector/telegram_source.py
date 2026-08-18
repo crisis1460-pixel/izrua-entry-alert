@@ -59,6 +59,8 @@ except ImportError:  # pragma: no cover
     import requests as _http
     _IMPERSONATE = None
 
+from config import settings
+
 logger = logging.getLogger("alert.telegram_source")
 
 _BASE = "https://t.me/s/"
@@ -73,7 +75,7 @@ _CHANNEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 
 # 차단 대응: TradingView 모듈과 같은 철학(즉시 포기 + 전역 쿨다운). 텔레그램은
 # 비공식 경로라 더 보수적으로 — 차단 신호가 보이면 이번 회차는 통째로 접는다.
-_BLOCK_COOLDOWN_SEC = 1800.0   # 30분
+_BLOCK_COOLDOWN_SEC = settings.get("telegram_source_block_cooldown_sec")
 _blocked_until = 0.0
 
 # 같은 채널을 짧은 간격으로 다시 긁지 않게 하는 모듈측 최소 방어선(호출부가 페이싱을

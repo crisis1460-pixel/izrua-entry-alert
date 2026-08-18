@@ -67,7 +67,7 @@ _LAST_CYCLE_META = "last_cycle_at"
 # 커진다(수집 회차는 6~10분). 그 최악 구간을 덮는 값이다. 부작용이 없는 이유 —
 # 터치는 알림과 동시에 status 가 종결돼 정상 경로에서 재발송이 아예 없고, 예고는
 # dup_preview 가 이미 막는다. 즉 이 창에 걸리는 건은 정의상 경합 재발송뿐이다.
-_RESEND_BLOCK_SEC = 600.0
+_RESEND_BLOCK_SEC = settings.get("resend_block_sec")
 
 
 def _load_last_cycle(conn):
@@ -1593,7 +1593,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         if not current or not base or not lv.get("touched_at"):
             continue
         t_rate = lv.get("touch_usdt_krw")
-        base_eff = base * (usdt_krw / t_rate) if (t_rate and usdt_krw) else base
+        base_eff = base * (usdt_krw / t_rate) if (t_rate and t_rate > 100 and usdt_krw) else base
         elapsed = now - lv["touched_at"]
         ret_pct = (current - base_eff) / base_eff * 100
         if lv.get("ret_4h") is None and 4 * 3600 <= elapsed <= 10 * 3600:
@@ -1647,7 +1647,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
 
         base = lv.get("touch_price_krw") or entry_krw
         t_rate = lv.get("touch_usdt_krw")
-        base_eff = base * (usdt_krw / t_rate) if t_rate else base
+        base_eff = base * (usdt_krw / t_rate) if (t_rate and t_rate > 100) else base
 
         # 오염 방어선(2026-07-26 감사 major1): 방향·크기 sanity 위반 tp/sl 은 '없음' 취급.
         # raw_text 없는 구세대 행은 reparse/업서트 자동치유가 닿지 않아(ALGO tp=1.0 사례)
@@ -1655,10 +1655,12 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         entry_usd = lv.get("entry_usd") or 0
         tp_usd = lv.get("tp_usd") or 0
         sl_usd = lv.get("sl_usd") or 0
+        _s_lo = settings.get("sanity_lo_mult")
+        _s_hi = settings.get("sanity_hi_mult")
         if lv.get("direction") == "long" and entry_usd > 0:
-            if tp_usd and not (entry_usd < tp_usd <= entry_usd * 4):
+            if tp_usd and not (entry_usd < tp_usd <= entry_usd * _s_hi):
                 tp_usd = 0
-            if sl_usd and not (entry_usd * 0.25 <= sl_usd < entry_usd):
+            if sl_usd and not (entry_usd * _s_lo <= sl_usd < entry_usd):
                 sl_usd = 0
         tp_krw = tp_usd * usdt_krw
         sl_krw = sl_usd * usdt_krw
@@ -1678,7 +1680,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         _tps_valid = (
             [t for t in _tps_raw
              if isinstance(t, (int, float))
-             and entry_usd > 0 and entry_usd < t <= entry_usd * 4]
+             and entry_usd > 0 and entry_usd < t <= entry_usd * _s_hi]
             if lv.get("direction") == "long" else []
         )
         # _volume_band_tps 와 동일 union 보정: tp_usd 가 tps_usd 에 누락되는
@@ -1687,7 +1689,7 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
         _tp_usd_rep = lv.get("tp_usd")
         if (isinstance(_tp_usd_rep, (int, float))
                 and entry_usd > 0
-                and entry_usd < _tp_usd_rep <= entry_usd * 4
+                and entry_usd < _tp_usd_rep <= entry_usd * _s_hi
                 and _tp_usd_rep not in _tps_valid):
             _tps_valid.append(_tp_usd_rep)
             _tps_valid.sort()
@@ -1697,6 +1699,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
 
         def _r(resolve_krw):
             if sl_krw <= 0 or entry_krw <= sl_krw:
+                if sl_krw > 0 and entry_krw > 0 and entry_krw <= sl_krw:
+                    logger.warning("[적중판정] %s entry(%.2f) ≤ SL(%.2f) 이상 데이터", ticker, entry_krw, sl_krw)
                 return None
             return max(r_lo, min(r_hi, (resolve_krw - entry_krw) / (entry_krw - sl_krw)))
 
@@ -2168,7 +2172,7 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
                                                   next_tp_krw=_next_tp,
                                                   tp_idx=_next_idx,
                                                   tp_count=_n_total,
-                                                  post_urls=db._json_str_list(row.get("post_urls")))
+                                                  post_urls=db.json_str_list(row.get("post_urls")))
         # 거래량/OI 급증은 등급 무관 독립 알림 클래스 — 유음 고정은 의도(Fix8 검토).
         if telegram.send(text, urgency="high"):
             logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",

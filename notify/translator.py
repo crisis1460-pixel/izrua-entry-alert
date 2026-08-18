@@ -7,6 +7,7 @@
 
 import logging
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import requests
@@ -17,7 +18,7 @@ _GOOGLE_URL = "https://translate.googleapis.com/translate_a/single"
 _MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-_cache: dict[str, tuple[str, float]] = {}
+_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
 _CACHE_TTL = 86400.0
 _CACHE_MAX = 256
 
@@ -89,7 +90,6 @@ def translate_en_ko(text: str, timeout: float = 5.0) -> str:
         return text
 
     if len(_cache) >= _CACHE_MAX:
-        oldest_key = min(_cache, key=lambda k: _cache[k][1])
-        del _cache[oldest_key]
+        _cache.popitem(last=False)
     _cache[text] = (result, now)
     return result

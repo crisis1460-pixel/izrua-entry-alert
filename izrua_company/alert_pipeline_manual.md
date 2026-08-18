@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-18 (뉴스 오탐 필터 추가)  
+> 마지막 업데이트: 2026-08-18 (코드 다듬기 A·B·C 반영)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -431,6 +431,35 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | **모호 심볼 차단** | OPEN, SIGN, GAS, ID, T, W 등 20개 일반 영단어 심볼을 뉴스 경로에서 제외 (매매 시그널 무영향) |
 | **프로모션 필터** | bonus, airdrop, MT5, VIP channel 등 광고 키워드 포함 시 스킵 |
 | **위치** | `notify/news_brief.py` — `_AMBIGUOUS_SYMBOLS` + `_PROMO_KEYWORDS` |
+
+## 코드 다듬기 (2026-08-18)
+
+### A. 에러 방어 강화 (5건)
+| 대상 | 내용 |
+|------|------|
+| `storage/db.py` connect() | 예외 시 명시적 `conn.rollback()` 추가 |
+| `price_check.py` base_eff | `t_rate > 100` 가드 — USDT/KRW 극소값 방어 |
+| `price_check.py` _r() | `entry ≤ SL` 이상 데이터 경고 로그 추가 |
+| `storage/db.py` record_mfe_mae | `touch_atr_pct > 0.01` 극소값 ratio 폭등 방어 |
+| `notify/telegram.py` TP알림 | `entry_krw=0` 시 "0.0%" 대신 % 생략 |
+
+### B. 설정 일원화 (5건)
+| 하드코딩 | 이관 위치 |
+|---------|-----------|
+| sanity 배수 0.25/4.0 (extractor+price_check 중복) | `settings.sanity_lo_mult` / `sanity_hi_mult` |
+| 재발송 차단 600초 | `settings.resend_block_sec` |
+| TG 발송 간격 1.5초 | `settings.telegram_send_min_interval_sec` |
+| TV 상세/프로필 예산 20/10 | `settings.tv_cycle_detail_budget` / `tv_cycle_profile_budget` |
+| TG 소스 차단 쿨다운 1800초 | `settings.telegram_source_block_cooldown_sec` |
+
+### C. 코드 위생 (5건)
+| 대상 | 내용 |
+|------|------|
+| `telegram.py` SEP/FNG_KR | private → public export (morning_brief 크로스 모듈 접근 정리) |
+| `db.py` json_str_list | private → public (price_check/test 외부 호출 정리) |
+| `run_cycle.py`/`morning_brief.py` | BaseException 핸들러에 SystemExit 재발생 추가 |
+| `morning_brief.py` maybe_send_brief | DB 연결 3회 → 판정+조립 1회로 통합 (TOCTOU 해소) |
+| `translator.py` 캐시 | dict → OrderedDict, O(n) eviction → O(1) popitem |
 
 ## FRED 매크로 통합 (2026-08-17)
 

@@ -48,6 +48,8 @@ import time
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
+from config import settings
+
 # curl_cffi 가 있으면 Chrome TLS 지문까지 위장 (izrua_watcher 무차단 운영의 1등 공신).
 # 미설치 환경에서는 requests + 수동 브라우저 헤더로 강등.
 try:
@@ -81,7 +83,7 @@ _blocked_until = 0.0          # epoch. 이 시각 전까지 _get 은 요청 없�
 # 주기(호출 세션) 전역 상세 방문 예산: 심볼당 예산(max_detail_fetch)만으로는
 # 목록 스키마 변경/강등 시 82심볼 × 5회 = 410회 폭주 가능 → 전체 상한을 별도로 둔다.
 # 호출부가 수집 주기 시작 시 reset_detail_budget() 호출로 리셋(미호출 시 프로세스 누적 상한).
-_CYCLE_DETAIL_BUDGET = 20
+_CYCLE_DETAIL_BUDGET = settings.get("tv_cycle_detail_budget")
 _cycle_detail_used = 0
 
 # 소프트 실패 브레이커(2026-07-22 리뷰 [2]): 5xx/타임아웃 같은 '비차단 실패'가 연속되면
@@ -107,7 +109,7 @@ _cookie_applied = None
 
 # 프로필(팔로워) 조회 방어선(2026-07-22 리뷰 [4]): 상세 방문과 동일한 위협 모델
 # (호출부가 글마다 호출)에 대해 주기 전역 예산 + 최소 페이싱 + TTL 캐시를 모듈측에 강제.
-_CYCLE_PROFILE_BUDGET = 10
+_CYCLE_PROFILE_BUDGET = settings.get("tv_cycle_profile_budget")
 _cycle_profile_used = 0
 _PROFILE_SLEEP_SEC = 1.0
 _last_profile_at = 0.0

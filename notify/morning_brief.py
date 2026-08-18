@@ -31,8 +31,8 @@ logger = logging.getLogger("alert.morning_brief")
 META_LAST_BRIEF_DATE = "last_morning_brief_date"
 
 # 구분선·F&G 한국어 라벨은 알림과 동일 표기 유지(같은 채팅방에 섞여 보인다).
-_SEP = telegram._SEP
-_FNG_KR = telegram._FNG_KR
+_SEP = telegram.SEP
+_FNG_KR = telegram.FNG_KR
 
 # 캘린더 줄 포맷: display width 32 초과 시 kst 부분을 다음 줄로 분리
 _MACRO_LINE_MAX_W = 32
@@ -293,37 +293,27 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
     try:
         with db.connect(db_path) as conn:
             due, reason = brief_due(conn, now)
-    except BaseException as e:  # noqa: BLE001 - 브리핑 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
-            raise
-        logger.error("모닝 브리핑 판정 실패: %s: %s", type(e).__name__, e, exc_info=True)
-        print(f"::warning::모닝 브리핑 판정 실패 - {type(e).__name__}")
-        return "failed"
+            if not due:
+                logger.debug("모닝 브리핑 생략: %s", reason)
+                return "skipped"
 
-    if not due:
-        logger.debug("모닝 브리핑 생략: %s", reason)
-        return "skipped"
-
-    logger.info("모닝 브리핑 발송: %s", reason)
-    try:
-        with db.connect(db_path) as conn:
+            logger.info("모닝 브리핑 발송: %s", reason)
             text = build_brief(conn, now, settings.get("http_timeout_sec"))
     except BaseException as e:  # noqa: BLE001 - 브리핑 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
-        logger.error("모닝 브리핑 조립 실패: %s: %s", type(e).__name__, e, exc_info=True)
-        print(f"::warning::모닝 브리핑 조립 실패 - {type(e).__name__}")
+        logger.error("모닝 브리핑 판정/조립 실패: %s: %s", type(e).__name__, e, exc_info=True)
+        print(f"::warning::모닝 브리핑 판정/조립 실패 - {type(e).__name__}")
         return "failed"
 
     try:
         sent = telegram.send(text)
     except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         logger.error("모닝 브리핑 발송 예외: %s: %s", type(e).__name__, e, exc_info=True)
         sent = False
     if not sent:
-        # 날짜 미기록 — 다음 회차(2분 뒤)가 발송 창 안에서 자동 재시도한다.
         print("::warning::모닝 브리핑 발송 실패 - 다음 회차 재시도(창 내)")
         return "failed"
 
@@ -331,10 +321,8 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
         with db.connect(db_path) as conn:
             db.set_meta(conn, META_LAST_BRIEF_DATE, day_kst(now))
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
-        if isinstance(e, KeyboardInterrupt):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
-        # 발송 자체는 성공 — 날짜만 못 남겼으니 다음 회차가 창 내 중복 발송할 수
-        # 있다(요약 1통이라 무해, 유실보다 낫다). ok 로 취급하되 경고는 남긴다.
         logger.error("모닝 브리핑 meta 기록 실패(발송은 완료): %s: %s",
                      type(e).__name__, e, exc_info=True)
         print(f"::warning::모닝 브리핑 meta 기록 실패 - {type(e).__name__}")

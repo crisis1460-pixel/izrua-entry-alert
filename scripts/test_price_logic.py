@@ -3712,7 +3712,7 @@ with db.connect(_PU_DB) as conn:
                          post_urls=_json_pu.dumps(["https://a.example/2"]))
     _pu_row = db.get_volume_watch_active(conn, _pu_now + 60, 3600)[0]
     check("PU1 재터치 시 post_urls 는 합집합으로 병합",
-          sorted(db._json_str_list(_pu_row["post_urls"]))
+          sorted(db.json_str_list(_pu_row["post_urls"]))
           == ["https://a.example/1", "https://a.example/2"])
 os.remove(_PU_DB)
 
