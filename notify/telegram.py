@@ -479,11 +479,12 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     entry_rep = hi  # 트리거 기준 = 클러스터 상단
 
     tier = rep.get("mcap_tier_icon") or ""
-    rank = f"시총 {rep['mcap_rank']}위" if rep.get("mcap_rank") else ""
+    rank = rep.get("mcap_rank")
+    rank_part = f"{tier} 시총 {rank}위" if rank else ""
     kind_kr = "🎯 <b>[진입가 터치]</b>" if kind == "touch" else "⚠️ <b>[진입가 접근]</b>"
     grade = f"{rep['grade']}등급" if rep.get("grade") else ""
 
-    head_meta = " · ".join(x for x in [f"{tier} {rank}".strip(), grade,
+    head_meta = " · ".join(x for x in [rank_part, grade,
                                        _fmt_age(_fresh_age_min(rep))] if x)
 
     lines = [
