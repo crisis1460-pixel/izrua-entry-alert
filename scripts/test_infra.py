@@ -176,7 +176,7 @@ try:
     _dbmod.init_db(_hm_db)
     with _dbmod.connect(_hm_db) as conn:
         # A/trend(ADX 30) 승·패 각 1건, A/squeeze(BB 15) 승 1건
-        for _adx, _bbp, _out, _mfe in [(30, 15, "tp1", 10), (30, 50, "sl", -2)]:
+        for _adx, _bbp, _out, _mfe in [(30, 15, "hit", 10), (30, 50, "miss", -2)]:
             conn.execute(
                 "INSERT INTO levels (coin_symbol, ticker, entry_usd, direction, status, "
                 "signal_key, collected_at, touch_grade, touch_adx14, "

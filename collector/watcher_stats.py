@@ -121,7 +121,7 @@ def _parse_sl_rates(c: sqlite3.Cursor, days: int = 7) -> tuple:
             "SELECT st.coin_symbol, sub.outcome "
             "FROM signal_tracking st "
             "JOIN ("
-            "  SELECT signal_hash, MIN(outcome) AS outcome "
+            "  SELECT signal_hash, MAX(outcome) AS outcome "
             "  FROM chartist_stats "
             "  WHERE outcome IN ('hit','miss') "
             "  GROUP BY signal_hash"
@@ -196,11 +196,17 @@ def load_watcher_data(timeout: float = 15.0) -> dict:
         return _cache["data"]
     db_bytes = _download_artifact(timeout)
     if not db_bytes:
-        empty = {"authors": {}, "coin_sl_rates": {}, "market_sl": None}
-        return empty
+        if _cache["data"]:
+            logger.info("[watcher] 다운로드 실패 - 기존 캐시 폴백")
+            return _cache["data"]
+        return {"authors": {}, "coin_sl_rates": {}, "market_sl": None}
     result = _parse_all(db_bytes)
-    _cache["data"] = result
-    _cache["ts"] = now
+    if result.get("authors") or result.get("coin_sl_rates"):
+        _cache["data"] = result
+        _cache["ts"] = now
+    elif _cache["data"]:
+        logger.info("[watcher] 파싱 결과 비어있음 - 기존 캐시 유지")
+        return _cache["data"]
     return result
 
 

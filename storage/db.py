@@ -674,10 +674,12 @@ def reparse_all(conn) -> int:
         if not setup or not entry or entry <= 0:
             continue
         new_sl, new_tp = setup.get("sl"), setup.get("tp")
-        # 저장 entry 기준 재검증 (long 전용: 방향 + 크기 0.25x~4x)
-        if new_tp is not None and not (entry < new_tp <= entry * 4):
+        from config import settings as _settings
+        _hi = _settings.get("sanity_hi_mult")
+        _lo = _settings.get("sanity_lo_mult")
+        if new_tp is not None and not (entry < new_tp <= entry * _hi):
             new_tp = None
-        if new_sl is not None and not (entry * 0.25 <= new_sl < entry):
+        if new_sl is not None and not (entry * _lo <= new_sl < entry):
             new_sl = None
         rr = None
         if new_sl and new_tp and entry > new_sl:
@@ -962,7 +964,7 @@ def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:
         f"outcome, mfe_pct FROM levels {where}",
         params,
     ).fetchall()
-    _WIN = {"tp1", "tp2", "tp3", "tp_only"}
+    _WIN = {"hit", "timeboxed_win"}
     from collections import defaultdict
     agg = defaultdict(lambda: {"n": 0, "wins": 0, "mfe_sum": 0.0, "mfe_n": 0})
     for r in rows:
@@ -1091,7 +1093,7 @@ def author_closed_stats(conn, author: Optional[str]) -> tuple:
     row = conn.execute(
         "SELECT COUNT(*) AS n, "
         "SUM(CASE WHEN outcome='hit' THEN 1 ELSE 0 END) AS h "
-        "FROM levels WHERE author=? AND outcome IS NOT NULL",
+        "FROM levels WHERE author=? AND outcome IN ('hit','miss','timeboxed_win','timeboxed_loss')",
         (author,)).fetchone()
     return row["n"] or 0, row["h"] or 0
 

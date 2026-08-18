@@ -104,14 +104,17 @@ def _macro_event_lines(now: float, conn) -> list:
     for ev in macro.get_macro_events(conn):
         try:
             ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, KeyError):
             continue
         d = (ev_date - today).days
         if 0 <= d <= _MACRO_LOOKAHEAD_DAYS:
             tag = "D-DAY" if d == 0 else f"D-{d}"
             kst = ev.get("kst_time", "")
             kst_part = f" ({kst})" if kst else ""
-            base = f"📅 {ev['label']} {tag}"
+            label = ev.get("label", "")
+            if not label:
+                continue
+            base = f"📅 {label} {tag}"
             if kst_part and _display_width(base + kst_part) > _MACRO_LINE_MAX_W:
                 line = f"{base}\n{_MACRO_INDENT}{kst_part.lstrip()}"
             else:

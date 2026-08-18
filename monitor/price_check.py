@@ -883,12 +883,20 @@ def run_once(now: float | None = None) -> dict:
                         # 통과하는 형제(스윙감 목표 보유)가 있으면 대표를 승계해
                         # 발송한다 — 안 그러면 상태 전이(재알림 방지) 때문에
                         # 클러스터 전체가 영구 무알림. 승계 대표는 재채점 점수순.
+                        def _heir_ok(l):
+                            if not meets_min_grade(l.get("grade") or "D", min_grade):
+                                return False
+                            if not _b_swing_pass(l):
+                                return False
+                            _h_tf = l.get("timeframe_hours")
+                            if _min_tf and _h_tf is not None and _h_tf > 0 and _h_tf < _min_tf - 1e-9:
+                                return False
+                            return True
                         heir = next(
                             (l for l in sorted(
                                 (l for l in cluster if l is not rep),
                                 key=lambda l: -(l.get("score") or 0))
-                             if meets_min_grade(l.get("grade") or "D", min_grade)
-                             and _b_swing_pass(l)),
+                             if _heir_ok(l)),
                             None)
                         if heir is not None:
                             logger.info("[체크] %s 대표 TP 스윙 미달 - 형제 승계 "

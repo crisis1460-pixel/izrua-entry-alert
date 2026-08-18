@@ -135,10 +135,13 @@ def _finalize(lines: list) -> str:
     """모든 렌더러의 최종 join 지점 — 각 행을 _truncate_line 으로 다듬은 뒤
     개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용).
     출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
+    _PRICE_PREFIXES = ("    현재:", "    진입:", "    목표:", "    손절:")
     result = []
     for ln in lines:
         if ln.startswith("🔗 ") or ln == _SEP:
             result.append(ln)
+        elif ln.lstrip().startswith(("현재:", "진입:", "목표:", "손절:")):
+            result.append(_truncate_line(ln, max_cols=42))
         else:
             result.append(_truncate_line(ln))
     return "\n".join(result)
@@ -317,7 +320,11 @@ def _split_send(text: str, urgency: str) -> Optional[int]:
     ok = True
     for i, chunk in enumerate(chunks):
         if len(chunk) > _TG_MAX_LEN:
-            chunk = chunk[:_TG_MAX_LEN - 20] + "\n… (truncated)"
+            cut = _TG_MAX_LEN - 20
+            last_open = chunk.rfind('<', 0, cut)
+            if last_open != -1 and '>' not in chunk[last_open:cut]:
+                cut = last_open
+            chunk = _TAG_RE.sub("", chunk[:cut]) + "\n… (truncated)"
         if i > 0:
             time.sleep(1.0)
         mid = send(chunk, urgency)
@@ -701,7 +708,10 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         if fng is not None:
             label_kr = _FNG_KR.get(sentiment.get("fear_greed_label", ""),
                                    sentiment.get("fear_greed_label", ""))
-            lines.append(f"😨 시장심리: {fng} ({label_kr})")
+            if label_kr:
+                lines.append(f"😨 시장심리: {fng} ({label_kr})")
+            else:
+                lines.append(f"😨 시장심리: {fng}")
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)
