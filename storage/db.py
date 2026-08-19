@@ -950,7 +950,7 @@ def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:
         'neutral' → 20 <= touch_adx14 < 25
         'range'   → touch_adx14 < 20
         'squeeze' → touch_bb_width_pctile <= 20 (별도 셀 — trend 와 겹칠 수 있으니 병립)
-    - hit: 이 셀의 outcome IN ('tp1','tp2','tp3','tp_only')/총 종결 = TP1+ 도달률
+    - hit: 이 셀의 outcome IN ('hit','timeboxed_win')/총 종결 = TP1+ 도달률
     - mfe: 평균 mfe_pct (NULL 제외 후 산술평균, 표본 부족 시 None)
 
     표본 부족(각 셀 n<5) 처리는 렌더러에서 함. 여기선 원시 집계만 반환."""

@@ -1874,7 +1874,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
                     _tp_day = _day_kst(now)
-                    _nxt = _tps_valid[_tp_alert_idx + 1] if (_tp_alert_idx + 1) < len(_tps_valid) else None
+                    _nxt = (_tps_valid[_tp_alert_idx + 1] * usdt_krw
+                            if (_tp_alert_idx + 1) < len(_tps_valid) else None)
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                         resolve_price, entry_krw, post_url=lv.get("post_url"),
@@ -1920,7 +1921,8 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                             db_path, lv["coin_symbol"], _kind, [lv["id"]],
                             now - _RESEND_BLOCK_SEC):
                         _tp_day = _day_kst(now)
-                        _nxt2 = _tps_valid[_tp_alert_idx + 1] if (_tp_alert_idx + 1) < len(_tps_valid) else None
+                        _nxt2 = (_tps_valid[_tp_alert_idx + 1] * usdt_krw
+                                 if (_tp_alert_idx + 1) < len(_tps_valid) else None)
                         text = telegram.render_tp_partial_alert(
                             lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
                             resolve_price, entry_krw, post_url=lv.get("post_url"),
