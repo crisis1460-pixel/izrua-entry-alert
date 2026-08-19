@@ -1257,7 +1257,7 @@ def render_volume_spike_alert(coin: str, multiplier: float,
         _cp = f"{cur_price_krw:,.0f}" if cur_price_krw >= 1 else f"{cur_price_krw:.4f}"
         if change_rate_24h is not None:
             _sign = "+" if change_rate_24h >= 0 else ""
-            lines.append(f"    현재가:  {_cp}원  ({_sign}{change_rate_24h*100:.2f}%)")
+            lines.append(f"    현재가:  {_cp}원  (전일 {_sign}{change_rate_24h*100:.2f}%)")
         else:
             lines.append(f"    현재가:  {_cp}원")
     if next_tp_krw:
