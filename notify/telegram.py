@@ -1207,7 +1207,7 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
     step_label = "🏁 최종목표 달성" if is_last else f"({tp_n}/{tp_total}단계)"
     if entry_krw and entry_krw > 0:
         pct = (tp_krw - entry_krw) / entry_krw * 100
-        price_line = f"    달성가:  {_fmt_krw(tp_krw)}원  ({pct:+.1f}%)"
+        price_line = f"    달성가:  {_fmt_krw(tp_krw)}원  (진입 {pct:+.1f}%)"
     else:
         price_line = f"    달성가:  {_fmt_krw(tp_krw)}원"
     lines = [
@@ -1220,7 +1220,7 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
             _n = _fmt_krw(next_tp_krw)
             if entry_krw and entry_krw > 0:
                 _n_pct = (next_tp_krw - entry_krw) / entry_krw * 100
-                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원  ({_n_pct:+.1f}%)")
+                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원  (진입 {_n_pct:+.1f}%)")
             else:
                 lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원")
         else:
