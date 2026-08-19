@@ -131,13 +131,28 @@ def _truncate_line(line: str, max_cols: int = _MAX_LINE_COLS) -> str:
     return "".join(out)
 
 
+def _cur_price_lines(krw: float, change_rate_24h: float = None) -> list:
+    """'현재가:' 행을 폭에 따라 1-2행으로 반환. 32칼럼 초과 시 (전일 ...) 분리.
+    거래량 급증·OI 급증 알림 공통 헬퍼 — 두 곳 동일 룰 유지."""
+    _cp = f"{krw:,.0f}" if krw >= 1 else f"{krw:.4f}"
+    if change_rate_24h is None:
+        return [f"    현재가:  {_cp}원"]
+    _sign = "+" if change_rate_24h >= 0 else ""
+    _pct = f"(전일 {_sign}{change_rate_24h*100:.2f}%)"
+    _single = f"    현재가:  {_cp}원  {_pct}"
+    if sum(_display_width(c) for c in _single) > _MAX_LINE_COLS:
+        return [f"    현재가:  {_cp}원", f"    {_pct}"]
+    return [_single]
+
+
 def _finalize(lines: list) -> str:
     """모든 렌더러의 최종 join 지점 — 각 행을 _truncate_line 으로 다듬은 뒤
     개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용).
     출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
     _PRICE_PREFIXES = ("현재:", "진입:", "목표:", "손절:",
                        "현재가:", "달성가:", "다음 목표:", "다음 TP:",
-                       "최근 1시간:", "20시간 평균:", "1시간 전:", "지금:", "TP")
+                       "최근 1시간:", "20시간 평균:", "1시간 전:", "지금:",
+                       "TP", "(전일 ")
     result = []
     for ln in lines:
         if ln.startswith("🔗 ") or ln == _SEP:
@@ -1264,12 +1279,7 @@ def render_volume_spike_alert(coin: str, multiplier: float,
         f"    20시간 평균:  {avg_bil:.1f}억",
     ]
     if cur_price_krw is not None:
-        _cp = f"{cur_price_krw:,.0f}" if cur_price_krw >= 1 else f"{cur_price_krw:.4f}"
-        if change_rate_24h is not None:
-            _sign = "+" if change_rate_24h >= 0 else ""
-            lines.append(f"    현재가:  {_cp}원  (전일 {_sign}{change_rate_24h*100:.2f}%)")
-        else:
-            lines.append(f"    현재가:  {_cp}원")
+        lines.extend(_cur_price_lines(cur_price_krw, change_rate_24h))
     if next_tp_krw:
         # 원화 표기는 타점 블록 _krw 관례와 동일 (1원 미만 소수 4자리)
         _p = f"{next_tp_krw:,.0f}" if next_tp_krw >= 1 else f"{next_tp_krw:.4f}"
@@ -1316,11 +1326,7 @@ def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
         f"    지금:  {_fmt_usd_notional(cur_oi_usd)}  (1h {pct:+.1f}%)",
     ]
     if current_krw:
-        if change_rate_24h is not None:
-            _sign = "+" if change_rate_24h >= 0 else ""
-            lines.append(f"    현재가:  {_fmt_krw(current_krw)}원  (전일 {_sign}{change_rate_24h*100:.2f}%)")
-        else:
-            lines.append(f"    현재가:  {_fmt_krw(current_krw)}원")
+        lines.extend(_cur_price_lines(current_krw, change_rate_24h))
     lines.append(_SEP)
     _urls = [u for u in (post_urls or []) if u]
     if _urls:
