@@ -2103,8 +2103,11 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
                 "SELECT DISTINCT post_url FROM levels "
                 "WHERE coin_symbol=? AND post_url IS NOT NULL AND status='watching'",
                 (c,)).fetchall()]
+            _chg24 = (upbit.fetch_change_rate(f"KRW-{c}", cfg_get("http_timeout_sec"))
+                      if cur_krw else None)
             text = telegram.render_oi_spike_alert(c, prev, oi, pct, cur_krw,
-                                                  post_urls=sorted(_oi_urls))
+                                                  post_urls=sorted(_oi_urls),
+                                                  change_rate_24h=_chg24)
             if telegram.send(text, urgency="low"):
                 db.record_oi_spike_alert(conn, c, now)
                 # 즉시 커밋 (2026-08-08 재검토): 이 함수의 유일한 커밋은 루프
