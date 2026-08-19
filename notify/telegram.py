@@ -137,7 +137,7 @@ def _finalize(lines: list) -> str:
     출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
     _PRICE_PREFIXES = ("현재:", "진입:", "목표:", "손절:",
                        "현재가:", "달성가:", "다음 목표:", "다음 TP:",
-                       "최근 1시간:", "20시간 평균:", "TP")
+                       "최근 1시간:", "20시간 평균:", "1시간 전:", "지금:", "TP")
     result = []
     for ln in lines:
         if ln.startswith("🔗 ") or ln == _SEP:
@@ -1310,12 +1310,13 @@ def render_oi_spike_alert(coin: str, prev_oi_usd: float, cur_oi_usd: float,
     동일한 형식의 출처 링크를 마지막 구분선 아래에 추가."""
     lines = [
         _SEP,
-        f"📈 <b>[OI 급증]</b> <b>{html.escape(coin)}</b>",
-        f"    1시간 전 OI:  {_fmt_usd_notional(prev_oi_usd)}",
-        f"    현재 OI:      {_fmt_usd_notional(cur_oi_usd)}  ({pct:+.1f}%)",
+        f"📈 <b>[선물 유입 급증]</b>",
+        f"    <b>{html.escape(coin)}</b>",
+        f"    1시간 전:  {_fmt_usd_notional(prev_oi_usd)}",
+        f"    지금:      {_fmt_usd_notional(cur_oi_usd)}  ({pct:+.1f}%)",
     ]
     if current_krw:
-        lines.append(f"    현재가:       {_fmt_krw(current_krw)}원")
+        lines.append(f"    현재가:    {_fmt_krw(current_krw)}원")
     lines.append(_SEP)
     _urls = [u for u in (post_urls or []) if u]
     if _urls:

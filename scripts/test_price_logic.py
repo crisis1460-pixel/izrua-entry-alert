@@ -3519,7 +3519,7 @@ with db.connect(_OS_DB) as conn:
     sent_messages.clear()
     price_check._snapshot_oi(conn, now, settings.get, _os_prices)
 check("OS1 직전 대비 +20% 급증 → 알림 발동 + 렌더 포맷(단위·부호)",
-      len(sent_messages) == 1 and "[OI 급증]" in sent_messages[0]
+      len(sent_messages) == 1 and "[선물 유입 급증]" in sent_messages[0]
       and "+20.0%" in sent_messages[0] and "$1.2M" in sent_messages[0]
       and "$1.0M" in sent_messages[0] and "5,000원" in sent_messages[0])
 
