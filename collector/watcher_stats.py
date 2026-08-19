@@ -201,12 +201,12 @@ def load_watcher_data(timeout: float = 15.0) -> dict:
             return _cache["data"]
         return {"authors": {}, "coin_sl_rates": {}, "market_sl": None}
     result = _parse_all(db_bytes)
-    if result.get("authors") or result.get("coin_sl_rates"):
-        _cache["data"] = result
-        _cache["ts"] = now
-    elif _cache["data"]:
-        logger.info("[watcher] 파싱 결과 비어있음 - 기존 캐시 유지")
-        return _cache["data"]
+    # 다운로드는 성공했으므로 결과가 비어있어도 캐시 갱신 (TTL 재출발 → 매콜 재다운 방지).
+    # 진짜 파싱 실패는 _parse_all 이 예외를 로그하며 빈 dict 반환 — stale 캐시 유지 정책은
+    # 다운로드 실패에만 적용(위 분기). 여기서 stale 유지하면 실제 빈 DB 상태를 영원히
+    # 못 반영해 자기치유 불가.
+    _cache["data"] = result
+    _cache["ts"] = now
     return result
 
 

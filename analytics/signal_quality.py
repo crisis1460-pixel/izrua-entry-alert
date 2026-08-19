@@ -22,11 +22,11 @@ def _field(row, key: str, idx: int, default=None):
     """dict / sqlite3.Row / 튜플 아무거나 받는다."""
     try:
         return row[key] if row[key] is not None else default
-    except (KeyError, TypeError):
+    except (TypeError, KeyError, IndexError):
         pass
     try:
         return row[idx] if row[idx] is not None else default
-    except (IndexError, TypeError):
+    except (TypeError, KeyError, IndexError):
         return default
 
 

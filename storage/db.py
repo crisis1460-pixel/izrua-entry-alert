@@ -954,7 +954,7 @@ def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:
     - mfe: 평균 mfe_pct (NULL 제외 후 산술평균, 표본 부족 시 None)
 
     표본 부족(각 셀 n<5) 처리는 렌더러에서 함. 여기선 원시 집계만 반환."""
-    where = "WHERE status='resolved' AND touch_grade IS NOT NULL"
+    where = "WHERE status='touched' AND outcome IS NOT NULL AND touch_grade IS NOT NULL"
     params: tuple = ()
     if since_ts is not None:
         where += " AND resolved_at >= ?"

@@ -181,7 +181,7 @@ try:
                 "INSERT INTO levels (coin_symbol, ticker, entry_usd, direction, status, "
                 "signal_key, collected_at, touch_grade, touch_adx14, "
                 "touch_bb_width_pctile, outcome, resolved_at, mfe_pct) "
-                "VALUES ('X','KRW-X',1.0,'long','resolved',?,900,'A',?,?,?,1000,?)",
+                "VALUES ('X','KRW-X',1.0,'long','touched',?,900,'A',?,?,?,1000,?)",
                 (f"k{_adx}{_bbp}{_out}", _adx, _bbp, _out, _mfe))
         conn.commit()
         _hm = _dbmod.get_regime_heatmap(conn)

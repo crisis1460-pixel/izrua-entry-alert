@@ -559,6 +559,11 @@ def run_once(now: float | None = None) -> dict:
         # 200분 초과 시 15분봉 폴백이 실제로 발동한다(예전엔 항상 45분 고정이라 사문화).
         last = _load_last_check(conn)
         since_min = int((now - last) / 60) + 2 if last else 45
+        # 시계 역행/스냅샷 복원으로 last > now 인 경우: 기본값(45분)으로 폴백.
+        # 안 그러면 target_start 가 미래 → 모든 캔들 필터 미매칭 → 조용한 감지 실패.
+        if since_min < 1:
+            logger.warning("[체크] since_min<1 감지(last=%s, now=%s) - 기본 45분 폴백", last, now)
+            since_min = 45
 
         by_ticker: dict = {}
         for lv in levels:
@@ -1301,18 +1306,21 @@ def run_once(now: float | None = None) -> dict:
                             _sc_mcap = (_snap_sentiment or {}).get("stablecoin_mcap_b")
                             _unlock_pct = (_snap_unlock_warn or {}).get("pct")
                             _mtf_sc = (_snap_mtf or {}).get("score")
-                            db.record_touch_verdicts(conn, ids, _snap_supply,
-                                                     _snap_position,
-                                                     ma200_above=_snap_ma200_above,
-                                                     cvd_ratio=_snap_cvd,
-                                                     funding_rate=_snap_funding,
-                                                     oi_pct=_oi_chg,
-                                                     long_short_ratio=_snap_ls_ratio,
-                                                     top_trader_ratio=_snap_top_trader,
-                                                     taker_buy_sell_ratio=_snap_taker_ratio,
-                                                     stablecoin_mcap_b=_sc_mcap,
-                                                     mtf_score=_mtf_sc,
-                                                     token_unlock_pct=_unlock_pct)
+                            try:
+                                db.record_touch_verdicts(conn, ids, _snap_supply,
+                                                         _snap_position,
+                                                         ma200_above=_snap_ma200_above,
+                                                         cvd_ratio=_snap_cvd,
+                                                         funding_rate=_snap_funding,
+                                                         oi_pct=_oi_chg,
+                                                         long_short_ratio=_snap_ls_ratio,
+                                                         top_trader_ratio=_snap_top_trader,
+                                                         taker_buy_sell_ratio=_snap_taker_ratio,
+                                                         stablecoin_mcap_b=_sc_mcap,
+                                                         mtf_score=_mtf_sc,
+                                                         token_unlock_pct=_unlock_pct)
+                            except Exception as e:  # noqa: BLE001 - 발송 후 mark_touched 보장
+                                logger.warning("[체크] %s record_touch_verdicts 실패(무시): %s", ticker, e)
                         summary["touches" if touched else "previews"] += 1
                         # 터치 알림 성공 시 거래량 급증 감시 목록에 등록 (Feature 4).
                         # 감시 제외 밴드(2026-07-31): [대표 레벨 진입가 -10%, TP1
@@ -1361,15 +1369,18 @@ def run_once(now: float | None = None) -> dict:
                                 u for lv in cluster if (u := lv.get("post_url"))}
                             _watch_urls = (json.dumps(sorted(_watch_url_set))
                                           if _watch_url_set else None)
-                            db.add_volume_watch(
-                                conn, ticker, coin, now,
-                                band_low_krw=band_low_krw,
-                                band_high_krw=band_high_krw,
-                                tp1_krw=_tp1_krw, tp_count=_tp_count,
-                                tps_krw=_tps_krw, post_urls=_watch_urls,
-                                # B-1: 감시창 넘긴 미발송 행은 전면 리셋 —
-                                # 같은 회차 prune 이 새 감시를 지우는 race 봉쇄
-                                max_age_sec=cfg_get("volume_spike_watch_hours") * 3600)
+                            try:
+                                db.add_volume_watch(
+                                    conn, ticker, coin, now,
+                                    band_low_krw=band_low_krw,
+                                    band_high_krw=band_high_krw,
+                                    tp1_krw=_tp1_krw, tp_count=_tp_count,
+                                    tps_krw=_tps_krw, post_urls=_watch_urls,
+                                    # B-1: 감시창 넘긴 미발송 행은 전면 리셋 —
+                                    # 같은 회차 prune 이 새 감시를 지우는 race 봉쇄
+                                    max_age_sec=cfg_get("volume_spike_watch_hours") * 3600)
+                            except Exception as e:  # noqa: BLE001 - 발송 후 mark_touched 보장
+                                logger.warning("[체크] %s add_volume_watch 실패(무시): %s", ticker, e)
                     else:
                         summary["suppressed"] += 1
                         obs["suppressed_send_fail"] += 1
