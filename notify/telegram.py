@@ -135,13 +135,14 @@ def _finalize(lines: list) -> str:
     """모든 렌더러의 최종 join 지점 — 각 행을 _truncate_line 으로 다듬은 뒤
     개행 결합한다(2026-08-08 사용자 결정: 전체 행 공통 적용).
     출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
-    _PRICE_PREFIXES = ("    현재:", "    진입:", "    목표:", "    손절:")
+    _PRICE_PREFIXES = ("현재:", "진입:", "목표:", "손절:",
+                       "현재가:", "달성가:", "다음 목표:", "다음 TP:", "20시간 평균:")
     result = []
     for ln in lines:
         if ln.startswith("🔗 ") or ln == _SEP:
             result.append(ln)
-        elif ln.lstrip().startswith(("현재:", "진입:", "목표:", "손절:")):
-            result.append(_truncate_line(ln, max_cols=42))
+        elif ln.lstrip().startswith(_PRICE_PREFIXES):
+            result.append(_truncate_line(ln, max_cols=50))
         else:
             result.append(_truncate_line(ln))
     return "\n".join(result)
