@@ -137,7 +137,7 @@ def _finalize(lines: list) -> str:
     출처(🔗) 행과 구분선(_SEP)은 잘림 면제 — 하이퍼링크 태그 중간 절단 방지."""
     _PRICE_PREFIXES = ("현재:", "진입:", "목표:", "손절:",
                        "현재가:", "달성가:", "다음 목표:", "다음 TP:",
-                       "최근 1시간:", "20시간 평균:")
+                       "최근 1시간:", "20시간 평균:", "TP")
     result = []
     for ln in lines:
         if ln.startswith("🔗 ") or ln == _SEP:
@@ -1222,9 +1222,17 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
             _n = _fmt_krw(next_tp_krw)
             if entry_krw and entry_krw > 0:
                 _n_pct = (next_tp_krw - entry_krw) / entry_krw * 100
-                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원  (진입 {_n_pct:+.1f}%)")
+                _tp_part = f"TP{tp_n + 1}  {_n}원  (진입 {_n_pct:+.1f}%)"
             else:
-                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원")
+                _tp_part = f"TP{tp_n + 1}  {_n}원"
+            _single = f"    다음 목표:  {_tp_part}"
+            # 폰 화면 32칼럼에서 줄내림되는 케이스는 미리 2줄로 분리하고
+            # 두 번째 줄은 같은 4스페이스 들여쓰기로 정렬(사용자 요청).
+            if sum(_display_width(c) for c in _single) > _MAX_LINE_COLS:
+                lines.append("    다음 목표:")
+                lines.append(f"    {_tp_part}")
+            else:
+                lines.append(_single)
         else:
             lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
     lines.append(_SEP)
