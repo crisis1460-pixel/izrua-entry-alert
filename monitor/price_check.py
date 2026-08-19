@@ -1874,9 +1874,11 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 elif db.advance_tp_alert_idx(conn, lv["id"], _tp_alert_idx, _next_idx):
                     conn.commit()  # 전진 먼저 확정 (경합 차단 원칙)
                     _tp_day = _day_kst(now)
+                    _nxt = _tps_valid[_tp_alert_idx + 1] if (_tp_alert_idx + 1) < len(_tps_valid) else None
                     text = telegram.render_tp_partial_alert(
                         lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                        resolve_price, entry_krw, post_url=lv.get("post_url"))
+                        resolve_price, entry_krw, post_url=lv.get("post_url"),
+                        next_tp_krw=_nxt)
                     # 유/무음은 본알림과 동일 정책 (2026-08-16 리뷰 Fix8): 원
                     # 레벨의 터치 시점 등급(touch_grade, 없으면 grade) 기준 —
                     # C등급 무음 신호의 후속 TP 만 고음량이던 비대칭 제거.
@@ -1918,9 +1920,11 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                             db_path, lv["coin_symbol"], _kind, [lv["id"]],
                             now - _RESEND_BLOCK_SEC):
                         _tp_day = _day_kst(now)
+                        _nxt2 = _tps_valid[_tp_alert_idx + 1] if (_tp_alert_idx + 1) < len(_tps_valid) else None
                         text = telegram.render_tp_partial_alert(
                             lv["coin_symbol"], _tp_alert_idx + 1, len(_tps_valid),
-                            resolve_price, entry_krw, post_url=lv.get("post_url"))
+                            resolve_price, entry_krw, post_url=lv.get("post_url"),
+                            next_tp_krw=_nxt2)
                         # 유/무음 본알림 정책 승계 (Fix8) — 위 중간 TP 와 동일.
                         if telegram.send(text, urgency=_touch_sound_urgency(
                                 lv.get("touch_grade") or lv.get("grade"), cfg_get)):
@@ -2191,11 +2195,14 @@ def _check_volume_spikes(conn, now: float, cfg_get, prices=None) -> None:
         elif row.get("tp1_krw"):
             _next_tp, _next_idx = row["tp1_krw"], 1
             _n_total = row.get("tp_count") or 1
+        _chg = upbit.fetch_change_rate(ticker, timeout)
         text = telegram.render_volume_spike_alert(coin, ratio, current_bil, avg_bil,
                                                   next_tp_krw=_next_tp,
                                                   tp_idx=_next_idx,
                                                   tp_count=_n_total,
-                                                  post_urls=db.json_str_list(row.get("post_urls")))
+                                                  post_urls=db.json_str_list(row.get("post_urls")),
+                                                  cur_price_krw=cur,
+                                                  change_rate_24h=_chg)
         # 거래량/OI 급증은 등급 무관 독립 알림 클래스 — 유음 고정은 의도(Fix8 검토).
         if telegram.send(text, urgency="high"):
             logger.info("[거래량급증] %s %.1fx 급증 알림 발송 (최근1h %.1f억, 20h평균 %.1f억)",

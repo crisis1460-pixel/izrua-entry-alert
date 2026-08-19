@@ -1195,7 +1195,8 @@ def render_outcome_chain_alert(mismatch: dict) -> str:
 
 def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
                             tp_krw: float, entry_krw: float,
-                            post_url: str = None) -> str:
+                            post_url: str = None,
+                            next_tp_krw: float = None) -> str:
     """다단계 TP 중간·최종 도달 알림.
 
     tp_n: 방금 도달한 TP 번호(1-indexed). tp_total: 전체 TP 수.
@@ -1215,7 +1216,15 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
         price_line,
     ]
     if not is_last:
-        lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
+        if next_tp_krw is not None:
+            _n = _fmt_krw(next_tp_krw)
+            if entry_krw and entry_krw > 0:
+                _n_pct = (next_tp_krw - entry_krw) / entry_krw * 100
+                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원  ({_n_pct:+.1f}%)")
+            else:
+                lines.append(f"    다음 목표:  TP{tp_n + 1}  {_n}원")
+        else:
+            lines.append(f"    다음 목표:  TP{tp_n + 1} 계속 모니터링 중")
     lines.append(_SEP)
     if post_url:
         lines.append(_source_line([post_url]))
@@ -1225,7 +1234,8 @@ def render_tp_partial_alert(coin: str, tp_n: int, tp_total: int,
 def render_volume_spike_alert(coin: str, multiplier: float,
                                current_bil: float, avg_bil: float,
                                next_tp_krw=None, tp_idx=None,
-                               tp_count=None, post_urls=None) -> str:
+                               tp_count=None, post_urls=None,
+                               cur_price_krw=None, change_rate_24h=None) -> str:
     """거래량 급증 알림 (Feature 4 — 진입가 터치 후 2단계 알림).
     2026-07-31 지표 교체: "현재 24h vs 7일 평균" → "최근 1시간 vs 직전 20시간
     (완결 60분봉) 평균"(RVOL 관례). 숫자만 갈면 오독하므로 라벨을 함께 교체.
@@ -1243,6 +1253,13 @@ def render_volume_spike_alert(coin: str, multiplier: float,
         f"    최근 1시간:  {current_bil:.1f}억  ({multiplier:.1f}x 급증)",
         f"    20시간 평균:  {avg_bil:.1f}억",
     ]
+    if cur_price_krw is not None:
+        _cp = f"{cur_price_krw:,.0f}" if cur_price_krw >= 1 else f"{cur_price_krw:.4f}"
+        if change_rate_24h is not None:
+            _sign = "+" if change_rate_24h >= 0 else ""
+            lines.append(f"    현재가:  {_cp}원  ({_sign}{change_rate_24h*100:.2f}%)")
+        else:
+            lines.append(f"    현재가:  {_cp}원")
     if next_tp_krw:
         # 원화 표기는 타점 블록 _krw 관례와 동일 (1원 미만 소수 4자리)
         _p = f"{next_tp_krw:,.0f}" if next_tp_krw >= 1 else f"{next_tp_krw:.4f}"

@@ -79,6 +79,20 @@ def fetch_prices(markets: list, timeout: float) -> dict:
         return {}
 
 
+def fetch_change_rate(market: str, timeout: float) -> Optional[float]:
+    """단일 마켓의 24h 등락률(signed_change_rate, 소수 예 -0.023 = -2.3%).
+    거래량 급증 알림에서 스냅샷 시점 등락 컨텍스트 표기용(2026-08-19). 실패 시 None."""
+    try:
+        resp = requests.get(f"{_BASE}/ticker", params={"markets": market}, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            return float(data[0].get("signed_change_rate", 0.0))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[upbit] %s 등락률 조회 실패(무시): %s", market, e)
+    return None
+
+
 def fetch_volume_ranks(timeout: float) -> dict:
     """업비트 KRW 전 마켓의 24h 거래대금 순위. 반환 {market: rank(1부터)}. 실패 시 {}.
     알림 발송 시점에만 호출(2콜: 마켓목록 + 배치 ticker) — 조회 시점 기준 순위."""
