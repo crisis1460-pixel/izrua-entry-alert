@@ -432,8 +432,9 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 항목 | 설명 |
 |------|------|
 | **모호 심볼 차단** | OPEN, SIGN, GAS, ID, T, W 등 20개 일반 영단어 심볼을 뉴스 경로에서 제외 (매매 시그널 무영향) |
-| **프로모션 필터** | bonus, airdrop, MT5, VIP channel 등 광고 키워드 포함 시 스킵 |
-| **위치** | `notify/news_brief.py` — `_AMBIGUOUS_SYMBOLS` + `_PROMO_KEYWORDS` |
+| **프로모션 필터** | bonus, airdrop, mt5, vip channel 등 광고 키워드 포함 시 스킵 (2026-08-21 대소문자 버그 수정 — MT5/MT4 가 소문자 비교에 안 걸리던 문제) |
+| **매매 결과 리캡 필터 (2026-08-21)** | "manually closed +929.8 pips, profits secured, well played" 류 청산 결과 자랑 글 스킵. 점수제: 고정밀 패턴(N pips·manually closed·profits secured·well played·TP/SL hit·closed at N·clean win·익절 완료 등) 2점, 보조 패턴(trade update·breakeven·target reached) 1점 — 합산 2점 이상만 스킵. 일반 시황의 profit-taking/closed above 단어 단독으론 안 걸림 (회귀 NB8·NB8b·NB9) |
+| **위치** | `notify/news_brief.py` — `_AMBIGUOUS_SYMBOLS` + `_PROMO_KEYWORDS` + `_RESULT_PATTERNS` |
 
 ## 코드 다듬기 (2026-08-18)
 

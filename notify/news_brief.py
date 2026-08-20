@@ -16,6 +16,7 @@
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -43,9 +44,44 @@ _AMBIGUOUS_SYMBOLS = frozenset({
 _PROMO_KEYWORDS = (
     "bonus", "airdrop", "에어드롭", "보너스", "giveaway", "referral",
     "join now", "sign up", "register now", "limited offer", "exclusive offer",
-    "MT5", "MT4", "자동화 시스템", "VIP channel", "premium channel",
+    "mt5", "mt4", "자동화 시스템", "vip channel", "premium channel",
     "free trial", "discount code", "promo code",
 )
+
+# 매매 결과 리캡 필터 (2026-08-21 사용자 요청): "manually closed. +929.8 pips.
+# profits secured. well played" 류 청산 결과 자랑 글 — 뉴스가 아니라 지난
+# 시그널 성적 보고라 정보가치 없음. 오탐 방지 점수제: 고정밀 패턴 2점,
+# 보조 패턴 1점, 합산 2점 이상일 때만 스킵. 일반 시황 글의 profit/close
+# 단어 단독(예: "profit-taking pressure", "closed above resistance")으로는
+# 절대 안 걸리게 구두 표현·숫자 결합 패턴만 사용.
+_RESULT_PATTERNS = (
+    # ── 고정밀(2점): 뉴스·분석 글에는 등장하지 않는 결과 보고 전용 어휘 ──
+    (2, re.compile(r"[+-]?\d[\d,]*(?:\.\d+)?\s*(?:pips?\b|핍)", re.I)),      # +929.8 pips
+    (2, re.compile(r"\bmanually\s+clos(?:ed|ing)\b|수동으로\s*닫", re.I)),
+    (2, re.compile(r"\bprofits?\s+(?:secured|booked|locked)\b", re.I)),
+    (2, re.compile(r"\bwell\s+played\b|잘\s*연주했", re.I)),
+    (2, re.compile(r"\btp\s*\d*\s+hit\b|\btargets?\s+(?:hit|smashed)\b", re.I)),
+    (2, re.compile(r"\bsl\s+hit\b|\bstop(?:\s|-)?loss\s+hit\b|\bstopped\s+out\b", re.I)),
+    (2, re.compile(r"\bclos(?:ed|ing)\s+(?:at\s+[\d.,]+|in\s+profit)", re.I)),
+    (2, re.compile(r"\bclean\s+win\b|\brunning\s+in\s+profit\b", re.I)),
+    (2, re.compile(r"익절\s*완료|이익을\s*챙|수익\s*확정|마감되었습니다", re.I)),
+    # ── 보조(1점): 단독으론 스킵 안 됨 — 고정밀과 결합돼야 트립 ──
+    (1, re.compile(r"\btrade\s+update\b|거래\s*업데이트", re.I)),
+    (1, re.compile(r"\bbreak\s*-?\s*even\b|본절", re.I)),
+    (1, re.compile(r"\btargets?\s+reached\b", re.I)),
+)
+_RESULT_SCORE_MIN = 2
+
+
+def _is_trade_result(text: str) -> bool:
+    """청산 결과 리캡 판정 — 점수 2 이상이면 True (뉴스 경로에서 제외)."""
+    score = 0
+    for pts, rx in _RESULT_PATTERNS:
+        if rx.search(text):
+            score += pts
+            if score >= _RESULT_SCORE_MIN:
+                return True
+    return False
 
 # level_ids 필드 재사용 계약 (2026-08-17): news 알림은 매매 레벨 개념이 없어
 # alerts_log.level_ids 에 '단일 원소 = 채널명 문자열' 로 저장한다. record_alert
@@ -153,6 +189,10 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     text_lower = text.lower()
     if any(kw in text_lower for kw in _PROMO_KEYWORDS):
         logger.debug("[news] %s 프로모션 콘텐츠 스킵", symbol)
+        return "skipped"
+
+    if _is_trade_result(text):
+        logger.debug("[news] %s 매매 결과 리캡 스킵", symbol)
         return "skipped"
 
     now = now if now is not None else time.time()

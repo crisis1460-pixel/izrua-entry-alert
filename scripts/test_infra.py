@@ -829,6 +829,26 @@ long_text = "A" * 500
 s = _nb._summary(long_text)
 check("NB7 요약 250자 이내 + … 마감", len(s) <= 260 and s.endswith("…"))
 
+# NB8: 매매 결과 리캡 필터 (2026-08-21) — 청산 자랑 글 스킵
+_sent_log.clear()
+_p_recap1 = {"description": "BCH trade update\nmanually closed. +929.8 pips. "
+                            "profits secured. well played everyone.", "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_recap1, "BCH", "ch4", now=1786900000 + 500)
+check("NB8 결과 리캡(pips+manually closed) 스킵", r == "skipped" and not _sent_log)
+_p_recap2 = {"description": "BAT trade update\nclosed at 0.05742. +145 pips. "
+                            "clean win. well played, take profits.", "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_recap2, "BAT", "ch4", now=1786900000 + 510)
+check("NB8b 결과 리캡(closed at+pips) 스킵", r == "skipped" and not _sent_log)
+
+# NB9: 일반 시황 글은 profit/close 단어가 있어도 통과 (오탐 방지 확인)
+_p_legit = {"description": "Avalanche momentum builds as investors engage in "
+                           "profit-taking after the rally. Price closed above key "
+                           "resistance and analysts see higher upside potential.",
+            "url": "https://t.me/x/9"}
+r = _nb.maybe_send_news_brief(_nbc, _p_legit, "AVAX", "ch5", now=1786900000 + 520)
+_nbc.commit()
+check("NB9 일반 시황(profit-taking/closed above 포함) 정상 발송", r == "ok" and len(_sent_log) == 1)
+
 _nbc.close()
 os.unlink(_nb_db)
 _tg2.send = _orig_send
