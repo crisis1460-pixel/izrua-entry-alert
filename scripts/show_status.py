@@ -293,10 +293,13 @@ def print_pipeline_status(conn, now: float) -> None:
         last_collect = db.get_meta(conn, "last_collect_at")
         last_report = db.get_meta(conn, "last_weekly_report_at")
         last_snapshot = db.get_meta(conn, "last_author_snapshot_at")
+        cycle_dur = db.get_meta(conn, "last_cycle_duration_sec")
     except sqlite3.OperationalError:
         last_cycle = last_check = last_collect = last_report = last_snapshot = None
+        cycle_dur = None
 
-    print(f"  마지막 회차      : {_fmt_ago(last_cycle or last_check, now)}  (하트비트)")
+    _dur_note = f" · 소요 {cycle_dur}s" if cycle_dur else ""
+    print(f"  마지막 회차      : {_fmt_ago(last_cycle or last_check, now)}  (하트비트{_dur_note})")
     print(f"  마지막 가격스캔  : {_fmt_ago(last_check, now)}  (소급 판정창의 기준)")
     print(f"  마지막 수집        : {_fmt_ago(last_collect, now)}"
           f"  (다음 수집 {_fmt_eta(last_collect, now, settings.get('collect_interval_hours') * 3600)})")

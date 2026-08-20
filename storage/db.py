@@ -476,6 +476,14 @@ def _migrate(conn) -> None:
     if added:
         logger.info("[db] 마이그레이션: 컬럼 추가 %s", added)
 
+    # 2026-08-21 고도화 A2: 2분 핫패스의 `status='touched' AND <col> IS NULL` 계열
+    # 쿼리 4곳(get_unresolved_touched/get_touch_quality_pending/get_supply_1h_pending/
+    # get_deletion_check_candidates)용 부분 인덱스. outcome 은 ALTER 추가 컬럼이라
+    # SCHEMA 시점엔 없을 수 있어 여기(컬럼 보장 이후)서 생성한다. levels 는 영구
+    # 보존 정책이라 행 수 단조 증가 — 조기 적용 유리. touched 행만 인덱싱.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_levels_touched_outcome "
+                 "ON levels(status, outcome) WHERE status='touched'")
+
     ds_cols = {r["name"] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
     if ds_cols:  # 테이블이 아직 없으면 SCHEMA 가 최신 정의로 만들어준다
         for col in _DAILY_STATS_COLS:

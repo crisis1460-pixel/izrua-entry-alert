@@ -621,6 +621,7 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
     그만큼 터치 알림이 늦어진다. 새로 수집된 레벨은 2분 뒤 다음 회차가 검사한다.
     """
     now = time.time() if now is None else now
+    _t0 = time.time()   # 소요시간은 주입된 now 가 아니라 실제 벽시계 기준
     db_path = settings.get("db_path")
     db.init_db(db_path)
 
@@ -666,10 +667,21 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
     # 데드맨 스위치 핑 — 회차 완료 시 외부 서비스에 생존 신호 전송
     _deadman_ping()
 
+    # 회차 소요시간 기록 (2026-08-21 고도화 A3) — 07-27 큐잉 사고(수집 편입 회차
+    # 5~8분 → 2분 트리거 몰림) 류의 조용한 지연 패턴을 show_status 에서 추세로
+    # 볼 수 있게 순수 기록만 한다. 발송·필터에 영향 없음. 실패는 무시.
+    try:
+        _dur = time.time() - _t0
+        with db.connect(db_path) as _c:
+            db.set_meta(_c, "last_cycle_duration_sec", f"{_dur:.1f}")
+            _c.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("회차 소요시간 기록 실패(무시): %s", e)
+
     logger.info("회차 완료: 가격체크=%s 수집=%s 수집정체감시=%s 스냅샷=%s 역신호=%s 주간리포트=%s "
-                "모닝브리핑=%s",
+                "모닝브리핑=%s (소요 %.0fs)",
                 price_status, collect_status, collect_stale_status, snapshot_status,
-                reverse_status, report_status, brief_status)
+                reverse_status, report_status, brief_status, time.time() - _t0)
     return {"price_check": price_status, "collect": collect_status,
             "collect_stale_alert": collect_stale_status,
             "author_snapshot": snapshot_status,

@@ -295,16 +295,26 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
 
 
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
-    """선물 펀딩비율(%). Binance 직접 → CoinGecko(Binance 원본) → Bybit → OKX.
+    """선물 펀딩비율(%). CoinGecko(Binance 원본) → Binance 직접 → Bybit → OKX.
     양수=롱 과열, 음수=숏 과열. 전 경로 실패 시 None(알림에서 행 생략).
 
     2026-08-07 폴백 체인 확장: fapi.binance.com 과 Bybit linear 는 미국 IP
     지역 차단(451/403) — GitHub Actions 러너(미국 Azure)에서 막혀 프로덕션
-    알림에 펀딩 행이 항상 생략되던 문제. 2차 CoinGecko 는 Binance 원본 수치를
-    미국에서도 주므로(거래량 대표성 — 사용자 결정) 프로덕션 주 경로가 되고,
-    Bybit/OKX 는 최후 폴백. 비-200 응답에도 경고를 남긴다."""
+    알림에 펀딩 행이 항상 생략되던 문제. CoinGecko 는 Binance 원본 수치를
+    미국에서도 주므로(거래량 대표성 — 사용자 결정) 프로덕션 주 경로.
+    2026-08-21 순서 재배치(고도화 A1): 상시 차단으로 알려진 Binance 직접
+    호출이 1순위라 터치 발송마다 timeout(10s)을 선불로 내던 문제 — 실질
+    주 경로인 CoinGecko(캐시 공유)를 앞으로. Binance 직접은 로컬 실행용
+    2순위로 유지. 비-200 응답에도 경고를 남긴다."""
     pair = f"{symbol.upper()}USDT"
-    # Binance Futures
+    # CoinGecko 경유 Binance 원본 (프로덕션 주 경로 — 맵 캐시 공유라 추가비용 0)
+    _cg_map = _coingecko_binance_funding_map(timeout)
+    if _cg_map is not None:
+        rate = (_cg_map.get(pair) or {}).get("fr")
+        if rate is not None:
+            return rate
+        # Binance 미상장 심볼 — 직접 호출/Bybit/OKX 로 계속 폴백
+    # Binance Futures 직접 (로컬 실행용 — GH Actions 미국 IP 는 451 차단)
     try:
         r = requests.get(
             "https://fapi.binance.com/fapi/v1/premiumIndex",
@@ -318,13 +328,6 @@ def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:
             logger.warning("[funding] Binance %s HTTP %s", pair, r.status_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("[funding] Binance %s 실패: %s", pair, e)
-    # CoinGecko 경유 Binance 원본 (프로덕션 주 경로 — 위 직접 호출은 미국 차단)
-    _cg_map = _coingecko_binance_funding_map(timeout)
-    if _cg_map is not None:
-        rate = (_cg_map.get(pair) or {}).get("fr")
-        if rate is not None:
-            return rate
-        # Binance 미상장 심볼 — Bybit/OKX 로 계속 폴백
     # Bybit Linear
     try:
         r = requests.get(
