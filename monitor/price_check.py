@@ -2076,6 +2076,9 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
     if cg_map is None:
         return
     spike_pct = cfg_get("oi_spike_pct") or 15.0
+    # 절대 규모 하한 (2026-08-21 사용자 결정): 소형 OI 는 ±10%대 시간당 출렁임이
+    # 일상 노이즈 — % 게이트만으론 VVV/POL($14~16M)류가 계속 발동해 이중 게이트.
+    spike_min_oi = cfg_get("oi_spike_min_oi_usd") or 0
     cooldown_sec = (cfg_get("oi_spike_cooldown_hours") or 6.0) * 3600
     spike_on = cfg_get("oi_spike_enabled") and prices is not None
     rows = []
@@ -2095,6 +2098,8 @@ def _snapshot_oi(conn, now: float, cfg_get=None, prices: dict = None) -> None:
             pct = (oi - prev) / prev * 100
             if abs(pct) < spike_pct:
                 continue
+            if oi < spike_min_oi:
+                continue  # 소형 OI 노이즈 — 절대 규모 하한 미달
             last_alert = db.get_oi_spike_last_alert(conn, c)
             if last_alert is not None and now - last_alert < cooldown_sec:
                 continue

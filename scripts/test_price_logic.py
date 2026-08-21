@@ -3496,6 +3496,10 @@ _OS_DB = "cache/_test_oi_spike.db"
 if os.path.exists(_OS_DB):
     os.remove(_OS_DB)
 db.init_db(_OS_DB)
+# OS1~OS7 은 $1~2M 소액 OI 로 % 게이트만 검증 — 절대 하한(2026-08-21)은 0 으로
+# 끄고, 하한 게이트 자체는 OS8 이 전용 검증한다.
+_os_saved_min_oi = settings.SETTINGS["oi_spike_min_oi_usd"]
+settings.SETTINGS["oi_spike_min_oi_usd"] = 0
 with db.connect(_OS_DB) as conn:
     conn.execute(
         "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
@@ -3644,6 +3648,20 @@ check("OS8c B 경계 정확히 1e9", _fmt_usd(1_000_000_000.0) == "$1.00B")
 check("OS8d 반올림 경계 - 999,999,999.9 는 M 반올림 시 1000.0M 이 아니라 B 로",
       _fmt_usd(999_999_999.9) == "$1.00B")
 check("OS8e 경계 바로 아래(999,949,999.0)는 여전히 M", _fmt_usd(999_949_999.0) == "$999.9M")
+
+# OS9 (2026-08-21 사용자 결정): 절대 규모 하한 게이트 — % 초과해도
+# 현재 OI < oi_spike_min_oi_usd 면 무발동 (소형 OI 노이즈 차단).
+settings.SETTINGS["oi_spike_min_oi_usd"] = 30_000_000
+_binance._cg_funding_cache.update(ts=0.0, map=None)
+_requests_mod.get = _bn_get_factory({"coingecko.com": _BnResp(200, _os_map(6_000_000.0))})
+with db.connect(_OS_DB) as conn:
+    _t6 = now + 4000000
+    db.set_meta(conn, price_check._META_LAST_OI_SNAP, str(_t6 - 3700))
+    db.record_oi_snapshots(conn, [("OSC", 4_000_000.0)], _t6 - 100)  # +50% 급증
+    sent_messages.clear()
+    price_check._snapshot_oi(conn, _t6, settings.get, _os_prices)
+check("OS9 절대 하한($30M) 미달 - +50% 여도 무발동", len(sent_messages) == 0)
+settings.SETTINGS["oi_spike_min_oi_usd"] = _os_saved_min_oi
 
 _binance._cg_funding_cache.update(ts=0.0, map=None)
 if os.path.exists(_OS_DB):
