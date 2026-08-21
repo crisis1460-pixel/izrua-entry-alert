@@ -159,12 +159,16 @@ def section_b3(rows: list) -> None:
     print(_fmt_group("경고 있음", group_stats(warned)))
     print(_fmt_group("경고 없음", group_stats(clean)))
     if len(warned) >= MIN_GROUP_N and len(clean) >= MIN_GROUP_N:
-        w, c = group_stats(warned), group_stats(clean)
-        if w["wilson_lo"] is not None and c["rate"] is not None:
-            verdict = ("언락 경고 코인이 유의하게 약함 → 수급보정 승격 검토 근거"
-                       if (w["rate"] or 0) + 0.10 < (c["rate"] or 0)
-                       else "유의한 차이 없음 → 현행 기록 전용 유지")
-            print(f"  판정: {verdict}")
+        # 점 추정치 비교는 게이트 근처 표본에서 노이즈 판정 — Wilson 80% 구간이
+        # 겹치지 않을 때(경고그룹 상한 < 무경고그룹 하한)만 유의하다고 본다.
+        w_wins = sum(1 for r in warned if r["outcome"] in WIN_OUTCOMES)
+        c_lo, _ = wilson_interval(
+            sum(1 for r in clean if r["outcome"] in WIN_OUTCOMES), len(clean), z=Z)
+        _, w_hi = wilson_interval(w_wins, len(warned), z=Z)
+        verdict = ("언락 경고 코인이 유의하게 약함 → 수급보정 승격 검토 근거"
+                   if w_hi is not None and c_lo is not None and w_hi < c_lo
+                   else "유의한 차이 없음 → 현행 기록 전용 유지")
+        print(f"  판정: {verdict}")
     else:
         print(f"  판정 유보 — 양 그룹 n>={MIN_GROUP_N} 필요")
 

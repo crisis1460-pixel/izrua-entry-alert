@@ -60,15 +60,21 @@ _RESULT_PATTERNS = (
     (2, re.compile(r"\bmanually\s+clos(?:ed|ing)\b|수동으로\s*닫", re.I)),
     (2, re.compile(r"\bprofits?\s+(?:secured|booked|locked)\b", re.I)),
     (2, re.compile(r"\bwell\s+played\b|잘\s*연주했", re.I)),
-    (2, re.compile(r"\btp\s*\d*\s+hit\b|\btargets?\s+(?:hit|smashed)\b", re.I)),
-    (2, re.compile(r"\bsl\s+hit\b|\bstop(?:\s|-)?loss\s+hit\b|\bstopped\s+out\b", re.I)),
-    (2, re.compile(r"\bclos(?:ed|ing)\s+(?:at\s+[\d.,]+|in\s+profit)", re.I)),
+    (2, re.compile(r"\btp\s*\d*\s+hit\b", re.I)),          # "TP2 hit" — 시그널 채널 전용 어휘
+    (2, re.compile(r"\bsl\s+hit\b", re.I)),
+    (2, re.compile(r"\bclos(?:ed|ing)\s+in\s+profit\b", re.I)),
     (2, re.compile(r"\bclean\s+win\b|\brunning\s+in\s+profit\b", re.I)),
     (2, re.compile(r"익절\s*완료|이익을\s*챙|수익\s*확정|마감되었습니다", re.I)),
     # ── 보조(1점): 단독으론 스킵 안 됨 — 고정밀과 결합돼야 트립 ──
+    # 2026-08-21 검토 강등 3건: 일반 뉴스에도 나올 수 있는 표현이라 단독 차단 금지 —
+    #   "Bitcoin closed at 100,000"(시세 마감), "$73K target hit"(애널 목표가),
+    #   "stopped out"(청산 캐스케이드 기사). 리캡 글은 pips/well played 등
+    #   고정밀 어휘를 함께 쓰므로 결합 시엔 여전히 차단된다.
+    (1, re.compile(r"\bclos(?:ed|ing)\s+at\s+[\d.,]+", re.I)),
+    (1, re.compile(r"\btargets?\s+(?:hit|smashed|reached)\b", re.I)),
+    (1, re.compile(r"\bstop(?:\s|-)?loss\s+hit\b|\bstopped\s+out\b", re.I)),
     (1, re.compile(r"\btrade\s+update\b|거래\s*업데이트", re.I)),
     (1, re.compile(r"\bbreak\s*-?\s*even\b|본절", re.I)),
-    (1, re.compile(r"\btargets?\s+reached\b", re.I)),
 )
 _RESULT_SCORE_MIN = 2
 
