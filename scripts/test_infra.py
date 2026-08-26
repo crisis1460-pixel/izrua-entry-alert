@@ -824,10 +824,11 @@ r = _nb.maybe_send_news_brief(_nbc, _p, "SOL", "ch3", now=1786900000 + 400)
 check("NB6 news_alert_enabled=False 시 스킵", r == "skipped")
 _st_cfg.SETTINGS["news_alert_enabled"] = True
 
-# NB7: 요약 함수 — 원문이 250자 초과 시 클리핑 + "…"
-long_text = "A" * 500
+# NB7: 요약 함수 — 상한(500자) 초과 시 클리핑 + "…" (2026-08-27 250→500)
+long_text = "A" * 800
 s = _nb._summary(long_text)
-check("NB7 요약 250자 이내 + … 마감", len(s) <= 260 and s.endswith("…"))
+check("NB7 요약 500자 이내 + … 마감", len(s) <= 510 and s.endswith("…"))
+check("NB7b 상한 이내 원문은 그대로", _nb._summary("B" * 400) == "B" * 400)
 
 # NB8: 매매 결과 리캡 필터 (2026-08-21) — 청산 자랑 글 스킵
 _sent_log.clear()
@@ -848,6 +849,31 @@ _p_legit = {"description": "Avalanche momentum builds as investors engage in "
 r = _nb.maybe_send_news_brief(_nbc, _p_legit, "AVAX", "ch5", now=1786900000 + 520)
 _nbc.commit()
 check("NB9 일반 시황(profit-taking/closed above 포함) 정상 발송", r == "ok" and len(_sent_log) == 1)
+
+# NB10: 첫 줄 중복 제거 (2026-08-27 사용자 요청) — TG 수집부는 title 을 본문
+# 첫 줄에서 잘라 만들므로(desc 가 title 로 시작) 결합 시 같은 줄이 두 번 나가던 것
+_st_cfg.SETTINGS["news_translate_enabled"] = False
+_sent_log.clear()
+_p_dup = {"title": "ETH/USDT Take-Profit target 2",
+          "description": "ETH/USDT Take-Profit target 2\nProfit reached 249.2 "
+                         "percent over one month and nine days of holding.",
+          "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_dup, "ETH", "ch6", now=1786900000 + 530)
+_nbc.commit()
+check("NB10 title=첫줄 중복 제거(1회만 표기)",
+      r == "ok" and _sent_log[0][0].count("Take-Profit target 2") == 1)
+# NB10b: 독립 title(desc 와 다름)은 종전대로 결합 유지 — 다음 날로 넘겨 상한 회피
+_sent_log.clear()
+_p_sep = {"title": "Headline about Cardano outlook",
+          "description": "Body text differs from the headline and is long "
+                         "enough to pass the minimum length filter easily.",
+          "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_sep, "ADA", "ch6", now=1786900000 + 86400 + 600)
+_nbc.commit()
+check("NB10b 독립 title 은 결합 유지",
+      r == "ok" and "Headline about Cardano" in _sent_log[0][0]
+      and "Body text differs" in _sent_log[0][0])
+_st_cfg.SETTINGS["news_translate_enabled"] = True
 
 _nbc.close()
 os.unlink(_nb_db)

@@ -29,7 +29,7 @@ from utils.time_kst import day_kst
 logger = logging.getLogger("alert.news_brief")
 
 _NEWS_KIND = "news"
-_TEXT_MAX = 250   # 원문 요약 상한(자)
+_TEXT_MAX = 500   # 원문 요약 상한(자) 폴백 — settings.news_alert_summary_max_chars 우선
 
 # 일반 영단어와 겹치는 심볼 — 뉴스 본문에서 코인이 아닌 맥락으로 자주 등장해 오탐.
 # 매매 시그널(parse_setup 성공)에는 영향 없음 — 뉴스 경로에서만 차단.
@@ -154,17 +154,23 @@ def _rate_limit_ok(conn, coin: str, channel: str, now: float) -> tuple:
 
 
 def _summary(text: str) -> str:
-    """원문 요약 — 앞 N자 클리핑 + 뒤 마감. 이미 짧으면 그대로."""
+    """원문 요약 — 앞 N자 클리핑 + 뒤 마감. 이미 짧으면 그대로.
+    상한은 settings.news_alert_summary_max_chars (2026-08-27 사용자 요청: 250→500,
+    MyMemory 번역 폴백의 500자 제한이 사실상 상한이라 그 이상 금지)."""
     if not text:
         return ""
+    try:
+        text_max = int(settings.get("news_alert_summary_max_chars"))
+    except Exception:  # noqa: BLE001 — 설정 누락 시 폴백
+        text_max = _TEXT_MAX
     t = text.strip()
-    if len(t) <= _TEXT_MAX:
+    if len(t) <= text_max:
         return t
     # 문장 끊김 완화: N자 앞 마지막 개행/마침표까지 자르기
-    cut = t[:_TEXT_MAX]
+    cut = t[:text_max]
     for sep in ("\n\n", "\n", ". ", "。"):
         idx = cut.rfind(sep)
-        if idx > _TEXT_MAX // 2:
+        if idx > text_max // 2:
             return cut[:idx + len(sep)].rstrip() + " …"
     return cut.rstrip() + " …"
 
@@ -185,9 +191,14 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     # title+description 결합 (2026-08-17 리뷰): 종전 description 우선 단일 선택은
     # description 이 짧고 title 이 헤드라인인 채널(BitcoinBullets 등)에서 조용히
     # 스킵. 심볼 매칭도 run_collect 에서 두 필드 결합으로 하므로 여기도 통일.
+    # 첫 줄 중복 제거 (2026-08-27 사용자 요청): telegram_source 는 title 을 본문
+    # 첫 줄에서 잘라 만들므로(desc 가 title 로 시작) 결합하면 같은 줄이 두 번 나간다.
     title = (post.get("title") or "").strip()
     desc = (post.get("description") or "").strip()
-    text = (title + "\n" + desc).strip() if title and desc else (title or desc)
+    if title and desc:
+        text = desc if desc.startswith(title) else (title + "\n" + desc).strip()
+    else:
+        text = title or desc
     min_len = settings.get("news_alert_min_length")
     if len(text) < min_len:
         return "skipped"

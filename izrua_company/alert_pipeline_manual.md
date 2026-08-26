@@ -429,6 +429,14 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | **캐시** | 인메모리 24h TTL (동일 원문 재번역 방지) |
 | **장애 안전** | 번역 전 경로 실패 시 원문 영어 그대로 발송 (알림 누락 없음) |
 
+## 뉴스 첫 줄 중복 제거 + 요약 확대 (2026-08-27)
+
+| 항목 | 설명 |
+|------|------|
+| **첫 줄 중복 제거** | telegram_source 는 title 을 본문 첫 줄에서 잘라 만들므로 (`title = body.split("\n",1)[0][:120]`), news_brief 의 title+description 결합 시 같은 줄이 두 번 발송되던 문제. description 이 title 로 시작하면 description 만 사용, 독립 title(TV 등)은 종전대로 결합 유지 (회귀 NB10·NB10b) |
+| **요약 상한 250→500자** | 사용자 요청 "원문 내용을 더 추가" — `news_alert_summary_max_chars: 500` 설정 신설 (config/settings.py). MyMemory 번역 폴백의 500자 제한이 사실상 상한이라 그 이상 금지. 문장 경계 클리핑 로직은 유지 |
+| **위치** | `notify/news_brief.py` — `maybe_send_news_brief()` 결합부 + `_summary()` |
+
 ## 뉴스 오탐 필터 (2026-08-18)
 
 | 항목 | 설명 |

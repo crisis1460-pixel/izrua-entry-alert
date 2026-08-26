@@ -123,6 +123,9 @@ SETTINGS = {
     "news_alert_max_per_channel_per_day": 3,# 채널당 하루 상한
     "news_alert_coin_cooldown_hours": 24,   # 코인당 재발송 최소 간격
     "news_alert_min_length": 60,            # 원문 60자 미만은 노이즈로 스킵
+    "news_alert_summary_max_chars": 500,    # 요약 상한(자) — 2026-08-27 250→500 (원문
+                                            # 더 담기). MyMemory 폴백 500자 제한 초과 금지
+
     "news_translate_enabled": True,          # 뉴스 요약 한글 번역 (Papago→MyMemory 폴백→원문)
 
     # 알림 트리거
