@@ -1,5 +1,5 @@
 {
-  "updated_at": 1787667399.0948713,
+  "updated_at": 1787754776.356476,
   "universe": [
     {
       "symbol": "0G",
@@ -14,62 +14,62 @@
     {
       "symbol": "1INCH",
       "ticker": "KRW-1INCH",
-      "rank": 223,
+      "rank": 224,
       "name": "1INCH",
-      "price_usd": 0.089988,
+      "price_usd": 0.08888,
       "tier_icon": "·",
-      "total_volume": 18508552,
-      "market_cap": 126485705
+      "total_volume": 16222667,
+      "market_cap": 124932406
     },
     {
       "symbol": "2Z",
       "ticker": "KRW-2Z",
-      "rank": 176,
+      "rank": 175,
       "name": "DoubleZero",
-      "price_usd": 0.055533,
+      "price_usd": 0.055395,
       "tier_icon": "🥉",
-      "total_volume": 3707226,
-      "market_cap": 192675565
+      "total_volume": 3138223,
+      "market_cap": 192239360
     },
     {
       "symbol": "A",
       "ticker": "KRW-A",
-      "rank": 230,
+      "rank": 222,
       "name": "Vaulta",
-      "price_usd": 0.074309,
+      "price_usd": 0.075509,
       "tier_icon": "·",
-      "total_volume": 6804592,
-      "market_cap": 123559008
+      "total_volume": 8444512,
+      "market_cap": 125586604
     },
     {
       "symbol": "AAVE",
       "ticker": "KRW-AAVE",
       "rank": 46,
       "name": "Aave",
-      "price_usd": 128.73,
+      "price_usd": 123.44,
       "tier_icon": "🥇",
-      "total_volume": 393729326,
-      "market_cap": 1985555967
+      "total_volume": 240668080,
+      "market_cap": 1905288710
     },
     {
       "symbol": "ADA",
       "ticker": "KRW-ADA",
       "rank": 19,
       "name": "Cardano",
-      "price_usd": 0.215408,
+      "price_usd": 0.207091,
       "tier_icon": "🥇",
-      "total_volume": 553553063,
-      "market_cap": 8076182617
+      "total_volume": 364149318,
+      "market_cap": 7765529953
     },
     {
       "symbol": "AERO",
       "ticker": "KRW-AERO",
-      "rank": 102,
+      "rank": 103,
       "name": "Aerodrome Finance",
-      "price_usd": 0.534657,
+      "price_usd": 0.514259,
       "tier_icon": "🥉",
-      "total_volume": 106387886,
-      "market_cap": 523184411
+      "total_volume": 35057968,
+      "market_cap": 502986607
     },
     {
       "symbol": "AGLD",
@@ -104,22 +104,22 @@
     {
       "symbol": "AKT",
       "ticker": "KRW-AKT",
-      "rank": 189,
+      "rank": 192,
       "name": "Akash Network",
-      "price_usd": 0.56028,
+      "price_usd": 0.544697,
       "tier_icon": "🥉",
-      "total_volume": 5726973,
-      "market_cap": 166438753
+      "total_volume": 2803036,
+      "market_cap": 161884574
     },
     {
       "symbol": "ALGO",
       "ticker": "KRW-ALGO",
-      "rank": 79,
+      "rank": 80,
       "name": "Algorand",
-      "price_usd": 0.091877,
+      "price_usd": 0.089568,
       "tier_icon": "🥈",
-      "total_volume": 38767800,
-      "market_cap": 829848467
+      "total_volume": 32393712,
+      "market_cap": 809624766
     },
     {
       "symbol": "ALT",
@@ -164,22 +164,22 @@
     {
       "symbol": "APT",
       "ticker": "KRW-APT",
-      "rank": 104,
+      "rank": 112,
       "name": "Aptos",
-      "price_usd": 0.596048,
+      "price_usd": 0.559551,
       "tier_icon": "🥉",
-      "total_volume": 69991059,
-      "market_cap": 511385441
+      "total_volume": 53682553,
+      "market_cap": 480301683
     },
     {
       "symbol": "ARB",
       "ticker": "KRW-ARB",
       "rank": 92,
       "name": "Arbitrum",
-      "price_usd": 0.095164,
+      "price_usd": 0.090741,
       "tier_icon": "🥈",
-      "total_volume": 77692575,
-      "market_cap": 635512558
+      "total_volume": 49704681,
+      "market_cap": 606095775
     },
     {
       "symbol": "ARDR",
@@ -234,22 +234,22 @@
     {
       "symbol": "ATH",
       "ticker": "KRW-ATH",
-      "rank": 262,
+      "rank": 266,
       "name": "Aethir",
-      "price_usd": 0.00499084,
+      "price_usd": 0.00490098,
       "tier_icon": "·",
-      "total_volume": 22267937,
-      "market_cap": 100459728
+      "total_volume": 7579867,
+      "market_cap": 98652081
     },
     {
       "symbol": "ATOM",
       "ticker": "KRW-ATOM",
-      "rank": 82,
+      "rank": 81,
       "name": "Cosmos Hub",
       "price_usd": 1.53,
       "tier_icon": "🥈",
-      "total_volume": 43603902,
-      "market_cap": 807993597
+      "total_volume": 41027888,
+      "market_cap": 806938345
     },
     {
       "symbol": "AUCTION",
@@ -264,12 +264,12 @@
     {
       "symbol": "AVAX",
       "ticker": "KRW-AVAX",
-      "rank": 31,
+      "rank": 30,
       "name": "Avalanche",
-      "price_usd": 7.46,
+      "price_usd": 7.29,
       "tier_icon": "🥇",
-      "total_volume": 281314757,
-      "market_cap": 3219336823
+      "total_volume": 170825885,
+      "market_cap": 3147330292
     },
     {
       "symbol": "AVNT",
@@ -284,12 +284,12 @@
     {
       "symbol": "AWE",
       "ticker": "KRW-AWE",
-      "rank": 232,
+      "rank": 231,
       "name": "AWE Network",
-      "price_usd": 0.062391,
+      "price_usd": 0.06141,
       "tier_icon": "·",
-      "total_volume": 1724873,
-      "market_cap": 121190375
+      "total_volume": 2150154,
+      "market_cap": 119270219
     },
     {
       "symbol": "AXL",
@@ -304,12 +304,12 @@
     {
       "symbol": "AXS",
       "ticker": "KRW-AXS",
-      "rank": 188,
+      "rank": 189,
       "name": "Axie Infinity",
-      "price_usd": 0.966229,
+      "price_usd": 0.934625,
       "tier_icon": "🥉",
-      "total_volume": 27746245,
-      "market_cap": 168536450
+      "total_volume": 23033909,
+      "market_cap": 163050327
     },
     {
       "symbol": "AZTEC",
@@ -354,22 +354,22 @@
     {
       "symbol": "BAT",
       "ticker": "KRW-BAT",
-      "rank": 261,
+      "rank": 258,
       "name": "Basic Attention",
-      "price_usd": 0.06778,
+      "price_usd": 0.068165,
       "tier_icon": "·",
-      "total_volume": 16237844,
-      "market_cap": 101380898
+      "total_volume": 16276637,
+      "market_cap": 101970012
     },
     {
       "symbol": "BCH",
       "ticker": "KRW-BCH",
       "rank": 21,
       "name": "Bitcoin Cash",
-      "price_usd": 268.93,
+      "price_usd": 263.56,
       "tier_icon": "🥇",
-      "total_volume": 246994287,
-      "market_cap": 5400077783
+      "total_volume": 114329009,
+      "market_cap": 5293427962
     },
     {
       "symbol": "BEAM",
@@ -494,42 +494,42 @@
     {
       "symbol": "BSV",
       "ticker": "KRW-BSV",
-      "rank": 126,
+      "rank": 122,
       "name": "Bitcoin SV",
-      "price_usd": 16.59,
+      "price_usd": 16.82,
       "tier_icon": "🥉",
-      "total_volume": 5910297,
-      "market_cap": 333101508
+      "total_volume": 5057054,
+      "market_cap": 337694505
     },
     {
       "symbol": "BTC",
       "ticker": "KRW-BTC",
       "rank": 1,
       "name": "Bitcoin",
-      "price_usd": 78998,
+      "price_usd": 78230,
       "tier_icon": "💎",
-      "total_volume": 52055838178,
-      "market_cap": 1585881187880
+      "total_volume": 29626341970,
+      "market_cap": 1570490353089
     },
     {
       "symbol": "BTT",
       "ticker": "KRW-BTT",
       "rank": 137,
       "name": "BitTorrent",
-      "price_usd": 2.94299e-07,
+      "price_usd": 2.86916e-07,
       "tier_icon": "🥉",
-      "total_volume": 6675769,
-      "market_cap": 290485348
+      "total_volume": 5418455,
+      "market_cap": 283297781
     },
     {
       "symbol": "CAP",
       "ticker": "KRW-CAP",
-      "rank": 252,
+      "rank": 244,
       "name": "Cap",
-      "price_usd": 0.068107,
+      "price_usd": 0.071734,
       "tier_icon": "·",
-      "total_volume": 17743142,
-      "market_cap": 106247589
+      "total_volume": 19722143,
+      "market_cap": 111920087
     },
     {
       "symbol": "CARV",
@@ -554,12 +554,12 @@
     {
       "symbol": "CC",
       "ticker": "KRW-CC",
-      "rank": 22,
+      "rank": 23,
       "name": "Canton",
-      "price_usd": 0.117817,
+      "price_usd": 0.115846,
       "tier_icon": "🥇",
-      "total_volume": 18134880,
-      "market_cap": 4644482746
+      "total_volume": 10514474,
+      "market_cap": 4567418793
     },
     {
       "symbol": "CELO",
@@ -584,12 +584,12 @@
     {
       "symbol": "CFX",
       "ticker": "KRW-CFX",
-      "rank": 150,
+      "rank": 149,
       "name": "Conflux",
-      "price_usd": 0.04818616,
+      "price_usd": 0.04771868,
       "tier_icon": "🥉",
-      "total_volume": 5717705,
-      "market_cap": 252194174
+      "total_volume": 5063723,
+      "market_cap": 249819468
     },
     {
       "symbol": "CHIP",
@@ -604,12 +604,12 @@
     {
       "symbol": "CHZ",
       "ticker": "KRW-CHZ",
-      "rank": 200,
+      "rank": 201,
       "name": "Chiliz",
-      "price_usd": 0.01422871,
-      "tier_icon": "🥉",
-      "total_volume": 33737215,
-      "market_cap": 149458238
+      "price_usd": 0.01390748,
+      "tier_icon": "·",
+      "total_volume": 27205814,
+      "market_cap": 146183052
     },
     {
       "symbol": "CKB",
@@ -624,12 +624,12 @@
     {
       "symbol": "COMP",
       "ticker": "KRW-COMP",
-      "rank": 172,
+      "rank": 174,
       "name": "Compound",
-      "price_usd": 19.57,
+      "price_usd": 19.37,
       "tier_icon": "🥉",
-      "total_volume": 22446727,
-      "market_cap": 195731126
+      "total_volume": 20696017,
+      "market_cap": 193788735
     },
     {
       "symbol": "COW",
@@ -654,12 +654,12 @@
     {
       "symbol": "CRO",
       "ticker": "KRW-CRO",
-      "rank": 33,
+      "rank": 35,
       "name": "Cronos",
-      "price_usd": 0.060762,
+      "price_usd": 0.057851,
       "tier_icon": "🥇",
-      "total_volume": 10504543,
-      "market_cap": 2947701538
+      "total_volume": 8430261,
+      "market_cap": 2806644182
     },
     {
       "symbol": "CTC",
@@ -726,10 +726,10 @@
       "ticker": "KRW-DOGE",
       "rank": 11,
       "name": "Dogecoin",
-      "price_usd": 0.088719,
+      "price_usd": 0.08527,
       "tier_icon": "🥇",
-      "total_volume": 1070388008,
-      "market_cap": 13808332658
+      "total_volume": 643559649,
+      "market_cap": 13276601496
     },
     {
       "symbol": "DOOD",
@@ -754,42 +754,42 @@
     {
       "symbol": "DOT",
       "ticker": "KRW-DOT",
-      "rank": 56,
+      "rank": 57,
       "name": "Polkadot",
-      "price_usd": 0.878161,
+      "price_usd": 0.840232,
       "tier_icon": "🥈",
-      "total_volume": 120333398,
-      "market_cap": 1492585143
+      "total_volume": 100169973,
+      "market_cap": 1428606997
     },
     {
       "symbol": "DRV",
       "ticker": "KRW-DRV",
-      "rank": 210,
+      "rank": 191,
       "name": "Derive",
-      "price_usd": 0.13998,
-      "tier_icon": "·",
-      "total_volume": 12082200,
-      "market_cap": 139939947
+      "price_usd": 0.162534,
+      "tier_icon": "🥉",
+      "total_volume": 25411583,
+      "market_cap": 162427463
     },
     {
       "symbol": "EDGE",
       "ticker": "KRW-EDGE",
-      "rank": 211,
+      "rank": 219,
       "name": "edgeX",
-      "price_usd": 0.396591,
+      "price_usd": 0.365578,
       "tier_icon": "·",
-      "total_volume": 3268276,
-      "market_cap": 138807360
+      "total_volume": 3487052,
+      "market_cap": 127976305
     },
     {
       "symbol": "EGLD",
       "ticker": "KRW-EGLD",
-      "rank": 245,
+      "rank": 254,
       "name": "MultiversX",
-      "price_usd": 3.57,
+      "price_usd": 3.39,
       "tier_icon": "·",
-      "total_volume": 4786712,
-      "market_cap": 109252279
+      "total_volume": 3786621,
+      "market_cap": 103939955
     },
     {
       "symbol": "ELF",
@@ -814,22 +814,22 @@
     {
       "symbol": "ENA",
       "ticker": "KRW-ENA",
-      "rank": 58,
+      "rank": 59,
       "name": "Ethena",
-      "price_usd": 0.148217,
+      "price_usd": 0.139176,
       "tier_icon": "🥈",
-      "total_volume": 631236512,
-      "market_cap": 1456700535
+      "total_volume": 433809154,
+      "market_cap": 1368207927
     },
     {
       "symbol": "ENS",
       "ticker": "KRW-ENS",
-      "rank": 153,
+      "rank": 155,
       "name": "Ethereum Name Service",
-      "price_usd": 5.8,
+      "price_usd": 5.68,
       "tier_icon": "🥉",
-      "total_volume": 25984114,
-      "market_cap": 243969277
+      "total_volume": 25515516,
+      "market_cap": 238834837
     },
     {
       "symbol": "ENSO",
@@ -864,32 +864,32 @@
     {
       "symbol": "ETC",
       "ticker": "KRW-ETC",
-      "rank": 66,
+      "rank": 67,
       "name": "Ethereum Classic",
-      "price_usd": 7.84,
+      "price_usd": 7.61,
       "tier_icon": "🥈",
-      "total_volume": 69535794,
-      "market_cap": 1239102028
+      "total_volume": 52879046,
+      "market_cap": 1201284720
     },
     {
       "symbol": "ETH",
       "ticker": "KRW-ETH",
       "rank": 2,
       "name": "Ethereum",
-      "price_usd": 2467.27,
+      "price_usd": 2449.96,
       "tier_icon": "💎",
-      "total_volume": 18302482844,
-      "market_cap": 297753971688
+      "total_volume": 11689339152,
+      "market_cap": 295747724706
     },
     {
       "symbol": "ETHFI",
       "ticker": "KRW-ETHFI",
       "rank": 94,
       "name": "Ether.fi",
-      "price_usd": 0.595527,
+      "price_usd": 0.564704,
       "tier_icon": "🥈",
-      "total_volume": 81261446,
-      "market_cap": 606349011
+      "total_volume": 55645354,
+      "market_cap": 574984609
     },
     {
       "symbol": "EUL",
@@ -924,22 +924,22 @@
     {
       "symbol": "FF",
       "ticker": "KRW-FF",
-      "rank": 136,
+      "rank": 133,
       "name": "Falcon Finance",
-      "price_usd": 0.094725,
+      "price_usd": 0.097743,
       "tier_icon": "🥉",
-      "total_volume": 14342261,
-      "market_cap": 290333005
+      "total_volume": 58689094,
+      "market_cap": 299793327
     },
     {
       "symbol": "FIL",
       "ticker": "KRW-FIL",
-      "rank": 95,
+      "rank": 93,
       "name": "Filecoin",
-      "price_usd": 0.733654,
+      "price_usd": 0.706662,
       "tier_icon": "🥈",
-      "total_volume": 83451097,
-      "market_cap": 605656864
+      "total_volume": 60486625,
+      "market_cap": 583956381
     },
     {
       "symbol": "FLOCK",
@@ -954,12 +954,12 @@
     {
       "symbol": "FLUID",
       "ticker": "KRW-FLUID",
-      "rank": 240,
+      "rank": 228,
       "name": "Fluid",
-      "price_usd": 1.36,
+      "price_usd": 1.44,
       "tier_icon": "·",
-      "total_volume": 2018303,
-      "market_cap": 113645832
+      "total_volume": 23834298,
+      "market_cap": 120251852
     },
     {
       "symbol": "G",
@@ -984,32 +984,32 @@
     {
       "symbol": "GAS",
       "ticker": "KRW-GAS",
-      "rank": null,
-      "name": "GAS",
-      "price_usd": null,
+      "rank": 293,
+      "name": "Gas",
+      "price_usd": 1.31,
       "tier_icon": "·",
-      "total_volume": null,
-      "market_cap": null
+      "total_volume": 8196764,
+      "market_cap": 84957516
     },
     {
       "symbol": "GEOD",
       "ticker": "KRW-GEOD",
-      "rank": 255,
+      "rank": 259,
       "name": "Geodnet",
-      "price_usd": 0.229111,
+      "price_usd": 0.22118,
       "tier_icon": "·",
-      "total_volume": 4555115,
-      "market_cap": 104567319
+      "total_volume": 1560137,
+      "market_cap": 101835839
     },
     {
       "symbol": "GLM",
       "ticker": "KRW-GLM",
-      "rank": 244,
+      "rank": 243,
       "name": "Golem",
-      "price_usd": 0.109737,
+      "price_usd": 0.112271,
       "tier_icon": "·",
-      "total_volume": 2698729,
-      "market_cap": 109737870
+      "total_volume": 3450076,
+      "market_cap": 112591242
     },
     {
       "symbol": "GMT",
@@ -1024,12 +1024,12 @@
     {
       "symbol": "GRT",
       "ticker": "KRW-GRT",
-      "rank": 170,
+      "rank": 177,
       "name": "The Graph",
-      "price_usd": 0.01818342,
+      "price_usd": 0.01727793,
       "tier_icon": "🥉",
-      "total_volume": 29542963,
-      "market_cap": 198951311
+      "total_volume": 20122072,
+      "market_cap": 188820031
     },
     {
       "symbol": "GRVT",
@@ -1044,12 +1044,12 @@
     {
       "symbol": "HBAR",
       "ticker": "KRW-HBAR",
-      "rank": 28,
+      "rank": 29,
       "name": "Hedera",
-      "price_usd": 0.080205,
+      "price_usd": 0.07712,
       "tier_icon": "🥇",
-      "total_volume": 149824289,
-      "market_cap": 3515507583
+      "total_volume": 78676588,
+      "market_cap": 3381358760
     },
     {
       "symbol": "HIVE",
@@ -1114,12 +1114,12 @@
     {
       "symbol": "ICP",
       "ticker": "KRW-ICP",
-      "rank": 60,
+      "rank": 62,
       "name": "Internet Computer",
-      "price_usd": 2.41,
+      "price_usd": 2.38,
       "tier_icon": "🥈",
-      "total_volume": 55292104,
-      "market_cap": 1339907467
+      "total_volume": 41068729,
+      "market_cap": 1322836050
     },
     {
       "symbol": "ICX",
@@ -1144,12 +1144,12 @@
     {
       "symbol": "IMX",
       "ticker": "KRW-IMX",
-      "rank": 239,
+      "rank": 247,
       "name": "Immutable",
-      "price_usd": 0.129459,
+      "price_usd": 0.124788,
       "tier_icon": "·",
-      "total_volume": 18164285,
-      "market_cap": 113855714
+      "total_volume": 14919999,
+      "market_cap": 109778071
     },
     {
       "symbol": "IN",
@@ -1164,12 +1164,12 @@
     {
       "symbol": "INJ",
       "ticker": "KRW-INJ",
-      "rank": 99,
+      "rank": 101,
       "name": "Injective",
-      "price_usd": 5.79,
-      "tier_icon": "🥈",
-      "total_volume": 186718324,
-      "market_cap": 578893619
+      "price_usd": 5.37,
+      "tier_icon": "🥉",
+      "total_volume": 85989378,
+      "market_cap": 537318815
     },
     {
       "symbol": "IO",
@@ -1194,12 +1194,12 @@
     {
       "symbol": "IOTA",
       "ticker": "KRW-IOTA",
-      "rank": 166,
+      "rank": 172,
       "name": "IOTA",
-      "price_usd": 0.04446409,
+      "price_usd": 0.04232813,
       "tier_icon": "🥉",
-      "total_volume": 16679223,
-      "market_cap": 204848510
+      "total_volume": 14041214,
+      "market_cap": 195039600
     },
     {
       "symbol": "IQ",
@@ -1224,32 +1224,32 @@
     {
       "symbol": "JST",
       "ticker": "KRW-JST",
-      "rank": 80,
+      "rank": 79,
       "name": "JUST",
-      "price_usd": 0.100196,
+      "price_usd": 0.099763,
       "tier_icon": "🥈",
-      "total_volume": 19906917,
-      "market_cap": 820483607
+      "total_volume": 18812261,
+      "market_cap": 817011158
     },
     {
       "symbol": "JTO",
       "ticker": "KRW-JTO",
-      "rank": 138,
+      "rank": 143,
       "name": "Jito",
-      "price_usd": 0.55059,
+      "price_usd": 0.514313,
       "tier_icon": "🥉",
-      "total_volume": 71210340,
-      "market_cap": 282934963
+      "total_volume": 46709459,
+      "market_cap": 264774831
     },
     {
       "symbol": "JUP",
       "ticker": "KRW-JUP",
-      "rank": 87,
+      "rank": 86,
       "name": "Jupiter",
-      "price_usd": 0.212627,
+      "price_usd": 0.220299,
       "tier_icon": "🥈",
-      "total_volume": 70503966,
-      "market_cap": 705990720
+      "total_volume": 50558445,
+      "market_cap": 731461616
     },
     {
       "symbol": "KAITO",
@@ -1294,22 +1294,22 @@
     {
       "symbol": "KITE",
       "ticker": "KRW-KITE",
-      "rank": 146,
+      "rank": 141,
       "name": "Kite",
-      "price_usd": 0.110861,
+      "price_usd": 0.113168,
       "tier_icon": "🥉",
-      "total_volume": 9382104,
-      "market_cap": 265091555
+      "total_volume": 10817992,
+      "market_cap": 270546656
     },
     {
       "symbol": "KMNO",
       "ticker": "KRW-KMNO",
-      "rank": 203,
+      "rank": 217,
       "name": "Kamino",
-      "price_usd": 0.02767777,
+      "price_usd": 0.02412152,
       "tier_icon": "·",
-      "total_volume": 13133118,
-      "market_cap": 148948618
+      "total_volume": 11467080,
+      "market_cap": 129963433
     },
     {
       "symbol": "KNC",
@@ -1354,12 +1354,12 @@
     {
       "symbol": "LINK",
       "ticker": "KRW-LINK",
-      "rank": 15,
+      "rank": 17,
       "name": "Chainlink",
-      "price_usd": 11.5,
+      "price_usd": 11.3,
       "tier_icon": "🥇",
-      "total_volume": 497242941,
-      "market_cap": 8603816520
+      "total_volume": 354743297,
+      "market_cap": 8456268019
     },
     {
       "symbol": "LPT",
@@ -1384,12 +1384,12 @@
     {
       "symbol": "MANA",
       "ticker": "KRW-MANA",
-      "rank": 206,
+      "rank": 204,
       "name": "Decentraland",
-      "price_usd": 0.074602,
+      "price_usd": 0.073078,
       "tier_icon": "·",
-      "total_volume": 21471079,
-      "market_cap": 146099014
+      "total_volume": 20355026,
+      "market_cap": 143163846
     },
     {
       "symbol": "MASK",
@@ -1454,12 +1454,12 @@
     {
       "symbol": "META",
       "ticker": "KRW-META",
-      "rank": 199,
+      "rank": 203,
       "name": "MetaDAO",
-      "price_usd": 6.76,
-      "tier_icon": "🥉",
-      "total_volume": 43015590,
-      "market_cap": 153415440
+      "price_usd": 6.31,
+      "tier_icon": "·",
+      "total_volume": 29357842,
+      "market_cap": 143604833
     },
     {
       "symbol": "META2",
@@ -1526,10 +1526,10 @@
       "ticker": "KRW-MNT",
       "rank": 51,
       "name": "Mantle",
-      "price_usd": 0.51358,
+      "price_usd": 0.499678,
       "tier_icon": "🥈",
-      "total_volume": 37140679,
-      "market_cap": 1695997817
+      "total_volume": 28685561,
+      "market_cap": 1651584031
     },
     {
       "symbol": "MOC",
@@ -1554,12 +1554,12 @@
     {
       "symbol": "MON",
       "ticker": "KRW-MON",
-      "rank": 122,
+      "rank": 125,
       "name": "Monad",
-      "price_usd": 0.02910302,
+      "price_usd": 0.02745404,
       "tier_icon": "🥉",
-      "total_volume": 88866608,
-      "market_cap": 344149096
+      "total_volume": 43592934,
+      "market_cap": 324623092
     },
     {
       "symbol": "MOODENG",
@@ -1576,10 +1576,10 @@
       "ticker": "KRW-MORPHO",
       "rank": 52,
       "name": "Morpho",
-      "price_usd": 2.56,
+      "price_usd": 2.43,
       "tier_icon": "🥈",
-      "total_volume": 49129028,
-      "market_cap": 1680632971
+      "total_volume": 38330387,
+      "market_cap": 1599796505
     },
     {
       "symbol": "MOVE",
@@ -1616,20 +1616,20 @@
       "ticker": "KRW-NEAR",
       "rank": 40,
       "name": "NEAR Protocol",
-      "price_usd": 1.92,
+      "price_usd": 1.84,
       "tier_icon": "🥇",
-      "total_volume": 307050804,
-      "market_cap": 2505299118
+      "total_volume": 180732811,
+      "market_cap": 2396207048
     },
     {
       "symbol": "NEO",
       "ticker": "KRW-NEO",
       "rank": 196,
       "name": "NEO",
-      "price_usd": 2.2,
+      "price_usd": 2.22,
       "tier_icon": "🥉",
-      "total_volume": 6331820,
-      "market_cap": 154962056
+      "total_volume": 5426422,
+      "market_cap": 156690387
     },
     {
       "symbol": "NEWT",
@@ -1664,22 +1664,22 @@
     {
       "symbol": "ONDO",
       "ticker": "KRW-ONDO",
-      "rank": 49,
+      "rank": 50,
       "name": "Ondo",
-      "price_usd": 0.372143,
+      "price_usd": 0.361402,
       "tier_icon": "🥇",
-      "total_volume": 195520131,
-      "market_cap": 1812089129
+      "total_volume": 103107229,
+      "market_cap": 1759913648
     },
     {
       "symbol": "ONG",
       "ticker": "KRW-ONG",
-      "rank": null,
-      "name": "ONG",
-      "price_usd": null,
+      "rank": 303,
+      "name": "Ontology Gas",
+      "price_usd": 0.16973,
       "tier_icon": "·",
-      "total_volume": null,
-      "market_cap": null
+      "total_volume": 199734998,
+      "market_cap": 85133945
     },
     {
       "symbol": "ONT",
@@ -1696,10 +1696,10 @@
       "ticker": "KRW-OP",
       "rank": 157,
       "name": "Optimism",
-      "price_usd": 0.103551,
+      "price_usd": 0.100806,
       "tier_icon": "🥉",
-      "total_volume": 44012078,
-      "market_cap": 236924117
+      "total_volume": 30040327,
+      "market_cap": 230810924
     },
     {
       "symbol": "OPEN",
@@ -1756,50 +1756,50 @@
       "ticker": "KRW-PENDLE",
       "rank": 134,
       "name": "Pendle",
-      "price_usd": 1.74,
+      "price_usd": 1.72,
       "tier_icon": "🥉",
-      "total_volume": 59646644,
-      "market_cap": 299950648
+      "total_volume": 38431831,
+      "market_cap": 295674111
     },
     {
       "symbol": "PENGU",
       "ticker": "KRW-PENGU",
-      "rank": 93,
+      "rank": 95,
       "name": "Pudgy Penguins",
-      "price_usd": 0.00978662,
+      "price_usd": 0.00912923,
       "tier_icon": "🥈",
-      "total_volume": 456058828,
-      "market_cap": 615193403
+      "total_volume": 263359754,
+      "market_cap": 573976787
     },
     {
       "symbol": "PEPE",
       "ticker": "KRW-PEPE",
-      "rank": 53,
+      "rank": 54,
       "name": "Pepe",
-      "price_usd": 3.97e-06,
+      "price_usd": 3.72e-06,
       "tier_icon": "🥈",
-      "total_volume": 521614318,
-      "market_cap": 1671251283
+      "total_volume": 277433763,
+      "market_cap": 1567875218
     },
     {
       "symbol": "PIEVERSE",
       "ticker": "KRW-PIEVERSE",
-      "rank": 139,
+      "rank": 138,
       "name": "Pieverse",
-      "price_usd": 1.019,
+      "price_usd": 1.012,
       "tier_icon": "🥉",
-      "total_volume": 8059801,
-      "market_cap": 279887284
+      "total_volume": 5883398,
+      "market_cap": 278124853
     },
     {
       "symbol": "PLUME",
       "ticker": "KRW-PLUME",
-      "rank": 294,
+      "rank": 288,
       "name": "Plume",
-      "price_usd": 0.01344249,
+      "price_usd": 0.01362379,
       "tier_icon": "·",
-      "total_volume": 14375176,
-      "market_cap": 85951894
+      "total_volume": 11845546,
+      "market_cap": 87235671
     },
     {
       "symbol": "POKT",
@@ -1814,12 +1814,12 @@
     {
       "symbol": "POL",
       "ticker": "KRW-POL",
-      "rank": 64,
+      "rank": 66,
       "name": "POL (ex-MATIC)",
-      "price_usd": 0.119767,
+      "price_usd": 0.113192,
       "tier_icon": "🥈",
-      "total_volume": 138206954,
-      "market_cap": 1281810239
+      "total_volume": 139068317,
+      "market_cap": 1212066936
     },
     {
       "symbol": "POLYX",
@@ -1884,12 +1884,12 @@
     {
       "symbol": "PUMP",
       "ticker": "KRW-PUMP",
-      "rank": 50,
+      "rank": 49,
       "name": "Pump.fun",
-      "price_usd": 0.00462735,
+      "price_usd": 0.00470974,
       "tier_icon": "🥇",
-      "total_volume": 284871811,
-      "market_cap": 1802940303
+      "total_volume": 229849951,
+      "market_cap": 1833911947
     },
     {
       "symbol": "PUNDIX",
@@ -1904,12 +1904,12 @@
     {
       "symbol": "PYTH",
       "ticker": "KRW-PYTH",
-      "rank": 116,
+      "rank": 117,
       "name": "Pyth Network",
-      "price_usd": 0.052174,
+      "price_usd": 0.050899,
       "tier_icon": "🥉",
-      "total_volume": 81926410,
-      "market_cap": 410867174
+      "total_volume": 139283452,
+      "market_cap": 401143571
     },
     {
       "symbol": "QKC",
@@ -1924,12 +1924,12 @@
     {
       "symbol": "QTUM",
       "ticker": "KRW-QTUM",
-      "rank": 277,
+      "rank": 275,
       "name": "Qtum",
-      "price_usd": 0.871253,
+      "price_usd": 0.875468,
       "tier_icon": "·",
-      "total_volume": 3097727,
-      "market_cap": 92434808
+      "total_volume": 3214471,
+      "market_cap": 93160379
     },
     {
       "symbol": "QUID",
@@ -1944,22 +1944,22 @@
     {
       "symbol": "RAY",
       "ticker": "KRW-RAY",
-      "rank": 163,
+      "rank": 166,
       "name": "Raydium",
-      "price_usd": 0.790342,
+      "price_usd": 0.771797,
       "tier_icon": "🥉",
-      "total_volume": 29777316,
-      "market_cap": 212999202
+      "total_volume": 12907817,
+      "market_cap": 208098594
     },
     {
       "symbol": "RE",
       "ticker": "KRW-RE",
-      "rank": 285,
+      "rank": null,
       "name": "RE",
-      "price_usd": 0.558785,
+      "price_usd": null,
       "tier_icon": "·",
-      "total_volume": 130609782,
-      "market_cap": 89182316
+      "total_volume": null,
+      "market_cap": null
     },
     {
       "symbol": "RED",
@@ -1976,20 +1976,20 @@
       "ticker": "KRW-RENDER",
       "rank": 84,
       "name": "Render",
-      "price_usd": 1.51,
+      "price_usd": 1.5,
       "tier_icon": "🥈",
-      "total_volume": 74135313,
-      "market_cap": 785027823
+      "total_volume": 47396832,
+      "market_cap": 777622975
     },
     {
       "symbol": "SAFE",
       "ticker": "KRW-SAFE",
-      "rank": 298,
+      "rank": 267,
       "name": "SAFEbit",
-      "price_usd": 0.117429,
+      "price_usd": 0.137369,
       "tier_icon": "·",
-      "total_volume": 1204674,
-      "market_cap": 83662415
+      "total_volume": 1504418,
+      "market_cap": 97869314
     },
     {
       "symbol": "SAHARA",
@@ -2016,30 +2016,30 @@
       "ticker": "KRW-SEI",
       "rank": 130,
       "name": "Sei",
-      "price_usd": 0.04703781,
+      "price_usd": 0.0456337,
       "tier_icon": "🥉",
-      "total_volume": 38816457,
-      "market_cap": 316722247
+      "total_volume": 25362092,
+      "market_cap": 307439611
     },
     {
       "symbol": "SENT",
       "ticker": "KRW-SENT",
-      "rank": 283,
+      "rank": 281,
       "name": "Sentient",
-      "price_usd": 0.01244796,
+      "price_usd": 0.01239023,
       "tier_icon": "·",
-      "total_volume": 9256794,
-      "market_cap": 90097195
+      "total_volume": 8010015,
+      "market_cap": 89668532
     },
     {
       "symbol": "SHIB",
       "ticker": "KRW-SHIB",
-      "rank": 32,
+      "rank": 31,
       "name": "Shiba Inu",
-      "price_usd": 5.43e-06,
+      "price_usd": 5.22e-06,
       "tier_icon": "🥇",
-      "total_volume": 133557302,
-      "market_cap": 3202030725
+      "total_volume": 91651319,
+      "market_cap": 3079715053
     },
     {
       "symbol": "SIGN",
@@ -2064,12 +2064,12 @@
     {
       "symbol": "SKY",
       "ticker": "KRW-SKY",
-      "rank": 54,
+      "rank": 53,
       "name": "Sky",
-      "price_usd": 0.067861,
+      "price_usd": 0.068263,
       "tier_icon": "🥈",
-      "total_volume": 12561293,
-      "market_cap": 1589877508
+      "total_volume": 8767484,
+      "market_cap": 1599396183
     },
     {
       "symbol": "SLX",
@@ -2096,10 +2096,10 @@
       "ticker": "KRW-SOL",
       "rank": 7,
       "name": "Solana",
-      "price_usd": 97.75,
+      "price_usd": 96.27,
       "tier_icon": "💎",
-      "total_volume": 7127596907,
-      "market_cap": 57026619007
+      "total_volume": 3070916614,
+      "market_cap": 56179501959
     },
     {
       "symbol": "SOMI",
@@ -2154,12 +2154,12 @@
     {
       "symbol": "SPX",
       "ticker": "KRW-SPX",
-      "rank": 114,
+      "rank": 106,
       "name": "SPX6900",
-      "price_usd": 0.47128,
+      "price_usd": 0.529513,
       "tier_icon": "🥉",
-      "total_volume": 12512256,
-      "market_cap": 438756110
+      "total_volume": 25937813,
+      "market_cap": 492848625
     },
     {
       "symbol": "STEEM",
@@ -2184,32 +2184,32 @@
     {
       "symbol": "STX",
       "ticker": "KRW-STX",
-      "rank": 110,
+      "rank": 104,
       "name": "Stacks",
-      "price_usd": 0.261782,
+      "price_usd": 0.26907,
       "tier_icon": "🥉",
-      "total_volume": 85343732,
-      "market_cap": 487181419
+      "total_volume": 79339142,
+      "market_cap": 500870163
     },
     {
       "symbol": "SUI",
       "ticker": "KRW-SUI",
-      "rank": 30,
+      "rank": 32,
       "name": "Sui",
-      "price_usd": 0.792806,
+      "price_usd": 0.74631,
       "tier_icon": "🥇",
-      "total_volume": 720363758,
-      "market_cap": 3230325027
+      "total_volume": 445489924,
+      "market_cap": 3042783688
     },
     {
       "symbol": "SUN",
       "ticker": "KRW-SUN",
-      "rank": 123,
+      "rank": 124,
       "name": "Sun Token",
-      "price_usd": 0.01744607,
+      "price_usd": 0.01708013,
       "tier_icon": "🥉",
-      "total_volume": 9389499,
-      "market_cap": 335353090
+      "total_volume": 17365141,
+      "market_cap": 328360888
     },
     {
       "symbol": "SUPER",
@@ -2226,10 +2226,10 @@
       "ticker": "KRW-SYRUP",
       "rank": 159,
       "name": "Maple Finance",
-      "price_usd": 0.195622,
+      "price_usd": 0.192389,
       "tier_icon": "🥉",
-      "total_volume": 8611809,
-      "market_cap": 228344780
+      "total_volume": 6446402,
+      "market_cap": 224534912
     },
     {
       "symbol": "T",
@@ -2256,10 +2256,10 @@
       "ticker": "KRW-TAO",
       "rank": 42,
       "name": "Bittensor",
-      "price_usd": 235.38,
+      "price_usd": 229.87,
       "tier_icon": "🥇",
-      "total_volume": 211740022,
-      "market_cap": 2259043075
+      "total_volume": 141350109,
+      "market_cap": 2207308152
     },
     {
       "symbol": "TFUEL",
@@ -2274,22 +2274,22 @@
     {
       "symbol": "THETA",
       "ticker": "KRW-THETA",
-      "rank": 182,
+      "rank": 184,
       "name": "Theta Network",
-      "price_usd": 0.181886,
+      "price_usd": 0.175364,
       "tier_icon": "🥉",
-      "total_volume": 6834565,
-      "market_cap": 181886779
+      "total_volume": 5280277,
+      "market_cap": 175345295
     },
     {
       "symbol": "TIA",
       "ticker": "KRW-TIA",
-      "rank": 120,
+      "rank": 123,
       "name": "Celestia",
-      "price_usd": 0.365136,
+      "price_usd": 0.34972,
       "tier_icon": "🥉",
-      "total_volume": 39963423,
-      "market_cap": 350549716
+      "total_volume": 32111326,
+      "market_cap": 336175381
     },
     {
       "symbol": "TOKAMAK",
@@ -2314,12 +2314,12 @@
     {
       "symbol": "TRAC",
       "ticker": "KRW-TRAC",
-      "rank": 194,
+      "rank": 202,
       "name": "OriginTrail",
-      "price_usd": 0.351812,
-      "tier_icon": "🥉",
-      "total_volume": 6071544,
-      "market_cap": 157356240
+      "price_usd": 0.324907,
+      "tier_icon": "·",
+      "total_volume": 5644870,
+      "market_cap": 145332925
     },
     {
       "symbol": "TREE",
@@ -2334,12 +2334,12 @@
     {
       "symbol": "TRUMP",
       "ticker": "KRW-TRUMP",
-      "rank": 98,
+      "rank": 97,
       "name": "Official Trump",
-      "price_usd": 2.32,
+      "price_usd": 2.22,
       "tier_icon": "🥈",
-      "total_volume": 399801234,
-      "market_cap": 581266704
+      "total_volume": 309277688,
+      "market_cap": 557126592
     },
     {
       "symbol": "TRUST",
@@ -2356,20 +2356,20 @@
       "ticker": "KRW-TRX",
       "rank": 8,
       "name": "TRON",
-      "price_usd": 0.342248,
+      "price_usd": 0.334709,
       "tier_icon": "💎",
-      "total_volume": 460004786,
-      "market_cap": 32486161420
+      "total_volume": 570631855,
+      "market_cap": 31769825452
     },
     {
       "symbol": "UNI",
       "ticker": "KRW-UNI",
-      "rank": 37,
+      "rank": 38,
       "name": "Uniswap",
-      "price_usd": 4.36,
+      "price_usd": 4.24,
       "tier_icon": "🥇",
-      "total_volume": 335554858,
-      "market_cap": 2718344379
+      "total_volume": 236546183,
+      "market_cap": 2640266506
     },
     {
       "symbol": "UP2",
@@ -2384,22 +2384,22 @@
     {
       "symbol": "USD1",
       "ticker": "KRW-USD1",
-      "rank": 25,
+      "rank": 24,
       "name": "USD1",
-      "price_usd": 0.999564,
+      "price_usd": 0.999741,
       "tier_icon": "🥇",
-      "total_volume": 1466518994,
-      "market_cap": 4045103156
+      "total_volume": 950398802,
+      "market_cap": 4064480607
     },
     {
       "symbol": "USDG",
       "ticker": "KRW-USDG",
-      "rank": 29,
+      "rank": 28,
       "name": "Global Dollar",
       "price_usd": 1.0,
       "tier_icon": "🥇",
-      "total_volume": 448371516,
-      "market_cap": 3402480654
+      "total_volume": 383559753,
+      "market_cap": 3381837759
     },
     {
       "symbol": "VANA",
@@ -2414,22 +2414,22 @@
     {
       "symbol": "VET",
       "ticker": "KRW-VET",
-      "rank": 108,
+      "rank": 109,
       "name": "VeChain",
-      "price_usd": 0.00576876,
+      "price_usd": 0.00565016,
       "tier_icon": "🥉",
-      "total_volume": 8687852,
-      "market_cap": 496028511
+      "total_volume": 8046407,
+      "market_cap": 485984413
     },
     {
       "symbol": "VIRTUAL",
       "ticker": "KRW-VIRTUAL",
-      "rank": 106,
+      "rank": 110,
       "name": "Virtuals Protocol",
-      "price_usd": 0.762934,
+      "price_usd": 0.736557,
       "tier_icon": "🥉",
-      "total_volume": 169567090,
-      "market_cap": 502254677
+      "total_volume": 67516124,
+      "market_cap": 485228708
     },
     {
       "symbol": "VTHO",
@@ -2444,12 +2444,12 @@
     {
       "symbol": "VVV",
       "ticker": "KRW-VVV",
-      "rank": 77,
+      "rank": 83,
       "name": "Venice Token",
-      "price_usd": 17.8,
+      "price_usd": 16.9,
       "tier_icon": "🥈",
-      "total_volume": 30727137,
-      "market_cap": 845786469
+      "total_volume": 29818926,
+      "market_cap": 803103818
     },
     {
       "symbol": "W",
@@ -2514,102 +2514,102 @@
     {
       "symbol": "WIF",
       "ticker": "KRW-WIF",
-      "rank": 168,
+      "rank": 169,
       "name": "dogwifhat",
-      "price_usd": 0.203478,
+      "price_usd": 0.200445,
       "tier_icon": "🥉",
-      "total_volume": 92762069,
-      "market_cap": 203259790
+      "total_volume": 52882736,
+      "market_cap": 200271764
     },
     {
       "symbol": "WLD",
       "ticker": "KRW-WLD",
-      "rank": 59,
+      "rank": 58,
       "name": "Worldcoin",
-      "price_usd": 0.39618,
+      "price_usd": 0.389285,
       "tier_icon": "🥈",
-      "total_volume": 228383700,
-      "market_cap": 1431271864
+      "total_volume": 127975493,
+      "market_cap": 1408451541
     },
     {
       "symbol": "WLFI",
       "ticker": "KRW-WLFI",
       "rank": 48,
       "name": "World Liberty Financial",
-      "price_usd": 0.058148,
+      "price_usd": 0.05846,
       "tier_icon": "🥇",
-      "total_volume": 51921441,
-      "market_cap": 1847760733
+      "total_volume": 49442333,
+      "market_cap": 1857986644
     },
     {
       "symbol": "XAUT",
       "ticker": "KRW-XAUT",
-      "rank": 35,
+      "rank": 34,
       "name": "Tether Gold",
-      "price_usd": 4605.12,
+      "price_usd": 4603.44,
       "tier_icon": "🥇",
-      "total_volume": 247250197,
-      "market_cap": 2822138904
+      "total_volume": 209179969,
+      "market_cap": 2821212690
     },
     {
       "symbol": "XCN",
       "ticker": "KRW-XCN",
-      "rank": 205,
+      "rank": 208,
       "name": "Onyxcoin",
-      "price_usd": 0.00375158,
+      "price_usd": 0.00361716,
       "tier_icon": "·",
-      "total_volume": 4606284,
-      "market_cap": 146724270
+      "total_volume": 3258179,
+      "market_cap": 141453945
     },
     {
       "symbol": "XEC",
       "ticker": "KRW-XEC",
-      "rank": 209,
+      "rank": 207,
       "name": "eCash",
-      "price_usd": 7.09e-06,
+      "price_usd": 7.11e-06,
       "tier_icon": "·",
-      "total_volume": 4778486,
-      "market_cap": 142309347
+      "total_volume": 4166446,
+      "market_cap": 142746622
     },
     {
       "symbol": "XLM",
       "ticker": "KRW-XLM",
       "rank": 20,
       "name": "Stellar",
-      "price_usd": 0.191083,
+      "price_usd": 0.180795,
       "tier_icon": "🥇",
-      "total_volume": 245663427,
-      "market_cap": 6611225350
+      "total_volume": 186187793,
+      "market_cap": 6256201404
     },
     {
       "symbol": "XPL",
       "ticker": "KRW-XPL",
-      "rank": 149,
+      "rank": 152,
       "name": "Plasma",
-      "price_usd": 0.092251,
+      "price_usd": 0.087896,
       "tier_icon": "🥉",
-      "total_volume": 64341171,
-      "market_cap": 256254756
+      "total_volume": 51617873,
+      "market_cap": 244134491
     },
     {
       "symbol": "XRP",
       "ticker": "KRW-XRP",
       "rank": 5,
       "name": "XRP",
-      "price_usd": 1.46,
+      "price_usd": 1.38,
       "tier_icon": "💎",
-      "total_volume": 5266782551,
-      "market_cap": 91794110386
+      "total_volume": 3387965414,
+      "market_cap": 86745368926
     },
     {
       "symbol": "XTZ",
       "ticker": "KRW-XTZ",
-      "rank": 151,
+      "rank": 150,
       "name": "Tezos",
-      "price_usd": 0.230491,
+      "price_usd": 0.226858,
       "tier_icon": "🥉",
-      "total_volume": 8228370,
-      "market_cap": 252243494
+      "total_volume": 8951843,
+      "market_cap": 248274975
     },
     {
       "symbol": "YGG",
@@ -2624,12 +2624,12 @@
     {
       "symbol": "ZAMA",
       "ticker": "KRW-ZAMA",
-      "rank": 227,
+      "rank": 234,
       "name": "Zama",
-      "price_usd": 0.056557,
+      "price_usd": 0.053355,
       "tier_icon": "·",
-      "total_volume": 18031351,
-      "market_cap": 124424976
+      "total_volume": 12283050,
+      "market_cap": 117383387
     },
     {
       "symbol": "ZBT",
@@ -2654,12 +2654,12 @@
     {
       "symbol": "ZK",
       "ticker": "KRW-ZK",
-      "rank": 279,
+      "rank": 280,
       "name": "ZKsync",
-      "price_usd": 0.00881527,
+      "price_usd": 0.00868851,
       "tier_icon": "·",
-      "total_volume": 9699809,
-      "market_cap": 91418046
+      "total_volume": 6664472,
+      "market_cap": 90126103
     },
     {
       "symbol": "ZKC",
@@ -2694,12 +2694,12 @@
     {
       "symbol": "ZRO",
       "ticker": "KRW-ZRO",
-      "rank": 115,
+      "rank": 116,
       "name": "LayerZero",
-      "price_usd": 1.23,
+      "price_usd": 1.15,
       "tier_icon": "🥉",
-      "total_volume": 120102042,
-      "market_cap": 433568607
+      "total_volume": 159132419,
+      "market_cap": 405820909
     },
     {
       "symbol": "ZRX",
