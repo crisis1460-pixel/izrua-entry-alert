@@ -3,4 +3,4 @@ python-dotenv>=1.0,<2
 # TradingView 무차단 운영 핵심(Chrome TLS 지문 위장) — izrua_watcher 수개월 실증.
 # 미설치 시 requests 폴백으로도 동작하지만, Actions(데이터센터 IP)에서는 필수 권장.
 # 상한 고정: TLS 지문 위장 동작이 메이저 업그레이드에서 깨질 수 있어 0.x 대에서 고정.
-curl_cffi>=0.7.0,<1
+curl_cffi>=0.16.2,<1
