@@ -908,7 +908,7 @@ _nbc.commit()
 check("NBQ1 스위치 OFF — 발송 0건 · 반환 queued",
       r == "queued" and len(_sent_log) == 0)
 _nbq_day = _day_kst_util(_NBQ_DAY_T)
-_nbq_rows = db.get_news_digest(_nbc, _nbq_day, limit=5)
+_nbq_rows = db.get_news_digest(_nbc, limit=5)
 check("NBQ2 news_digest_queue 적재(심볼·채널·요약)",
       len(_nbq_rows) == 1 and _nbq_rows[0]["symbol"] == "XRP"
       and _nbq_rows[0]["channel"] == "chq"
@@ -967,10 +967,10 @@ _MB_DAY = "2026-09-12"
 _MB_NOW = 1789000000.0
 
 # MB1: 빈 큐/빈 적중 → 블록 통째 생략
-check("MB1 빈 TP 적중 → 🏁 블록 생략", _mb._tp_hit_lines(_mbc, _MB_DAY) == [])
+check("MB1 빈 TP 적중 → 🏁 블록 생략", _mb._tp_hit_lines(_mbc, _MB_NOW) == [])
 _mb_ids = []
 check("MB2 빈 뉴스 큐 → 📰 블록 생략",
-      _mb._news_lines(_mbc, _MB_DAY, _mb_ids) == [] and _mb_ids == [])
+      _mb._news_lines(_mbc, _mb_ids) == [] and _mb_ids == [])
 
 # MB3: 뉴스 5건 컷 + "외 N건" + consumed 처리
 for i in range(7):
@@ -979,7 +979,7 @@ for i in range(7):
                          f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
 _mbc.commit()
 _mb_ids = []
-_mb_news = _mb._news_lines(_mbc, _MB_DAY, _mb_ids)
+_mb_news = _mb._news_lines(_mbc, _mb_ids)
 check("MB3 뉴스 큐 7건 → 최대 5건만 렌더 + 헤더에 '외 2건'",
       len(_mb_ids) == 5 and "외 2건" in _mb_news[0])
 check("MB3b 항목 줄에 코인·채널·요약 첫 문장(원문 링크 없음)",
@@ -990,9 +990,9 @@ check("MB3c 요약은 첫 문장만 (둘째 문장 제외)",
       not any("Second sentence" in x for x in _mb_news))
 db.consume_news_digest(_mbc, _mb_ids)
 _mbc.commit()
-check("MB4 consumed=1 처리 후 남은 미소비 2건", db.count_news_digest(_mbc, _MB_DAY) == 2)
+check("MB4 consumed=1 처리 후 남은 미소비 2건", db.count_news_digest(_mbc) == 2)
 _mb_ids2 = []
-_mb_news2 = _mb._news_lines(_mbc, _MB_DAY, _mb_ids2)
+_mb_news2 = _mb._news_lines(_mbc, _mb_ids2)
 check("MB4b 소비된 건은 다음 브리핑에 다시 안 나온다",
       len(_mb_ids2) == 2 and all(i not in _mb_ids for i in _mb_ids2))
 
@@ -1009,7 +1009,7 @@ for idx, lid in enumerate(_mb_lids):
     db.record_alert(_mbc, f"MBC{idx}", "tp1", [lid], _MB_DAY, _MB_NOW, sent=0)
 db.record_alert(_mbc, "MBC0", "tp2", [_mb_lids[0]], _MB_DAY, _MB_NOW + 1, sent=0)
 _mbc.commit()
-_mb_tp = _mb._tp_hit_lines(_mbc, _MB_DAY)
+_mb_tp = _mb._tp_hit_lines(_mbc, _MB_NOW + 3600)
 check("MB5 헤더에 총 건수 10건 · 본문은 8줄 컷 + '외 2건'",
       "10건" in _mb_tp[0] and len(_mb_tp) == 1 + 8 + 1 and "외 2건" in _mb_tp[-1])
 check("MB5b 같은 레벨 TP1·TP2 는 최고 단계 1행으로 접힘(TP2/2)",
@@ -1024,7 +1024,7 @@ check("MB6b 중간 단계는 해당 TP 기준 (TP1 110 → +10.0%)",
 db.record_alert(_mbc, "ZZZ", "news", ["some_channel"], _MB_DAY, _MB_NOW, sent=0)
 _mbc.commit()
 check("MB7 level_ids 가 정수가 아닌 행(news)은 TP 집계에서 제외",
-      len(db.get_tp_hits_by_day(_mbc, _MB_DAY)) == 10)
+      len(db.get_tp_hits_since(_mbc, _MB_NOW - 86400)) == 10)
 
 # MB6c~MB6e: 코인당 1행 접기 (2026-09-13 CTO 검토). 같은 코인의 **다른 레벨**
 # (클러스터 형제)이 각각 적중하면 원본 rows 는 2행인데, 진입 알림 자체가 클러스터당
@@ -1041,8 +1041,8 @@ _mb_sib_id = _mbc.execute("SELECT last_insert_rowid() AS r").fetchone()["r"]
 db.record_alert(_mbc, "MBC0", "tp1", [_mb_sib_id], _MB_DAY, _MB_NOW + 2, sent=0)
 _mbc.commit()
 check("MB6c 형제 레벨이 늘어 원본 집계는 11건이 된다(접기 전 기준선)",
-      len(db.get_tp_hits_by_day(_mbc, _MB_DAY)) == 11)
-_mb_tp2 = _mb._tp_hit_lines(_mbc, _MB_DAY)
+      len(db.get_tp_hits_since(_mbc, _MB_NOW - 86400)) == 11)
+_mb_tp2 = _mb._tp_hit_lines(_mbc, _MB_NOW + 3600)
 check("MB6d 같은 코인의 형제 레벨 적중은 1행으로 접힌다(MBC0 두 번 안 나옴)",
       sum(1 for x in _mb_tp2 if "MBC0 " in x) == 1)
 check("MB6e 접힌 뒤에도 최고 단계가 남는다(형제의 TP1 이 아니라 TP2/2)",
@@ -1052,6 +1052,86 @@ check("MB6f 헤더 건수는 접은 뒤 기준 — 원본 11건이어도 코인 
 
 # MB8: 텔레그램 4096자 방어 — 뉴스 줄부터 줄인다
 _mb_head = ["헤더", _mb.telegram.SEP, "시장환경 A", "시장환경 B"]
+# ── MB9~MB12: 조회 창 회귀 (2026-09-14 실사고) ───────────────────────────
+# 사고: 두 블록이 `day_kst='어제'` 로 조회했다. 그런데 브리핑은 **아침 8~10시**에
+# 나가므로 "오늘 0~8시"에 생긴 적중·뉴스는 day_kst 가 '오늘'이라 그날 브리핑에서
+# 통째로 빠지고 **다음 날**에야 실렸다(실측 09-14: 새벽 00:20~06:12 TP 적중 4건
+# 누락, 뉴스 큐 5건이 전부 '오늘' 날짜라 브리핑 뉴스 0건). TP 실시간 발송을 끄고
+# 맞바꾼 게 "다음 날 아침 확인"인데 실제로는 이틀 뒤가 되던 셈이다.
+# 수리: TP 는 meta.last_morning_brief_at 이후, 뉴스는 날짜 무관 미소비 전부.
+_MB2_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_MB2_DB)
+_mb2 = sqlite3.connect(_MB2_DB)
+_mb2.row_factory = sqlite3.Row
+# 브리핑 발송 시각 = '오늘 09:00', 직전 브리핑 = '어제 09:00'
+_MB2_NOW = 1789000000.0
+_MB2_PREV = _MB2_NOW - 86400.0
+_mb2.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction,"
+             " entry_usd, tps_usd, status, collected_at) VALUES"
+             " (?,?,?,?,?,?,'touched',?)",
+             ("mb2k", "DAWN", "KRW-DAWN", "long", 100.0,
+              json.dumps([110.0, 120.0]), _MB2_NOW - 200000))
+_mb2_lid = _mb2.execute("SELECT last_insert_rowid() AS r").fetchone()["r"]
+db.set_meta(_mb2, _mb.META_LAST_BRIEF_AT, str(_MB2_PREV))
+# ① 직전 브리핑 '이전'(=이미 보여준 것) ② 새벽 적중(어제 날짜 아님, 창 안)
+db.record_alert(_mb2, "DAWN", "tp1", [_mb2_lid], "2026-09-12", _MB2_PREV - 3600, sent=0)
+db.record_alert(_mb2, "DAWN", "tp2", [_mb2_lid], "2026-09-13", _MB2_NOW - 7200, sent=0)
+_mb2.commit()
+_mb2_tp = _mb._tp_hit_lines(_mb2, _MB2_NOW)
+check("MB9 브리핑 2시간 전(같은 날 새벽) 적중이 당일 브리핑에 포함된다 — 사고 재발 방지",
+      any("DAWN TP2/2" in x for x in _mb2_tp))
+check("MB10 직전 브리핑 이전 적중은 제외(이미 보여준 것을 또 싣지 않는다)",
+      not any("TP1/2" in x for x in _mb2_tp))
+# meta 가 없으면(최초 1회·옛 DB) 24시간 폴백으로 동작해야 한다
+_mb2.execute("DELETE FROM meta WHERE key=?", (_mb.META_LAST_BRIEF_AT,))
+_mb2.commit()
+check("MB11 last_morning_brief_at 부재 시 24시간 폴백으로 새벽 적중 포함",
+      any("DAWN TP2/2" in x for x in _mb._tp_hit_lines(_mb2, _MB2_NOW)))
+# 시계 역행 방어: meta 가 미래면 폴백을 쓴다(창이 음수가 되어 전부 누락되는 것 방지)
+db.set_meta(_mb2, _mb.META_LAST_BRIEF_AT, str(_MB2_NOW + 99999))
+_mb2.commit()
+check("MB11b meta 가 미래 시각이면 신뢰하지 않고 24시간 폴백",
+      any("DAWN TP2/2" in x for x in _mb._tp_hit_lines(_mb2, _MB2_NOW)))
+# 뉴스: '오늘' 날짜로 적재된 건도 당일 브리핑에 실려야 한다(종전엔 0건이었다)
+db.queue_news_digest(_mb2, "DAWN", "chan", "Dawn news body.", "", "2026-09-13",
+                     _MB2_NOW - 7200)
+_mb2.commit()
+_mb2_ids = []
+_mb2_news = _mb._news_lines(_mb2, _mb2_ids)
+check("MB12 적재 날짜와 무관하게 미소비 뉴스는 당일 브리핑에 실린다 — 사고 재발 방지",
+      len(_mb2_ids) == 1 and any("DAWN" in x for x in _mb2_news))
+_mb2.close()
+
+# ── MB13~MB15: 잘린 뉴스의 소비 취소 (2026-09-14 감사 F1) ────────────────
+# 사고: _fit_telegram 이 인자를 제자리 변형하고 같은 객체를 반환해, 호출부의
+# `len(fitted) < len(lines)` 가드가 **영구히 False** 였다 → 길이 방어로 잘려 나간
+# 뉴스까지 consumed=1 로 찍혀 영영 못 보게 된다. 아래가 그 계약을 못 박는다.
+_mb3_in = ["헤더", _mb.telegram.SEP, "시장 A"]
+_mb3_news_start = len(_mb3_in)
+_mb3_full = _mb3_in + ["📰 <b>주요 뉴스</b>",
+                       "   <b>AAA</b> · @c", "   " + "가" * 1500,
+                       "   <b>BBB</b> · @c", "   " + "나" * 1500,
+                       "   <b>CCC</b> · @c", "   " + "다" * 1500]
+_mb3_snapshot = list(_mb3_full)
+_mb3_fit = _mb._fit_telegram(_mb3_full, _mb3_news_start)
+check("MB13 _fit_telegram 은 입력 리스트를 변형하지 않는다(F1 근본 원인)",
+      _mb3_full == _mb3_snapshot)
+check("MB13b 잘린 결과는 원본보다 짧다(비교 가드가 실제로 동작할 수 있다)",
+      len(_mb3_fit) < len(_mb3_full))
+_mb3_kept = sum(1 for x in _mb3_fit[_mb3_news_start:] if x.startswith("   <b>"))
+check("MB14 실린 뉴스 건수를 헤더 줄로 셀 수 있다 — 3건 중 일부만 남는다",
+      0 < _mb3_kept < 3)
+check("MB14b 요약이 잘려 헤더만 남은 항목은 통째로 빠진다(내용 못 본 뉴스를 "
+      "소비 처리하지 않는다)",
+      not _mb3_fit[-1].startswith("   <b>"))
+# 뉴스가 전량 제거되면 그 앞 구분선도 함께 걷힌다 (감사 F6)
+_mb3_tiny = ["헤더", _mb.telegram.SEP, "시장 A", _mb.telegram.SEP]
+_mb3_ns2 = len(_mb3_tiny)
+_mb3_big = _mb3_tiny + ["📰 <b>주요 뉴스</b>", "   " + "라" * 5000]
+_mb3_fit2 = _mb._fit_telegram(_mb3_big, _mb3_ns2)
+check("MB15 뉴스 전량 제거 시 헤더 앞 구분선도 함께 제거(빈 ━━━ 잔류 없음)",
+      _mb3_fit2 == ["헤더", _mb.telegram.SEP, "시장 A"])
+
 _mb_tail = ["   <b>SYM</b> · @ch", "   " + "가" * 200]
 _mb_lines = _mb_head + ["📰 <b>어제의 뉴스</b>"] + _mb_tail * 40
 _mb_fit = _mb._fit_telegram(list(_mb_lines), news_start=len(_mb_head))

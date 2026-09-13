@@ -30,6 +30,15 @@ from utils.time_kst import KST, day_kst
 logger = logging.getLogger("alert.morning_brief")
 
 META_LAST_BRIEF_DATE = "last_morning_brief_date"
+# 직전 브리핑 **발송 시각**(epoch). 하루 1회 게이트는 위 date 키가 그대로 맡고,
+# 이 키는 "🏁 목표 도달" 블록의 조회 창 시작점 전용이다(2026-09-14 수리).
+# date 만으로는 창을 만들 수 없다 — 브리핑이 아침 8~10시에 나가므로 '어제 하루'로
+# 자르면 오늘 0~8시 적중이 매번 빠지고, '어제+오늘'로 넓히면 어제 이미 보여준 걸
+# 또 보여준다. 발송 시각을 남겨야 누락도 중복도 없다.
+META_LAST_BRIEF_AT = "last_morning_brief_at"
+# 위 키가 아직 없을 때(최초 1회, 또는 옛 DB) 쓰는 폴백 창. 브리핑 주기가 하루라
+# 24시간이면 직전 회차를 충분히 덮는다.
+_BRIEF_FALLBACK_WINDOW_SEC = 86400.0
 
 # 구분선·F&G 한국어 라벨은 알림과 동일 표기 유지(같은 채팅방에 섞여 보인다).
 _SEP = telegram.SEP
@@ -50,8 +59,8 @@ _MACRO_LOOKAHEAD_DAYS = 7
 
 # ── 알림량 A안 (2026-09-13) 브리핑 흡수 블록 상한 ────────────────────
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
-_TP_BLOCK_MAX_LINES = 8      # 🏁 어제 목표 도달 — 초과분은 "외 N건"
-_NEWS_BLOCK_MAX = 5          # 📰 어제의 뉴스 — 뉴스 상한(5/일)과 동수
+_TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
+_NEWS_BLOCK_MAX = 5          # 📰 주요 뉴스 — 뉴스 상한(5/일)과 동수
 _NEWS_SUMMARY_MAX_CHARS = 80  # 요약 첫 문장 컷 (브리핑 길이 방어)
 # 텔레그램 메시지 하드 리밋 4096자. 여유를 두고 이 값을 넘으면 뉴스 줄부터 줄인다
 # (뉴스는 다음 날 큐에 남지 않고 소비되므로 '줄이는' 게 아니라 '요약을 자르는' 쪽).
@@ -134,17 +143,35 @@ def _macro_event_lines(now: float, conn) -> list:
     return [line for _, line in upcoming]
 
 
-def _tp_hit_lines(conn, day: str) -> list:
-    """"🏁 어제 목표 도달" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
+def _tp_hit_lines(conn, now: float) -> list:
+    """"🏁 목표 도달" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
 
-    tp_alert_send_enabled=False 로 실시간 발송을 끈 TP 적중을 하루치 요약으로
-    대신 전달한다. alerts_log 에는 kind='tpN' 이 종전대로 남으므로 스위치를 다시
-    켜도 이 블록은 그대로 동작한다(이중 통지가 되는 건 사용자 선택).
+    tp_alert_send_enabled=False 로 실시간 발송을 끈 TP 적중을 **직전 브리핑 이후**
+    치로 모아 전달한다. alerts_log 에는 kind='tpN' 이 종전대로 남으므로 스위치를
+    다시 켜도 이 블록은 그대로 동작한다(이중 통지가 되는 건 사용자 선택).
+
+    2026-09-14 수리 — 창을 '어제 하루'에서 '직전 브리핑 이후'로 바꿨다. 브리핑이
+    아침 8~10시에 나가므로 어제로 자르면 **오늘 0~8시 적중이 매번 누락**된다
+    (실측: 09-14 새벽 00:20~06:12 적중 4건이 당일 브리핑에서 빠짐 → 다음 날에야
+    표시, 최대 32시간 지연). TP 실시간 발송을 끈 대가가 "다음 날 아침 확인"인데
+    그보다 하루 더 밀리면 맞바꾼 값을 못 받는다. meta.last_morning_brief_at 을
+    창 시작점으로 쓰고, 없으면 24시간 폴백.
 
     진입 대비 %는 render_tp_partial_alert 와 같은 계산식 — (도달 TP − 진입) /
     진입 × 100. 단 저장 단위가 USD(levels.entry_usd/tps_usd)라 환율 없이 비율만
     쓴다(비율은 환율 불변이라 KRW 환산과 동일한 값이 나온다)."""
-    rows = db.get_tp_hits_by_day(conn, day)
+    since = now - _BRIEF_FALLBACK_WINDOW_SEC
+    raw = db.get_meta(conn, META_LAST_BRIEF_AT)
+    if raw:
+        try:
+            prev = float(raw)
+            # 시계 역행·수동 편집 방어: 미래이거나 폴백 창보다 과거면 폴백을 쓴다
+            # (다른 due 판정과 같은 원칙 — 신뢰할 수 없는 값은 안전한 기본으로).
+            if since < prev <= now:
+                since = prev
+        except (TypeError, ValueError):
+            pass
+    rows = db.get_tp_hits_since(conn, since)
     if not rows:
         return []
 
@@ -161,7 +188,7 @@ def _tp_hit_lines(conn, day: str) -> list:
             best_by_coin[coin] = r
     folded = list(best_by_coin.values())
 
-    lines = [f"🏁 <b>어제 목표 도달</b> {len(folded)}건"]
+    lines = [f"🏁 <b>목표 도달</b> {len(folded)}건"]
     for r in folded[:_TP_BLOCK_MAX_LINES]:
         coin = html.escape(str(r.get("coin") or "?"))
         best = r.get("best_tp") or 0
@@ -196,19 +223,24 @@ def _first_sentence(text: str, max_chars: int = _NEWS_SUMMARY_MAX_CHARS) -> str:
     return t[:max_chars].rstrip() + "…"
 
 
-def _news_lines(conn, day: str, consumed_ids: list) -> list:
-    """"📰 어제의 뉴스" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
+def _news_lines(conn, consumed_ids: list) -> list:
+    """"📰 주요 뉴스" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
 
     news_alert_send_enabled=False 로 실시간 발송을 끈 뉴스를 news_digest_queue
     에서 최대 5건 꺼내 요약 1~2줄로 전달한다. 원문 링크는 생략(브리핑 길이 제한).
     소비 처리(consumed=1)는 **발송 성공 후** maybe_send_brief 가 한다 — 여기서
     바로 찍으면 발송 실패 시 그날 뉴스가 통째로 증발한다. 그래서 id 만 모아
-    호출부에 넘긴다."""
-    rows = db.get_news_digest(conn, day, limit=_NEWS_BLOCK_MAX)
+    호출부에 넘긴다.
+
+    2026-09-14 수리 — 날짜 인자를 없앴다. 종전엔 `day_kst='어제'` 로 걸러서 오늘
+    새벽에 쌓인 뉴스가 당일 브리핑에서 빠지고 다음 날에야 나갔다(실측: 배포
+    다음 날 브리핑의 뉴스 0건, 큐에는 5건이 '오늘' 날짜로 대기). consumed 플래그가
+    이미 중복을 막으므로 "아직 안 보여준 것을 오래된 순으로"면 충분하다."""
+    rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX)
     if not rows:
         return []
-    total = db.count_news_digest(conn, day)
-    head = "📰 <b>어제의 뉴스</b>"
+    total = db.count_news_digest(conn)
+    head = "📰 <b>주요 뉴스</b>"
     if total > len(rows):
         head += f" (외 {total - len(rows)}건)"
     lines = [head]
@@ -230,15 +262,40 @@ def _fit_telegram(lines: list, news_start: int) -> list:
     news_start: lines 안에서 뉴스 블록이 시작하는 인덱스(-1 이면 뉴스 없음).
     뉴스를 먼저 줄이는 이유: 시장환경·TP 도달은 하루 한 번뿐인 확정 정보인데
     뉴스는 원문이 채널에 그대로 남아 있어 손실이 가장 작다. 뉴스를 다 걷어내도
-    한도를 넘으면 마지막 수단으로 통째 절단한다(발송 실패보다 낫다)."""
+    한도를 넘으면 마지막 수단으로 통째 절단한다(발송 실패보다 낫다).
+
+    2026-09-14 수리(감사 F1): **입력을 제자리 변형하지 않는다.** 종전엔 인자
+    리스트에 직접 pop() 을 걸고 같은 객체를 돌려줬는데, 호출부가 반환값과 원본의
+    길이를 비교해 "잘렸는가"를 판정하고 있어서 두 값이 언제나 같아 그 판정이
+    영구히 False 였다(= 안 실린 뉴스가 소비 처리돼 영구 소실). 복사해서 다루면
+    호출부가 어떤 방식으로 비교하든 안전하다."""
+    lines = list(lines)
     if sum(len(x) + 1 for x in lines) <= _TELEGRAM_MAX_CHARS:
         return lines
     if news_start >= 0:
+        trimmed = False
         while len(lines) > news_start + 1 and \
                 sum(len(x) + 1 for x in lines) > _TELEGRAM_MAX_CHARS:
             lines.pop()          # 뉴스 블록 끝줄부터 제거
+            trimmed = True
+        # 요약 줄만 잘리고 항목 헤더("   <b>SYM</b> · @ch")가 남으면 그 뉴스는
+        # 코인 이름만 덩그러니 실린다 — 내용을 못 봤는데 소비 처리돼 다시는 안
+        # 나온다(호출부는 헤더 줄 수로 '실린 건수'를 센다). 그런 반쪽 항목은
+        # 통째로 빼서 다음 브리핑에 온전히 나오게 한다. 잘림이 실제로 일어난
+        # 경우에만 적용한다 — 원래 요약이 비어 헤더만 있는 정상 항목은 건드리지
+        # 않는다. (2026-09-14 감사 F1 후속)
+        if trimmed:
+            while len(lines) > news_start + 1 and lines[-1].startswith("   <b>"):
+                lines.pop()
         if len(lines) == news_start + 1:
-            lines = lines[:news_start]   # 헤더만 남으면 블록 통째 제거
+            # 헤더만 남으면 블록 통째 제거. 헤더 **앞의 구분선**까지 걷어낸다 —
+            # 안 그러면 본문 없는 ━━━ 한 줄이 브리핑 끝에 덩그러니 남는다
+            # (2026-09-14 감사 F6). news_start 는 호출부가 _SEP 를 넣은 직후의
+            # 인덱스라 news_start-1 이 그 구분선이다.
+            cut = news_start
+            if cut > 0 and lines[cut - 1] == _SEP:
+                cut -= 1
+            lines = lines[:cut]
         if sum(len(x) + 1 for x in lines) <= _TELEGRAM_MAX_CHARS:
             return lines
     text = "\n".join(lines)
@@ -408,11 +465,11 @@ def build_brief(conn, now: float, timeout: float,
         tail.append(f"🎯 어제 터치 알림 {n_touch}건")
     except Exception as e:  # noqa: BLE001 - 행 생략으로 강등
         logger.warning("[brief] 어제 성과 조회 실패: %s", e)
-    # 🏁 어제 목표 도달 (2026-09-13 A안) — TP 실시간 발송을 끈 대신 여기서 요약.
+    # 🏁 목표 도달 (2026-09-13 A안) — TP 실시간 발송을 끈 대신 여기서 요약.
     # 순서: 어제 일어난 일(터치 → 목표 도달)을 먼저 묶고, 앞으로 볼 것(대기 레벨)을
     # 뒤에 둔다. 과거·현재가 뒤섞이면 읽는 순서가 끊긴다.
     try:
-        tail.extend(_tp_hit_lines(conn, yesterday))
+        tail.extend(_tp_hit_lines(conn, now))
     except Exception as e:  # noqa: BLE001 - 블록 생략으로 강등
         logger.warning("[brief] TP 도달 블록 실패: %s", e)
     try:
@@ -427,10 +484,10 @@ def build_brief(conn, now: float, timeout: float,
         lines.append(_SEP)
         lines.extend(tail)
 
-    # 📰 어제의 뉴스 (2026-09-13 A안) — 뉴스 실시간 발송을 끈 대신 여기서 요약.
+    # 📰 주요 뉴스 (2026-09-13 A안) — 뉴스 실시간 발송을 끈 대신 여기서 요약.
     news_start = -1
     try:
-        news = _news_lines(conn, yesterday, consumed_ids)
+        news = _news_lines(conn, consumed_ids)
         if news:
             lines.append(_SEP)
             news_start = len(lines)
@@ -440,10 +497,17 @@ def build_brief(conn, now: float, timeout: float,
         del consumed_ids[:]   # 실려 나가지 않았으면 소비 처리도 안 한다
 
     fitted = _fit_telegram(lines, news_start)
-    if consumed_ids and len(fitted) < len(lines):
+    if consumed_ids:
         # 길이 방어로 뉴스 줄이 잘려 나갔으면 그만큼 소비 처리도 취소한다 —
         # 안 실린 뉴스를 consumed 로 찍으면 영원히 못 본다. 항목 헤더 줄
         # ("   <b>SYM</b>…") 수 = 실제로 실린 뉴스 건수.
+        #
+        # 2026-09-14 수리(감사 F1): 종전엔 `len(fitted) < len(lines)` 로 "잘렸는가"를
+        # 먼저 물었는데, _fit_telegram 이 인자를 **제자리 변형**하고 같은 객체를
+        # 돌려주므로 두 길이가 언제나 같아 이 가드가 **항상 False** 였다 — 즉 절단이
+        # 실제로 일어나도 소비 취소가 한 번도 실행되지 않아 안 실린 뉴스가
+        # consumed=1 로 영구 소실된다. 가드를 걷고 실린 줄을 무조건 세어 맞춘다
+        # (잘리지 않았으면 kept == len(consumed_ids) 라 del 이 no-op).
         kept = sum(1 for x in fitted[news_start:] if x.startswith("   <b>")) \
             if news_start >= 0 else 0
         del consumed_ids[kept:]
@@ -493,6 +557,9 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
     try:
         with db.connect(db_path) as conn:
             db.set_meta(conn, META_LAST_BRIEF_DATE, day_kst(now))
+            # 다음 브리핑의 🏁 조회 창 시작점 (2026-09-14 수리). date 와 함께 찍어야
+            # 다음 회차가 "이 시각 이후 적중"만 실어 누락·중복을 둘 다 피한다.
+            db.set_meta(conn, META_LAST_BRIEF_AT, str(now))
             # 뉴스 큐 소비는 **발송 성공 후**에만 (2026-09-13 A안) — 실패 시
             # 다음 회차 재시도가 같은 뉴스를 다시 싣는다.
             if consumed_ids:

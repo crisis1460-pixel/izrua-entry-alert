@@ -2029,20 +2029,28 @@ def queue_news_digest(conn, symbol: str, channel: str, summary: str,
     )
 
 
-def get_news_digest(conn, day_kst: str, limit: int = 5) -> list:
-    """해당 KST 일자의 미소비 뉴스 큐 (오래된 순, 최대 limit 건).
-    오래된 순인 이유: 상한(5/일)에 먼저 들어온 건이 '그날 실제로 발송됐을 건'이라
+def get_news_digest(conn, limit: int = 5) -> list:
+    """미소비 뉴스 큐 (오래된 순, 최대 limit 건). **날짜 조건 없음.**
+
+    2026-09-14 수리: 종전엔 `day_kst='어제'` 로 걸렀는데, 뉴스는 실시간으로 들어와
+    적재 시점의 날짜가 찍힌다 — 오늘 새벽 02:35 에 쌓인 뉴스는 day_kst='오늘' 이라
+    오늘 아침 브리핑(어제 조회)에서 통째로 빠지고 **내일 아침에야** 나갔다(최대 31시간
+    지연, 실측: 배포 다음 날 브리핑의 뉴스 0건). 소비 플래그(consumed)가 이미 중복을
+    막으므로 날짜로 한 번 더 거를 이유가 없다 — "아직 안 보여준 것을 오래된 순으로"가
+    이 큐의 유일한 정의다. 7일 지난 행은 prune_news_digest_queue 가 정리한다.
+
+    오래된 순인 이유: 먼저 들어온 건이 '실시간이었다면 먼저 발송됐을 건'이라
     실시간 발송과 같은 순서를 재현한다."""
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM news_digest_queue WHERE day_kst=? AND consumed=0 "
-        "ORDER BY created_at ASC, id ASC LIMIT ?", (day_kst, limit)).fetchall()]
+        "SELECT * FROM news_digest_queue WHERE consumed=0 "
+        "ORDER BY created_at ASC, id ASC LIMIT ?", (limit,)).fetchall()]
 
 
-def count_news_digest(conn, day_kst: str) -> int:
-    """해당 일자의 미소비 뉴스 큐 총 건수 (limit 컷 '외 N건' 표기용)."""
+def count_news_digest(conn) -> int:
+    """미소비 뉴스 큐 총 건수 (limit 컷 '외 N건' 표기용). 날짜 조건 없음 —
+    get_news_digest 와 같은 집합을 세야 '외 N건'이 맞는다."""
     return conn.execute(
-        "SELECT COUNT(*) AS n FROM news_digest_queue WHERE day_kst=? AND consumed=0",
-        (day_kst,)).fetchone()["n"]
+        "SELECT COUNT(*) AS n FROM news_digest_queue WHERE consumed=0").fetchone()["n"]
 
 
 def consume_news_digest(conn, ids: list) -> int:
@@ -2071,20 +2079,27 @@ def prune_news_digest_queue(conn, now: Optional[float] = None,
     return n
 
 
-def get_tp_hits_by_day(conn, day_kst: str) -> list:
-    """해당 KST 일자의 TP 적중 기록(kind LIKE 'tp%')을 레벨별로 묶어 반환.
+def get_tp_hits_since(conn, since: float) -> list:
+    """`since`(epoch) **이후**의 TP 적중 기록(kind LIKE 'tp%')을 레벨별로 묶어 반환.
 
-    아침 브리핑 "🏁 어제 목표 도달" 블록 전용. alerts_log.level_ids 는 TP 알림
+    아침 브리핑 "🏁 목표 도달" 블록 전용. alerts_log.level_ids 는 TP 알림
     경로에서 항상 단일 레벨 id 이므로(price_check 는 [lv["id"]] 로 기록) 그대로
     정수 변환해 levels 와 조인한다 — 변환 실패 행(뉴스처럼 채널명이 들어간 계약
     재사용 행)은 조용히 건너뛴다.
+
+    2026-09-14 수리: 종전 시그니처는 `day_kst='어제'` 였다. 그런데 브리핑은 아침
+    8~10시에 나가므로 **오늘 0~8시에 적중한 TP 는 day_kst 가 '오늘'** 이라 그날
+    브리핑에서 빠지고 다음 날에야 실렸다(실측: 09-14 새벽 00:20~06:12 적중 4건이
+    당일 브리핑에서 누락, 최대 32시간 지연). TP 실시간 발송을 끈 대가가 "다음 날
+    아침 확인"인데 실제로는 "이틀 뒤"가 되던 셈이다. 직전 브리핑 발송 시각
+    (meta.last_morning_brief_at) 이후로 창을 잡아 **누락도 중복도 없게** 한다.
 
     반환: [{coin, best_tp, tp_total, entry_usd, tps_usd, level_id}] — 같은 레벨이
     TP1·TP2 를 연달아 찍었으면 **최고 단계 1행**으로 접는다(사용자가 보고 싶은 건
     "어디까지 갔나"이지 단계별 이력이 아니다)."""
     rows = conn.execute(
         "SELECT level_ids, kind FROM alerts_log "
-        "WHERE day_kst=? AND kind LIKE 'tp%' ORDER BY sent_at ASC", (day_kst,)
+        "WHERE sent_at > ? AND kind LIKE 'tp%' ORDER BY sent_at ASC", (since,)
     ).fetchall()
     best: dict = {}
     for r in rows:

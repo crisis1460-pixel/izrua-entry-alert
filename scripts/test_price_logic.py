@@ -3946,10 +3946,10 @@ check("TPOFF6 resolve_outcome 정상 종결(hit·best_tp_hit=2) · pending 잔�
       _tpo_fin["outcome"] == "hit" and _tpo_fin["best_tp_hit"] == 2
       and _tpo_fin["pending_tp_kind"] is None)
 
-# TPOFF7: 브리핑용 조회 — get_tp_hits_by_day 가 최고 단계 1행으로 접는다
+# TPOFF7: 브리핑용 조회 — get_tp_hits_since 가 최고 단계 1행으로 접는다
 with db.connect(_TPO_DB) as conn:
-    _tpo_hits = db.get_tp_hits_by_day(conn, price_check._day_kst(_tpo_now + 720))
-check("TPOFF7 get_tp_hits_by_day — TP1·TP2 를 최고 단계(2) 1행으로 접음",
+    _tpo_hits = db.get_tp_hits_since(conn, _tpo_now - 86400)
+check("TPOFF7 get_tp_hits_since — TP1·TP2 를 최고 단계(2) 1행으로 접음",
       len(_tpo_hits) == 1 and _tpo_hits[0]["coin"] == "TPOF"
       and _tpo_hits[0]["best_tp"] == 2 and _tpo_hits[0]["tp_total"] == 2)
 
