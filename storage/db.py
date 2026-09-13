@@ -172,6 +172,10 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     -- 토큰 언락 경고가 터치 알림에 표시된 건수 (2026-08-14~).
     -- 억제가 아니라 "경고 표시 건수" — 발송은 정상적으로 됨.
     token_unlock_warned  INTEGER NOT NULL DEFAULT 0,
+    -- 감시 단계 진입가 sanity 로 만료된 레벨 수 (2026-09-13 B1~).
+    -- 억제가 아니라 '끊어낸 행 수' — 값이 계속 0 이 아니면 수집 단계 sanity 폴백이
+    -- 못 막고 새는 경로가 아직 있다는 뜻이라 운영 신호로 읽는다.
+    expired_entry_insane INTEGER NOT NULL DEFAULT 0,
     updated_at           REAL
 );
 
@@ -1875,6 +1879,29 @@ def expire_levels_for_coin(conn, coin_symbol: str, reason: str,
     return cur.rowcount
 
 
+def expire_levels_by_ids(conn, level_ids, reason: str,
+                         now: Optional[float] = None) -> int:
+    """지정한 '알림 대기' 레벨들을 사유와 함께 즉시 만료. 반환: 만료 건수.
+    (2026-09-13 B1 — 감시 단계 진입가 sanity 방어선용)
+
+    expire_levels_for_coin 과 같은 계약이다(대상은 watching/previewed 뿐, 미종결
+    touched·종결 행은 절대 건드리지 않는다 — 그 함수 docstring 의 근거 그대로).
+    다른 점은 선택 기준이 '코인'이 아니라 '행 id 목록'이라는 것뿐 — 같은 코인
+    안에서도 엉터리 진입가 행만 골라 끊어내야 하기 때문이다.
+    IN 절은 id 개수만큼 플레이스홀더를 만든다(한 회차 대상이 수십 건을 넘지 않음)."""
+    ids = [int(i) for i in (level_ids or [])]
+    if not ids:
+        return 0
+    now = now if now is not None else time.time()
+    cur = conn.execute(
+        "UPDATE levels SET status='expired', expired_at=?, expired_reason=? "
+        f"WHERE id IN ({', '.join('?' for _ in ids)}) "
+        "AND status IN ('watching','previewed')",
+        (now, reason, *ids),
+    )
+    return cur.rowcount
+
+
 def get_recent_bid_ask_ratios(conn, limit: int = 10) -> list:
     """최근 터치의 호가 매수/매도 잔량비 기록 (2026-07-26 카드 #19, 관찰 표시용).
     조회 전용 — 어떤 판정에도 쓰이지 않는다."""
@@ -2195,7 +2222,9 @@ _DAILY_STATS_COLS = ("touches_total", "previews_total", "suppressed_grade",
                      "suppressed_tp_gate",
                      "suppressed_timeframe",
                      # 토큰 언락 경고 해당 터치 건수 (2026-08-14).
-                     "token_unlock_warned")
+                     "token_unlock_warned",
+                     # 감시 단계 진입가 sanity 만료 건수 (2026-09-13 B1).
+                     "expired_entry_insane")
 
 
 def bump_daily_stats(conn, day_kst: str, **deltas) -> None:
@@ -2477,5 +2506,7 @@ def get_observation_report(conn, days: int = 30) -> list:
             "suppressed_global_cap":             s.get("suppressed_global_cap", 0),
             # 토큰 언락 경고 표시 건수 (억제 아님) (2026-08-16 Fix)
             "token_unlock_warned":               s.get("token_unlock_warned", 0),
+            # 감시 단계 진입가 sanity 만료 건수 (억제 아님) (2026-09-13 B1)
+            "expired_entry_insane":              s.get("expired_entry_insane", 0),
         })
     return out

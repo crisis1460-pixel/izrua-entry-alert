@@ -144,7 +144,12 @@ SETTINGS = {
     "macro_dxy_enabled": True,           # DXY 달러인덱스 (Yahoo Finance, 무료)
     "macro_fomc_cpi_enabled": True,      # FOMC/CPI 정적 캘린더 (API 0콜)
     "macro_dvol_enabled": True,          # Deribit DVOL 변동성지수 (무료)
-    "token_unlock_enabled": True,        # DeFiLlama 토큰 언락 경고 (무료)
+    # 토큰 언락 경고 — 2026-09-13 폐기(B2). DeFiLlama 가 유료로 전환해
+    # /unlocks/upcoming 은 404, /emissions 는 402 를 돌려준다. 한 달째
+    # touch_token_unlock_pct 결측률 100% 라 회차마다 죽은 HTTP 호출만 나가고 있었다.
+    # 무료 대체 소스가 없어 스위치를 내린다(컬럼·테이블은 과거 데이터 호환 위해 유지).
+    # 무료 대체가 생기면 여기만 True 로 되돌리면 된다.
+    "token_unlock_enabled": False,       # DeFiLlama 토큰 언락 경고 (2026-09-13 유료화로 비활성)
     # Hash Ribbons (2026-08-15) — mempool.space 무료 해시레이트, 채굴자 항복/회복
     # 감지. 수급 판정 내부 보정 전용(알림 무노출).
     "hash_ribbons_enabled": True,
@@ -236,6 +241,29 @@ SETTINGS = {
     # 가격 sanity 배수 — extractor 파싱과 price_check 판정 양쪽에서 공유
     "sanity_lo_mult": 0.25,
     "sanity_hi_mult": 4.0,
+
+    # 감시 단계 진입가 sanity (2026-09-13 B1) — 수집 때 현재가를 몰라 extractor
+    # sanity 를 우회한 엉터리 진입가(레버리지 배수·퍼센트가 진입가로 저장된 건)를
+    # 감시 회차에서 걸러내는 2차 방어선. 진입가(KRW 환산)가 현재가에서 아래 허용폭을
+    # 넘게 벗어나면 그 레벨을 expired_reason='entry_insane' 으로 만료한다.
+    #
+    # ⚠️ 방향별로 기준이 다르다(비대칭) — 대칭 ±60% 는 정상 레벨을 함께 죽인다.
+    # 부호 있는 이탈률 dev = (진입가KRW - 현재가) / 현재가 × 100 으로 분기한다.
+    #   · dev > 0 (진입가가 현재가 **위**): 롱 대기인데 진입가가 이미 지나간 자리에
+    #     있다는 뜻 — 오파싱 탐지축이다. 60% 유지(extractor parse_setup max_dev=0.60
+    #     과 같은 폭이라 두 관문이 같은 기준을 쓴다).
+    #   · dev < 0 (진입가가 현재가 **아래**): "가격이 올라 아직 안 닿은" 정상 대기
+    #     상태이며 level_expiry_hours(7일) 만료로 자연 정리된다 → 기본 비활성(0).
+    #
+    # 근거(실측 2026-09-13, 업비트 실시간 시세 × 감시 중 30건): 하단 이탈은 '가격이
+    # 올라 아직 안 닿은' 정상 대기 상태이며 7일 만료로 정리된다. 실측 정상 레벨 최대
+    # 하단 이탈 56.7%(NEAR id=685, 진입 1,360원 vs 현재 3,138원 — 대칭 60% 커트
+    # 바로 아래로 아슬아슬했다. 다음은 LINK 42.4%, ARB 41.1%) vs 오염 레벨 최소
+    # 상단 이탈 2,552%(나머지는 8,400% / 31,381% / 158,778%) — 두 분포는 자릿수가
+    # 달라 상단 60% 하나로 충분히 갈린다.
+    # 각 값은 0 이하면 그 방향 검사를 끈다.
+    "watch_entry_max_above_pct": 60.0,   # 진입가가 현재가보다 위 — 오파싱 탐지축
+    "watch_entry_max_below_pct": 0.0,    # 진입가가 현재가보다 아래 — 기본 비활성
 
     # 재발송 차단 창 (초) — 같은 코인·종류·레벨 조합의 경합 재발송 방어
     "resend_block_sec": 600.0,

@@ -69,6 +69,8 @@
 드롭 조건:
 - 진입가 없음 (파싱 실패)
 - 진입가가 현재 시세와 **60% 이상** 괴리
+  - 현재가 기준: CoinGecko 달러가 → 없으면 **업비트 KRW 현재가 ÷ USDT-KRW 환율** 폴백 (2026-09-13). 둘 다 없을 때만 판단보류(통과)
+  - 감시 단계에도 2차 방어선 — 진입가가 현재가 **위**로 60% 초과 이탈 시 `expired_reason='entry_insane'` 만료(하단 이탈은 기본 미검사). 아래 §5-0 및 전용 절 참고
 
 ### 2-3. 가격 동기화 검증
 업비트 현재가와 CoinGecko 가격(USD × USDT-KRW 환율) 비교 → **40% 초과** 괴리 시 해당 코인 수집 건너뜀 (심볼 충돌 방지).
@@ -123,6 +125,16 @@
 
 **파일:** `monitor/price_check.py`  
 **주기:** 2분마다
+
+### 5-0. 진입가 sanity 방어선 (2026-09-13)
+터치·예고 판정 **앞**에서 활성 레벨을 검사. 부호 있는 이탈률 `dev = (진입가KRW - 현재가) / 현재가 × 100` 으로 **방향별 비대칭** 판정 — 초과 시 `expired_reason='entry_insane'` 만료 + 이번 회차 대상에서 제외.
+
+| 방향 | 설정 키 | 기본값 | 의미 |
+|------|---------|--------|------|
+| `dev > 0` 진입가가 현재가 **위** | `watch_entry_max_above_pct` | **60%** | 롱 대기인데 진입가가 이미 지나간 자리 = 오파싱 탐지축 |
+| `dev < 0` 진입가가 현재가 **아래** | `watch_entry_max_below_pct` | **0 (검사 안 함)** | "가격이 올라 아직 안 닿은" 정상 대기 — 7일 만료로 자연 정리 |
+
+시세 미확보 티커는 판단보류(fail-open). 집계: `daily_stats.expired_entry_insane`. 상세는 하단 "진입가 sanity 폴백 + 감시 단계 entry_insane 만료" 절.
 
 ### 5-1. 감시 범위 (캔들 조회 최적화)
 - 현재가가 진입가 상단의 **+5% 이내**인 레벨만 캔들 조회 대상
@@ -239,7 +251,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 호가 매수/매도 압력 | 터치 시점 스냅샷. 2026-08-14 승격: 수급 판정 라벨 보정 입력 겸용(수치 알림 비노출) | `levels.touch_bid_ask_ratio` |
 | 200일선 상/하 | 터치 시점 스냅샷 | `levels.touch_ma200_above` |
 | MTF 정렬 점수 (2026-08-14) | `upbit.derive_mtf_alignment()` — 일봉 RSI>50 (+1/−1) + 현재가 vs MA200 (+1/−1). score −2~+2, label 강세정렬/약세정렬/혼조. `fetch_position_data` 공유(추가 콜 0). 터치 확정건만 `record_touch_verdicts`로 DB 기록 | `levels.touch_mtf_score` (터치 확정건만) |
-| 토큰 언락 경고 (2026-08-14) | `token_events.fetch_upcoming_unlocks()` — DeFiLlama 7일 내 5%+ 유통량 언락 예정 코인 맵. 6h DB 캐시. 회차 1콜, 전 코인 공유. 터치 확정건만 pct를 DB 기록. obs `token_unlock_warned` 카운터도 집계 | `levels.touch_token_unlock_pct` (터치 확정건만) |
+| 토큰 언락 경고 (2026-08-14) **· 비활성(2026-09-13)** | `token_events.fetch_upcoming_unlocks()` — DeFiLlama 7일 내 5%+ 유통량 언락 예정 코인 맵. 6h DB 캐시. 회차 1콜, 전 코인 공유. 터치 확정건만 pct를 DB 기록. obs `token_unlock_warned` 카운터도 집계. **2026-09-13 폐기** — DeFiLlama 유료화(404/402)로 `token_unlock_enabled=False`, `_unlock_data()` 게이트로 호출 차단. 컬럼·모듈은 존치 | `levels.touch_token_unlock_pct` (터치 확정건만) |
 | 섹터 집중도 (2026-08-14) | `risk_checks.check_sector_concentration()` — 같은 섹터 코인 알림 집중도 경고. CoinGecko 카테고리 데이터 축적 후 활성화 예정 | `monitor/risk_checks.py` (placeholder) |
 | BTC 옵션 컨텍스트 (2026-08-14) | `options.fetch_btc_options_context()` — Deribit P/C Ratio·Max Pain·DVOL. P/C ≥1.0 또는 ≤0.30 → warn(수급 하향 보정). 정상 범위 0.5~0.6, 역대 최저 0.38/최고 0.84 기준. 5분 TTL 캐시, BTC 전용·전 코인 적용 | `monitor/options.py` (내부 보정 전용, 컬럼 미저장) |
 | DVOL 내재변동성 (2026-08-14) | `options._fetch_dvol()` — Deribit 30일 내재변동성 지수. 40이하=평상시, 60~80=경계(warn+1), 80+=위기(warn+2). `fetch_btc_options_context()` 반환값에 포함 | `monitor/options.py` (수급 보정 입력) |
@@ -251,7 +263,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 다구간 수익률 (2026-08-14 확장) | 기존 ret_24h/ret_72h에 ret_4h/ret_12h 추가 — 초기 반응(4h)·중기 추세(12h) 포착. 1h는 2분 폴링 대비 오차 과대로 제외 | `levels.ret_4h` / `levels.ret_12h` |
 | 김프 급변 화살표 (2026-08-14) | `db.push_kimchi_history()` — 알림 시점 김프 이력 축적(meta, 12h 보존), ~6h 전 대비 ±0.5%p 이상이면 김프 행 끝 ▲/▼ 1글자 (`telegram._KIMCHI_DELTA_TH`) | `meta.kimchi_hist` (JSON) |
 | 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
-| 토큰 언락 경고 (2026-08-14) | `token_events.get_unlock_warning(conn, symbol)` — DeFiLlama 무료 API, 7일 내 유통량 5%+ 언락 예정 코인 감지. 6시간 DB 캐시. 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_token_unlock_pct` |
+| 토큰 언락 경고 (2026-08-14) **· 비활성(2026-09-13)** | `token_events.get_unlock_warning(conn, symbol)` — DeFiLlama 무료 API, 7일 내 유통량 5%+ 언락 예정 코인 감지. 6시간 DB 캐시. 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출). **2026-09-13 폐기** — 상세는 "토큰 언락 기능 폐기" 절 | `levels.touch_token_unlock_pct` |
 | MTF 정렬 점수 (2026-08-14) | `upbit.derive_mtf_alignment(pos_data, price)` — 일봉RSI>50(+1)·MA200 위(+1) = -2~+2 점수. fetch_position_data() 재사용 (추가 콜 0). 터치 시점 스냅샷 저장 (내부 축적 전용, 알림 미노출) | `levels.touch_mtf_score` |
 | 섹터 집중도 (2026-08-14) | `risk_checks.check_sector_concentration()` — placeholder. 향후 CoinGecko 카테고리 데이터 축적 후 활성화 | `monitor/risk_checks.py` |
 | IC/ICIR 신호 품질 (2026-08-14, 08-15 배선) | `signal_quality.compute_ic()` / `compute_icir()` — 점수↔ret_24h Spearman 순위 상관. IC≥0.05, ICIR≥0.5이면 실전 유효. show_status "신호 품질" 섹션 + 주간 감사덤프 grade_stats JSON에 연결. 첫 실측(08-15): IC 0.2072(n=167) 유효, ICIR 1.615(4주). 표기 전용 | `analytics/signal_quality.py` → `scripts/show_status.py`, `storage/audit_dump.py` |
@@ -319,6 +331,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 |------|---------|--------|
 | 예고 알림 (진입 전 접근) | `preview_alert_enabled` | `False` |
 | 섹터 집중도 경고 | `risk_checks.check_sector_concentration()` | placeholder (카테고리 데이터 미축적) |
+| 토큰 언락 경고 (2026-09-13 폐기) | `token_unlock_enabled` | `False` — DeFiLlama 유료화(404/402), 무료 대체 없음. 컬럼·모듈 존치 |
 
 ---
 
@@ -587,3 +600,38 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | LOW | `binance.fetch_cvd_ratio` dict 응답 IndexError | `monitor/binance.py` | `isinstance(list)` 체크 추가 |
 | LOW | `market_sentiment` TTL 만료 후 fallback 없음 | `monitor/market_sentiment.py` | 실패 시 stale 캐시 반환 |
 | 성능 | `run_collect` score_breakdown 이중 호출 | `collector/grading.py`, `scripts/run_collect.py` | `calculate_grade_with_breakdown()` 추가, 단일 호출로 교체 |
+
+## 진입가 sanity 폴백 + 감시 단계 entry_insane 만료 (2026-09-13)
+
+**사고**: `collector/coingecko.build_universe` 가 08-17부터 업비트 KRW 전 종목을 유니버스로 쓰면서, CoinGecko 상위 N 밖 코인은 `price_usd=None` 으로 편입됐다. `extractor._sanity` 는 "현재가를 모르면 통과"(판단보류)라 그 코인들은 진입가 sanity 관문이 통째로 비었다. 결과: Roddy01SIGNALSPROVIDER 채널 글("Entry point: yellow … 👉Leverage … 12.5")의 레버리지 배수 12.5 가 GMT/MOODENG/MASK/KNC 진입가로 저장 → 즉시 터치 판정 → **오알림 5건**(MOODENG id 438·703, ZORA 575, MASK 671, GMT 700), 감시 중 동일 패턴 4건(`entry_usd=12.5`).
+
+**조치 2단**
+
+| # | 단계 | 내용 | 위치 |
+|---|------|------|------|
+| 1 | 수집 | `price_usd` 가 없으면 **업비트 KRW 현재가 ÷ USDT-KRW 환율**로 USD 현재가를 만들어 sanity 기준가로 쓴다. 동명이인 가드가 이미 하는 시세 1콜(+환율)을 재사용 — **코인당 추가 API 콜 0**, 수집 루프 전체에서 1회 조회. 유니버스 dict 에 `price_usd_fallback` 키로 심고 `_sanity_price(coin)` 가 `price_usd` → 폴백 순으로 고른다. 등급 산식의 `current_price` 는 **불변**(CoinGecko 기준가 의미 보존) | `scripts/run_collect.py` `_usd_price_fallback` / `_sanity_price` |
+| 2 | 감시 | 활성 레벨의 부호 있는 이탈률 `dev = (진입가KRW - 현재가)/현재가`로 **방향별 비대칭** 판정 — 상단(`dev>0`) `watch_entry_max_above_pct`=**60%**(extractor `max_dev` 와 동폭), 하단(`dev<0`) `watch_entry_max_below_pct`=**0(검사 안 함)**. 초과 시 `expired_reason='entry_insane'` 만료 + **알림·터치 판정 안 함**. 위치는 터치/예고 판정 루프 **앞** — 뒤에 두면 알림이 나간 뒤 만료라 의미가 없다. 만료한 id 는 메모리 목록(`by_ticker`)에서도 즉시 제거 | `monitor/price_check.run_once` → `db.expire_levels_by_ids` |
+
+**설계 원칙**
+
+| 항목 | 결정 |
+|------|------|
+| 실패 처리 | 환율·시세 조회 실패 시 **종전 동작(판단보류=통과)** 유지 + `logger.warning`. 업비트 장애가 멀쩡한 레벨을 쓸어버리면 안 되므로 fail-open |
+| 대상 범위 | `watching`/`previewed` 만 (`expire_levels_for_coin` 과 동일 계약). 미종결 `touched`·종결 행은 불변 — 판정 표본 유실 방지 |
+| 비대칭 기준 (실측 2026-09-13) | 대칭 ±60% 안은 **폐기**. 업비트 실시간 시세 × 감시 중 30건 실측 결과, 하단 이탈은 "가격이 올라 아직 안 닿은" 정상 대기 상태이며 7일 만료로 정리된다. 정상 레벨 최대 하단 이탈 **56.7%**(NEAR id=685, 진입 1,360원 vs 현재 3,138원 — 대칭 커트 코앞. 다음은 LINK 42.4%, ARB 41.1%) vs 오염 레벨 최소 상단 이탈 **2,552%**(나머지 8,400% / 31,381% / 158,778%) — 두 분포는 자릿수가 달라 상단 60% 하나로 충분히 갈린다. 오염 4건은 전부 진입가가 현재가 **위**(롱인데 이미 지나간 자리 = 오파싱) |
+| 스위치 | 각 방향 값이 0 이하면 그 방향 검사를 끈다(둘 다 0 이면 방어선 자체가 꺼짐). 하단은 기본 0 — 훗날 필요하면 값만 넣어 켠다 |
+| 관찰 | `daily_stats.expired_entry_insane` 카운터 신설 (억제가 아니라 '끊어낸 행 수'). 0 이 아닌 상태가 지속되면 = 수집 단계 폴백이 못 막는 경로가 남아 있다는 운영 신호 |
+| 수리 스크립트 | **불필요** — 감시 중 오염 4건은 다음 회차에 자동 정리된다. 이미 기록된 터치 스냅샷은 불변 스냅샷 원칙에 따라 손대지 않음 |
+
+**회귀 테스트**: `test_extractor.py` FB1~FB5(현재가 없으면 12.5 통과=사고 재현 / 폴백가 주면 탈락 / 환산식 / 결측 시 종전 동작 / CoinGecko 가 우선), `test_price_logic.py` EI1~EI7(만료·사유·무알림·과잉만료 없음·집계 + **비대칭 경계 2건**: EI6 하단 -56.7%(실측 NEAR) 유지 / EI7 상단 +2552%(실측 MASK) 만료). 대칭 기준으로 되돌리면 EI6 이 반드시 깨진다.
+
+---
+
+## 토큰 언락 기능 폐기 (2026-09-13)
+
+| 항목 | 내용 |
+|------|------|
+| 사유 | DeFiLlama 유료화 — `https://api.llama.fi/unlocks/upcoming` **404**, `/emissions` **402**. 무료 대체 소스 없음 |
+| 증상 | 한 달째 `touch_token_unlock_pct` 결측률 **100%**, 회차마다 죽은 HTTP 호출만 발생 |
+| 조치 | `settings.token_unlock_enabled` → `False`(사유 주석 기록). `price_check._unlock_data()` 에 스위치 게이트 추가 — 종전엔 설정과 무관하게 호출돼 스위치가 사문화 상태였다. OFF 면 `None` 반환(=조회 실패와 동일 취급)이라 하류 분기 무변동 |
+| 유지 | `levels.touch_token_unlock_pct` 컬럼·`daily_stats.token_unlock_warned`·`monitor/token_events.py` 모두 **존치**(과거 데이터 호환). 무료 대체가 생기면 설정 한 줄 `True` 로 복구 |

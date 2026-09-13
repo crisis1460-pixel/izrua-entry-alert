@@ -140,12 +140,28 @@ check("C12 수집 타임아웃도 동일하게 격리",
 
 
 def die(_t):
-    raise SystemExit(3)  # BaseException 계열(subprocess 실패·sys.exit)도 회차를 죽이면 안 된다
+    raise SystemExit(3)
 
 
+# 2026-09-13 정정(개발자B): 이 테스트는 원래 "SystemExit 도 격리(failed 반환)"를
+# 기대했으나, run_cycle.py 의 모든 `except BaseException` 블록은 2026-07-28 감사
+# LOW-4 조치로 `isinstance(e, (KeyboardInterrupt, SystemExit))` 면 즉시 재전파하도록
+# 통일돼 있다(15곳 전부 동일 패턴 - izrua_company/HANDOFF_2026-07-28.md 3-10 참고).
+# 의도: Ctrl-C·진짜 sys.exit 는 "진짜 종료 신호"로 존중하고 삼키지 않는다(실전
+# 경로인 subprocess.run 실패는 CalledProcessError/TimeoutExpired 로 오지 SystemExit
+# 로 오지 않으므로 이 재전파가 실제 수집 실패 격리를 방해하지 않는다). 옛 기대값이
+# 이 설계와 반대라 CI 가 exit 3(전파된 SystemExit)로 매번 죽었다 - 코드가 아니라
+# 이 테스트가 낡은 것이었으므로, 설계에 맞춰 "전파를 검증"하도록 고친다.
 reset_meta()
-check("C13 SystemExit 도 격리",
-      run_cycle.maybe_collect(TEST_DB, now=NOON_KST, collect_runner=die) == "failed")
+_c13_propagated = False
+try:
+    run_cycle.maybe_collect(TEST_DB, now=NOON_KST, collect_runner=die)
+except SystemExit as _c13_exc:
+    _c13_propagated = _c13_exc.code == 3
+check("C13 SystemExit 은 격리하지 않고 그대로 전파한다(진짜 종료 신호로 존중, 감사 LOW-4 설계)",
+      _c13_propagated)
+check("C13b SystemExit 전파 시 실패로 기록되지 않는다(격리 경로를 타지 않으므로 meta 불변)",
+      get_meta(run_cycle.META_LAST_COLLECT_FAIL) == 0)
 
 # ── C14~C15: 수집 DB 접근 예외 격리 (2026-07-26 — 3·4단계 감사 조치의 2단계 확장) ──
 # 주기판정 조회/meta 기록도 DB 접근이라 실패할 수 있다 - try 밖에 있으면 run_cycle

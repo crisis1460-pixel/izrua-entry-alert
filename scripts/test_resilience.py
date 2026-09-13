@@ -166,6 +166,17 @@ check("수리2b: 캐시조차 없으면 예외를 그대로 전파(호출부가 
 # 즉시수리(2026-07-27, 개발자B, 교차감사 A-m5 확정): 빈 유니버스가 캐시·stale
 # 폴백에 박혀 24시간짜리 조용한 장애가 되던 문제. _save_cache 는 빈 목록을 저장하지
 # 않고, _load_cache/_load_cache_any_age 는 truthy 게이트로 빈 캐시를 미스 취급한다.
+#
+# 2026-09-13 정정(개발자B): build_universe() 는 2026-08-17에 "CoinGecko top-N ∩
+# Upbit" 에서 "Upbit KRW 전체 마켓이 유니버스, CoinGecko 는 메타(rank/tier_icon)만
+# 병합" 으로 재작성됐다(coingecko.py build_universe docstring 참고). 그 결과
+# CoinGecko coins/markets 가 빈 배열을 반환해도 Upbit market/all 에 마켓이 있으면
+# 유니버스는 더 이상 비지 않는다(해당 코인들이 rank=None/tier_icon='·' 로 편입될
+# 뿐) - 아래 m5-1/m5-2 는 옛 의미론("CG 가 비면 유니버스도 빈다")을 검사하고
+# 있었고, 그게 CI 를 계속 깨뜨렸다. 불변식 자체("빈 유니버스를 캐시에 굳히지
+# 않는다")는 코드에 그대로 살아 있음을 build_universe/_save_cache 를 직접 읽어
+# 확인했으므로, 새 의미론에서 실제로 빈 유니버스가 나오는 경로(Upbit market/all
+# 자체가 빈 응답)로 목을 바꿔 같은 불변식을 계속 검증한다.
 # ══════════════════════════════════════════════════════════════════
 _cache_path_m5 = "cache/_test_resilience_universe_m5.json"
 if os.path.exists(_cache_path_m5):
@@ -181,15 +192,18 @@ _good_universe_m5 = [{"symbol": "ETH", "ticker": "KRW-ETH", "rank": 2, "name": "
 
 def _cg_get_empty_markets(url, params=None, headers=None, timeout=None):
     if "coins/markets" in url:
-        return _FakeResp(200, [])   # CoinGecko 가 빈 배열로 응답(순간 오류 재현)
+        return _FakeResp(200, [])   # CoinGecko 메타 부재 - 새 의미론에서 유니버스를 비우지 않음(참고용)
     if "market/all" in url:
-        return _FakeResp(200, [{"market": "KRW-BTC"}])
+        # 새 의미론(2026-08-17)에서 유니버스의 기반은 Upbit KRW 마켓이다 - 이게
+        # 빈 배열로 응답하는 경우가 "빈 유니버스" 를 실제로 재현하는 경로.
+        return _FakeResp(200, [])
     return _FakeResp(404)
 
 
-# m5-1: 캐시가 아예 없는 상태에서 빈 응답 → build_universe 는 여전히 빈 목록을
-# 반환하지만(동작 유지, 예외 아님), 그 빈 목록을 캐시 파일로 저장하지는 않는다 -
-# 저장했다면 다음 24시간 동안 "신선한 빈 캐시"로 굳어 재조회 자체가 안 됐을 것.
+# m5-1: 캐시가 아예 없는 상태에서 빈 응답(Upbit market/all 빈 배열) → build_universe
+# 는 여전히 빈 목록을 반환하지만(동작 유지, 예외 아님), 그 빈 목록을 캐시 파일로
+# 저장하지는 않는다 - 저장했다면 다음 24시간 동안 "신선한 빈 캐시"로 굳어 재조회
+# 자체가 안 됐을 것.
 requests.get = _cg_get_empty_markets
 _uni_empty1 = coingecko.build_universe()
 check("즉시수리(m5)-1: 빈 응답이면 build_universe 는 빈 목록을 반환(기존 동작 유지)",
@@ -197,9 +211,9 @@ check("즉시수리(m5)-1: 빈 응답이면 build_universe 는 빈 목록을 반
 check("즉시수리(m5)-1b: 빈 목록은 캐시 파일로 저장되지 않는다(다음 호출이 재조회 가능)",
       not os.path.exists(_cache_path_m5))
 
-# m5-2: 정상 캐시가 이미 있는데(단, 만료돼 fetch 를 타야 하는 상태) 빈 응답이 오면
-# - 반환값은 이번 회차의 빈 결과 그대로지만, 디스크의 기존 정상 캐시는 덮어써지지
-# 않고 보존된다(다음 정상 응답이 올 때까지 "어제자 유니버스"를 잃지 않는다).
+# m5-2: 정상 캐시가 이미 있는데(단, 만료돼 fetch 를 타야 하는 상태) Upbit 가 빈
+# 응답을 주면 - 반환값은 이번 회차의 빈 결과 그대로지만, 디스크의 기존 정상 캐시는
+# 덮어써지지 않고 보존된다(다음 정상 응답이 올 때까지 "어제자 유니버스"를 잃지 않는다).
 with open(_cache_path_m5, "w", encoding="utf-8") as f:
     json.dump({"updated_at": time.time() - 25 * 3600, "universe": _good_universe_m5}, f)
 _uni_empty2 = coingecko.build_universe()

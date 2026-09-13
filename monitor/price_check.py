@@ -637,13 +637,81 @@ def run_once(now: float | None = None) -> dict:
                "suppressed_tp_gate": 0,
                # 토큰 언락 경고 해당 터치 건수 (2026-08-14). DeFiLlama 7일 내 5%+
                # 유통량 언락 예정 코인에서 터치가 발생한 횟수 — 사후 분석 전용.
-               "token_unlock_warned": 0}
+               "token_unlock_warned": 0,
+               # 감시 단계 진입가 sanity 로 끊어낸 레벨 수 (2026-09-13 B1).
+               "expired_entry_insane": 0}
         budget = {"calls": 0}   # 캔들 호출 예산 (감시+판정 공유, 2026-07-24 카운터 수정)
         range_cache: dict = {}  # ticker → 캔들목록|False(실패 네거티브캐시) — 1콜 공유
         # 작성자 종결 실적 캐시 (2026-08-01 S10 v3) — author → (n, hits). 한 회차 안에서
         # 같은 작성자를 두 번 조회하지 않는다. 판정(_judge_outcomes)은 이 루프 '뒤'라
         # 회차 내 실적이 변하지 않아 캐시가 안전하다.
         author_stats_cache: dict = {}
+
+        # ── 진입가 sanity 2차 방어선 (2026-09-13 B1) ────────────────────────
+        # 수집 단계 sanity(collector.extractor._sanity)는 "현재가를 모르면 통과"라,
+        # CoinGecko 달러가가 없는 코인에서는 관문이 통째로 비어 있었다. 실제로
+        # 레버리지 배수(12.5)가 GMT/MOODENG/MASK/KNC 의 진입가로 저장돼 즉시 터치로
+        # 판정되고 오알림 5건이 나갔다. 수집 쪽은 업비트 폴백가로 고쳤지만
+        # (scripts/run_collect._sanity_price), ① 이미 감시 중인 오염 레벨을 자동으로
+        # 치우고 ② 다른 경로로 또 새더라도 알림 직전에 한 번 더 막기 위해 여기에
+        # 방어선을 둔다.
+        #
+        # ⚠️ 기준은 **비대칭**이다(2026-09-13 실측으로 대칭안을 폐기). 부호 있는
+        # 이탈률 dev = (진입가KRW - 현재가)/현재가 로 방향을 갈라, 진입가가 현재가
+        # 위면 watch_entry_max_above_pct(60), 아래면 watch_entry_max_below_pct(0=꺼짐)
+        # 를 쓴다. 대칭 ±60% 였다면 정상 레벨 NEAR(id=685, 하단 이탈 56.7%)가 커트
+        # 코앞이라 시세가 조금만 더 오르면 함께 죽는다 — 하단 이탈은 "가격이 올라
+        # 아직 안 닿은" 정상 대기 상태이고 level_expiry_hours(7일)로 정리된다.
+        # 반면 오염 레벨은 전부 상단이고 최소 이탈이 +2,552% 라 자릿수가 다르다.
+        # (근거 수치 전문은 config/settings.py 의 두 키 주석 참고)
+        #
+        # 위치가 중요하다 — 반드시 터치·예고 판정 루프보다 **앞**이어야 한다.
+        # 뒤에 두면 이번 회차 알림이 이미 나간 뒤에 만료하는 꼴이라 목적을 잃는다.
+        # 대상은 활성(watching/previewed) 행뿐이고(db.expire_levels_by_ids 계약),
+        # 시세를 못 얻은 티커는 판단보류로 건너뛴다(fail-open — 업비트 장애가
+        # 멀쩡한 레벨을 쓸어버리면 안 된다).
+        _entry_max_above = cfg_get("watch_entry_max_above_pct") or 0
+        _entry_max_below = cfg_get("watch_entry_max_below_pct") or 0
+        if _entry_max_above > 0 or _entry_max_below > 0:
+            _insane_ids = []
+            for _tkr, _tlevels in by_ticker.items():
+                _cur = prices.get(_tkr)
+                if not _cur or _cur <= 0:
+                    continue
+                for _lv in _tlevels:
+                    _e_usd = _lv.get("entry_usd")
+                    if not _e_usd or _e_usd <= 0:
+                        continue
+                    _e_krw = _e_usd * usdt_krw
+                    _dev = (_e_krw - _cur) / _cur * 100.0
+                    # dev 부호로 방향을 가른다. 해당 방향 허용폭이 0 이하면 그
+                    # 방향은 검사하지 않는다(=그 레벨은 통과). dev==0 은 어느
+                    # 쪽도 아니므로 자연히 통과한다.
+                    _limit = _entry_max_above if _dev > 0 else _entry_max_below
+                    if _limit <= 0 or abs(_dev) <= _limit:
+                        continue
+                    _insane_ids.append(_lv["id"])
+                    logger.warning(
+                        "[체크] 진입가 이상 감지 - 만료(entry_insane): %s id=%s "
+                        "진입가 %.6g원 vs 현재가 %.6g원 (이탈 %+.1f%%, %s 허용 %.0f%%)",
+                        _lv.get("coin_symbol"), _lv["id"], _e_krw, _cur, _dev,
+                        "상단" if _dev > 0 else "하단", _limit)
+            if _insane_ids:
+                try:
+                    _n_insane = db.expire_levels_by_ids(
+                        conn, _insane_ids, "entry_insane", now)
+                    conn.commit()
+                    obs["expired_entry_insane"] += _n_insane
+                    # 만료한 행은 이번 회차 판정·알림 대상에서 즉시 제외한다
+                    # (DB 만 고치고 메모리 목록을 그대로 두면 이번 회차에 한해
+                    #  오알림이 한 번 더 나간다 — 만료의 의미가 없어진다).
+                    _drop = set(_insane_ids)
+                    by_ticker = {t: [l for l in lvs if l["id"] not in _drop]
+                                 for t, lvs in by_ticker.items()}
+                    by_ticker = {t: lvs for t, lvs in by_ticker.items() if lvs}
+                    logger.info("[체크] 진입가 sanity 만료 %d건", _n_insane)
+                except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+                    logger.warning("[체크] 진입가 sanity 만료 실패(무시하고 진행): %s", e)
 
         # 순환 import 방지 지연 로드. grade_from_score 는 grading.py 를 고치지 않고
         # 이미 있는 순수 함수를 읽기 전용으로 재사용하는 용도(TP 감점 되돌림 판정).
@@ -745,6 +813,11 @@ def run_once(now: float | None = None) -> dict:
         _unlock_ctx = {"loaded": False, "data": None}
 
         def _unlock_data():
+            # 2026-09-13 B2: 스위치 존중 게이트. 종전엔 설정과 무관하게 호출돼
+            # DeFiLlama 유료화(404/402) 이후에도 회차마다 죽은 HTTP 요청이 나갔다.
+            # OFF 면 None(=조회 실패와 동일 취급)이라 하류 분기는 그대로 무해하다.
+            if not cfg_get("token_unlock_enabled"):
+                return None
             if not _unlock_ctx["loaded"]:
                 _unlock_ctx["loaded"] = True
                 try:

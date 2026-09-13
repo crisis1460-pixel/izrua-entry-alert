@@ -514,6 +514,48 @@ for _desc, _passed in [
         ok += 1
 TOTAL_EXTRA += 2
 
+# ── FB: 진입가 sanity 현재가 폴백 (2026-09-13 B1 회귀) ─────────────────
+# 실전 사고 재현: CoinGecko 상위 N 밖 코인은 유니버스에 price_usd=None 으로 들어오고,
+# _sanity 는 "현재가를 모르면 통과"라 Roddy01SIGNALSPROVIDER 채널 글의 레버리지
+# 배수(12.5)가 GMT/MOODENG/MASK/KNC 진입가로 저장됐다(오알림 5건, 감시 중 4건).
+# 아래는 그 원문 형태 그대로 — 현재가 없이는 entry=12.5 가 통과하고,
+# 업비트 KRW 현재가 ÷ USDT-KRW 환율로 만든 폴백가를 주면 sanity 에서 탈락해야 한다.
+from scripts.run_collect import _sanity_price, _usd_price_fallback  # noqa: E402
+
+_FB_TEXT = (
+    "#GMT/USDT\n"
+    "Entry point: yellow zone\n\n"
+    "👉Leverage: cross 12.5\n\n"
+    "🎯Targets: 1-2-3-4-5%\n\n"
+    "Stop-loss: 5%"
+)
+_FB_KRW = 73.2        # 업비트 KRW-GMT 현재가(원)
+_FB_USDT_KRW = 1400.0  # KRW-USDT 환율 → USD 현재가 ≈ 0.0523
+
+_fb_none = parse_setup(_FB_TEXT, current_price=None)
+_fb_coin = {"symbol": "GMT", "price_usd": None,
+            "price_usd_fallback": _usd_price_fallback(_FB_KRW, _FB_USDT_KRW)}
+_fb_with = parse_setup(_FB_TEXT, current_price=_sanity_price(_fb_coin))
+# 폴백이 CoinGecko 달러가를 덮어쓰지 않는지(우선순위) + 시세 결측 시 종전 동작 유지
+_fb_cg = _sanity_price({"symbol": "GMT", "price_usd": 0.05,
+                        "price_usd_fallback": 999.0})
+for _desc, _passed in [
+        ("FB1 현재가 없으면 레버리지 12.5 가 진입가로 통과(사고 재현)",
+         _fb_none is not None and abs(_fb_none["entry"] - 12.5) < 1e-9),
+        ("FB2 업비트 폴백가를 주면 같은 글이 sanity 탈락(None)", _fb_with is None),
+        ("FB3 폴백가 계산 = KRW 현재가 ÷ USDT-KRW 환율",
+         abs(_usd_price_fallback(_FB_KRW, _FB_USDT_KRW) - _FB_KRW / _FB_USDT_KRW) < 1e-12),
+        ("FB4 환율·시세 결측이면 폴백 None(종전 동작=판단보류)",
+         _usd_price_fallback(None, _FB_USDT_KRW) is None
+         and _usd_price_fallback(_FB_KRW, None) is None
+         and _usd_price_fallback(0, 0) is None
+         and _sanity_price({"symbol": "GMT", "price_usd": None}) is None),
+        ("FB5 CoinGecko 달러가가 있으면 폴백보다 우선", _fb_cg == 0.05)]:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += 5
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
          + len(LADDER_N_CASES) + len(TPSALL_CASES))

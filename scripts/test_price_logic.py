@@ -3755,6 +3755,99 @@ _pu_oi = telegram.render_oi_spike_alert("PUF", 1e9, 1.2e9, 20.0,
 check("PU7 OI 급증 알림 - post_urls 있으면 마지막 구분선 아래 출처 표기",
       _pu_oi.rstrip().endswith(telegram._source_line(["https://a.example/5"])))
 
+# ── EI1~EI7: 감시 단계 진입가 sanity 만료 (2026-09-13 B1) ──────────────
+# 실전 사고(오알림 5건): 수집 때 CoinGecko 달러가가 없어 extractor sanity 를 우회한
+# 레버리지 배수(12.5)가 진입가로 저장돼 즉시 터치 판정됐다. 감시 회차는 진입가(KRW
+# 환산)가 현재가에서 허용폭을 넘게 벗어나면 알림·터치 판정을 하지 않고
+# expired_reason='entry_insane' 으로 끊어내야 한다.
+#
+# 기준은 **비대칭**이다(대칭 ±60% 안은 2026-09-13 실측으로 폐기):
+#   · 상단(진입가 > 현재가) watch_entry_max_above_pct=60 — 오파싱 탐지축
+#   · 하단(진입가 < 현재가) watch_entry_max_below_pct=0 — 검사 안 함
+# EI6/EI7 이 그 실측 경계를 박아두는 회귀 케이스다(NEAR -56.7% 유지 / MASK
+# +2552% 만료). 대칭 기준으로 되돌리면 EI6 이 반드시 깨진다.
+_EI_DB = "cache/_test_entry_insane.db"
+if os.path.exists(_EI_DB):
+    os.remove(_EI_DB)
+_ei_ledger = _alert_ledger.ledger_path(_EI_DB)
+if os.path.exists(_ei_ledger):
+    os.remove(_ei_ledger)
+db.init_db(_EI_DB)
+_ei_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _EI_DB
+
+_ei_now = now + 70000
+# 현재가 0.0523 USD(= 73.22원). 진입가별 부호 있는 이탈률 dev:
+#   sane    0.0500        → dev ≈  -4.4%  (하단, 검사 안 함 → 유지)
+#   insane  12.5          → dev ≈ +23,804% (상단 = 레버리지 오파싱 → 만료)
+#   near    현재가×0.433  → dev =  -56.7%  (실측 NEAR id=685 — 대칭 60%면 코앞, 유지)
+#   mask    현재가×26.52  → dev = +2,552%  (실측 오염 레벨 최소 상단 이탈 → 만료)
+_EI_CUR_USD = 0.0523
+_EI_NEAR_DEV = -56.7   # 실측: NEAR 진입 1,360원 vs 현재 3,138원
+_EI_MASK_DEV = 2552.0  # 실측: 오염 레벨 4건 중 최소 상단 이탈
+_ei_ids = {}
+with db.connect(_EI_DB) as conn:
+    for _tag, _entry in [("sane", 0.0500), ("insane", 12.5),
+                         ("near", _EI_CUR_USD * (1 + _EI_NEAR_DEV / 100.0)),
+                         ("mask", _EI_CUR_USD * (1 + _EI_MASK_DEV / 100.0))]:
+        _lvei = dict(
+            coin_symbol="ZEIX", ticker="KRW-ZEIX", direction="long",
+            entry_usd=_entry, sl_usd=_entry * 0.94, tp_usd=_entry * 1.15, rr=2.4,
+            grade="B", score=62, author=f"AuthEI{_tag}", author_followers=5000,
+            author_hit_rate=0.67, author_hit_count=12, author_whitelisted=False,
+            mcap_rank=120, mcap_tier_icon="🥈",
+            post_url=f"https://t.me/ei/{_tag}", post_age_minutes=30,
+            collected_at=_ei_now - 3600)
+        _lvei["signal_key"] = db.make_signal_key("ZEIX", _entry, f"AuthEI{_tag}", _tag)
+        db.upsert_level(conn, _lvei)
+        _ei_ids[_tag] = conn.execute(
+            "SELECT id FROM levels WHERE signal_key=?", (_lvei["signal_key"],)
+        ).fetchone()["id"]
+
+_ei_saved = (fake["price"], fake["candles"], fake["high"], fake["low"])
+fake["price"] = _EI_CUR_USD * USDT_KRW
+fake["candles"] = None
+fake["high"] = None
+fake["low"] = None
+_ei_msg_before = len(sent_messages)
+
+_ei_summary = price_check.run_once(_ei_now)
+
+fake["price"], fake["candles"], fake["high"], fake["low"] = _ei_saved
+
+with db.connect(_EI_DB) as conn:
+    _ei_rows = {t: conn.execute(
+        "SELECT status, expired_reason, touched_at FROM levels WHERE id=?", (i,)
+    ).fetchone() for t, i in _ei_ids.items()}
+    _ei_stats = db.get_daily_stats(conn, 7)
+
+check("EI1 진입가가 현재가 위로 60% 넘게 벗어난 레벨은 expired 로 끊긴다",
+      _ei_rows["insane"]["status"] == "expired")
+check("EI2 만료 사유는 entry_insane (shadow_touch/공지 만료와 구분)",
+      _ei_rows["insane"]["expired_reason"] == "entry_insane")
+check("EI3 끊긴 레벨은 터치 판정도 알림도 받지 않는다",
+      _ei_rows["insane"]["touched_at"] is None
+      and _ei_summary["touches"] == 0
+      and len(sent_messages) == _ei_msg_before)
+check("EI4 정상 범위 레벨은 그대로 감시 유지(과잉 만료 없음)",
+      _ei_rows["sane"]["status"] in ("watching", "previewed")
+      and _ei_rows["sane"]["expired_reason"] is None)
+check("EI5 관찰집계 expired_entry_insane 에 만료분(insane+mask) 2건 누적",
+      sum(r["expired_entry_insane"] for r in _ei_stats) == 2)
+# ── 비대칭 기준 회귀 (2026-09-13 실측 경계) ────────────────────────────
+check("EI6 하단 이탈 -56.7%(실측 NEAR)는 만료되지 않는다 — 대칭 60%면 깨진다",
+      _ei_rows["near"]["status"] in ("watching", "previewed")
+      and _ei_rows["near"]["expired_reason"] is None)
+check("EI7 상단 이탈 +2552%(실측 MASK)는 entry_insane 으로 만료된다",
+      _ei_rows["mask"]["status"] == "expired"
+      and _ei_rows["mask"]["expired_reason"] == "entry_insane")
+
+settings.SETTINGS["db_path"] = _ei_prev_db
+if os.path.exists(_EI_DB):
+    os.remove(_EI_DB)
+if os.path.exists(_ei_ledger):
+    os.remove(_ei_ledger)
+
 print()
 print("── 본알림 실제 렌더링 ──")
 print(touch_msg)

@@ -216,6 +216,41 @@ def _prune_tv_block_alert_meta(conn, day: str, keep_days: int) -> int:
     return _prune_daily_counter_meta_by_prefix(conn, _TV_BLOCK_ALERT_KEY_PREFIX, day, keep_days)
 
 
+# ── 진입가 sanity 용 현재가 폴백 (2026-09-13 B1) ────────────────────────
+# 왜 필요한가: 08-17 부터 collector.coingecko.build_universe 는 업비트 KRW 전 종목을
+# 유니버스로 쓰고, CoinGecko 상위 N 밖 코인은 price_usd=None 으로 편입한다. 그런데
+# collector.extractor._sanity 는 "현재가를 모르면 통과"(판단보류)라서, 그 코인들은
+# 진입가 sanity 관문이 통째로 사라진 상태였다. 실제 사고: Roddy01SIGNALSPROVIDER
+# 채널의 "Entry point: yellow … 👉Leverage … 12.5" 글에서 레버리지 배수 12.5 가
+# GMT/MOODENG/MASK/KNC 의 진입가로 저장돼 즉시 터치 판정 → 오알림 5건.
+# 해법: CoinGecko 달러가가 없으면 업비트 KRW 현재가 ÷ USDT-KRW 환율로 USD 현재가를
+# 만들어 sanity 에 쓴다. 환율·시세는 수집 루프 전체에서 이미 1회만 조회하므로
+# (동명이인 가드가 쓰는 그 조회) 코인당 추가 API 호출은 0 이다.
+def _usd_price_fallback(upbit_krw_price, usdt_krw):
+    """업비트 KRW 현재가 ÷ USDT-KRW 환율 → USD 현재가 추정. 불가하면 None.
+
+    None 을 돌려주면 호출부는 종전 동작(sanity 판단보류=통과)으로 되돌아간다 —
+    조회 실패가 수집 자체를 막아선 안 되기 때문(fail-open). 그 경우 호출부가
+    logger.warning 을 남긴다."""
+    try:
+        if not upbit_krw_price or not usdt_krw:
+            return None
+        if upbit_krw_price <= 0 or usdt_krw <= 0:
+            return None
+        return upbit_krw_price / usdt_krw
+    except TypeError:
+        return None
+
+
+def _sanity_price(coin: dict):
+    """이 코인의 진입가 sanity 기준가(USD). CoinGecko 달러가 우선, 없으면 폴백.
+
+    폴백 키(price_usd_fallback)는 main() 이 유니버스에 심는다. 등급 산정에 쓰는
+    current_price 는 일부러 손대지 않는다 — 배점표의 의미(CoinGecko 기준가)를
+    바꾸지 않고 sanity 관문만 되살리는 것이 이 수리의 범위다."""
+    return coin.get("price_usd") or coin.get("price_usd_fallback")
+
+
 # ── 글 1건 → 레벨 저장 (입력원 공통 경로) ──────────────────────────────
 def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: float,
                  source: str = "tradingview", lookup_followers: bool = True):
@@ -233,7 +268,8 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
     """
     try:
         text = f"{idea['title']}\n{idea['description']}"
-        setup = parse_setup(text, current_price=coin.get("price_usd"))
+        # sanity 기준가는 CoinGecko 달러가 → 업비트 폴백가 순 (2026-09-13 B1).
+        setup = parse_setup(text, current_price=_sanity_price(coin))
         if not setup or not setup.get("entry"):
             return False, False
         stats_row = author_stats.get(idea.get("author") or "", {})
@@ -408,6 +444,11 @@ def main() -> int:
     # 다른 코인 B 가 묶이면 엉뚱한 자산에 레벨을 붙인다 — CG 달러가 × 환율 vs 업비트
     # 원화가가 ±40% 넘게 어긋나면 다른 자산으로 보고 이번 주기 제외.
     # (필터 이후에 두어 --symbols 스모크 시 전체 마켓 조회 낭비를 막음, 감사 #7)
+    #
+    # 2026-09-13 B1: 같은 조회(시세 1콜 + 환율)로 '진입가 sanity 폴백가'도 함께
+    # 심는다. 새 API 호출은 0 — 동명이인 가드가 이미 유니버스 전 티커를 한 번에
+    # 받아오므로, 그 결과를 재사용해 price_usd 가 None 인 코인에 USD 환산가를
+    # 붙여둘 뿐이다. 여기서 한 번만 계산하고 수집 루프는 코인 dict 만 읽는다.
     try:
         from monitor import upbit as upbit_api
         tickers = [u["ticker"] for u in universe] + ["KRW-USDT"]
@@ -415,6 +456,7 @@ def main() -> int:
         usdt_krw = krw_prices.get("KRW-USDT")
         if usdt_krw:
             kept = []
+            n_fallback = n_no_price = 0
             for u in universe:
                 upbit_p, cg_p = krw_prices.get(u["ticker"]), u.get("price_usd")
                 if upbit_p and cg_p:
@@ -423,10 +465,26 @@ def main() -> int:
                         logger.warning("동명이인 의심 제외: %s (업비트 %.6g원 vs 예상 %.6g원)",
                                        u["symbol"], upbit_p, expected)
                         continue
+                if not cg_p:
+                    fb = _usd_price_fallback(upbit_p, usdt_krw)
+                    if fb:
+                        u["price_usd_fallback"] = fb
+                        n_fallback += 1
+                    else:
+                        n_no_price += 1
                 kept.append(u)
             universe = kept
+            if n_fallback or n_no_price:
+                logger.info("[sanity] CoinGecko 달러가 없는 %d개 중 %d개에 업비트 폴백가 적용",
+                            n_fallback + n_no_price, n_fallback)
+            if n_no_price:
+                # 시세를 못 얻은 코인은 종전 동작(sanity 판단보류=통과)으로 남는다.
+                logger.warning("[sanity] 현재가 미확보 %d개 - 진입가 sanity 판단보류(종전 동작)",
+                               n_no_price)
+        else:
+            logger.warning("[sanity] USDT-KRW 환율 조회 실패 - 진입가 sanity 폴백 생략(종전 동작)")
     except Exception as e:  # noqa: BLE001 - 가드 실패가 수집을 막으면 안 됨
-        logger.warning("동명이인 가드 생략(오류): %s", e)
+        logger.warning("동명이인 가드/진입가 sanity 폴백 생략(오류): %s", e)
 
     author_stats = watcher_stats.load_author_stats()
 
