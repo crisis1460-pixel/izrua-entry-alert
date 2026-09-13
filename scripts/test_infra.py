@@ -882,6 +882,30 @@ _tg2.send = _orig_send
 
 # ─── 결과 ────────────────────────────────────────────────────────────
 
+# ─── 회차 정지 경고 원인 표시 (2026-09-13 러너 대기 사고) ───────────────────
+
+from monitor import price_check as _pc_rq
+from notify import telegram as _tg_rq
+
+with patch.dict(os.environ, {"RUNNER_QUEUE_WAIT_MIN": ""}):
+    check("RQ1: env 비어있음 → None", _pc_rq._runner_queue_wait_min() is None)
+with patch.dict(os.environ, {"RUNNER_QUEUE_WAIT_MIN": "287"}):
+    check("RQ2: env '287' → 287.0", _pc_rq._runner_queue_wait_min() == 287.0)
+with patch.dict(os.environ, {"RUNNER_QUEUE_WAIT_MIN": "abc"}):
+    check("RQ3: env 이상값 → None", _pc_rq._runner_queue_wait_min() is None)
+with patch.dict(os.environ, {"RUNNER_QUEUE_WAIT_MIN": "-5"}):
+    check("RQ4: env 음수 → None", _pc_rq._runner_queue_wait_min() is None)
+
+_rq_old = _tg_rq.render_price_check_gap_alert(291, 120)
+check("RQ5: 대기 미측정 → 종전 문구(cron-job.org 의심)",
+      "cron-job.org 주 경로" in _rq_old and "러너 배정 대기" not in _rq_old)
+_rq_new = _tg_rq.render_price_check_gap_alert(291, 120, queue_wait_min=287)
+check("RQ6: 대기 287분 → GitHub 러너 지연 원인 문구, cron-job.org 의심 문구 없음",
+      "러너 배정 대기 287분" in _rq_new and "githubstatus.com" in _rq_new
+      and "cron-job.org 주 경로" not in _rq_new)
+_rq_small = _tg_rq.render_price_check_gap_alert(291, 120, queue_wait_min=3)
+check("RQ7: 대기 3분(정상 범위) → 종전 문구 유지", "cron-job.org 주 경로" in _rq_small)
+
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")
 print(f"{'='*40}")

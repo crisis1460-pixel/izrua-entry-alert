@@ -437,6 +437,16 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | **요약 상한 250→500자** | 사용자 요청 "원문 내용을 더 추가" — `news_alert_summary_max_chars: 500` 설정 신설 (config/settings.py). MyMemory 번역 폴백의 500자 제한이 사실상 상한이라 그 이상 금지. 문장 경계 클리핑 로직은 유지 |
 | **위치** | `notify/news_brief.py` — `maybe_send_news_brief()` 결합부 + `_summary()` |
 
+## 회차 정지 경고에 원인(러너 대기) 표시 (2026-09-13)
+
+| 항목 | 설명 |
+|------|------|
+| **사고** | 09-13 KST 13:36 회차가 GitHub 러너를 4시간 47분 배정받지 못함(당일 GitHub Actions 공식 장애). cron-job.org 는 4분마다 정상 디스패치했으나 concurrency 그룹 대기열의 후속 73회차가 서로 취소됨 → 공백 291분. 코드·트리거 결함 아님 |
+| **문제** | 살아난 회차의 `[가격체크 회차 정지 경고]` 문구가 "cron-job.org·schedule 모두 실패했을 수 있음"으로 원인을 잘못 지목 |
+| **수정** | `price-check.yml` 에 '러너 배정 대기 시간 측정' 스텝 신설(`run_started_at` 과 실행 시각 차이 → `RUNNER_QUEUE_WAIT_MIN` env, `permissions.actions: read` 추가). `price_check._runner_queue_wait_min()` 이 읽어 `telegram.render_price_check_gap_alert(queue_wait_min=)` 에 전달. 대기 ≥10분이면 "원인: GitHub 러너 배정 대기 N분 - GitHub 측 지연" 문구, 아니면 종전 문구 |
+| **회귀** | test_infra RQ1~RQ7 (env 파싱·문구 분기·발송 경로) |
+| **참고** | cron-job.org 실제 주기는 4분(yml 주석의 2분과 다름, 사용자 조정 추정). GitHub 대기열 규칙상 '대기 중' 회차는 새 회차가 오면 취소되므로 러너 배정이 막히면 schedule 백업도 같은 그룹에서 취소됨 — 레포 안에서 막을 방법은 없고 원인 표시만 가능 |
+
 ## 뉴스 오탐 필터 (2026-08-18)
 
 | 항목 | 설명 |

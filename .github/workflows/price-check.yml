@@ -41,6 +41,7 @@ on:
 
 permissions:
   contents: write  # data/ 상태 커밋 백
+  actions: read    # 아래 '러너 배정 대기 시간 측정' 스텝이 자기 run 의 run_started_at 을 읽는다
 
 # 단일 라이터이므로 그룹도 하나. cancel-in-progress: false 가 핵심이다 —
 # true 였다면 2분마다 오는 트리거가 진행 중인 5~8분짜리 수집 회차를 중도 취소해,
@@ -117,6 +118,33 @@ jobs:
             fi
           else
             echo "::warning::fetch 실패 - 체크아웃 시점 상태로 진행"
+          fi
+
+      # ── 러너 배정 대기 측정 (2026-09-13 291분 정지 사고 수리) ─────────────────
+      # 그날 cron-job.org 는 4분마다 정상 디스패치했고 코드도 멀쩡했다. 04:36Z 회차가
+      # GitHub 러너를 4시간 47분 동안 배정받지 못한 채 대기열 머리에 앉아 있었고(같은 날
+      # GitHub Actions 공식 장애), concurrency 그룹의 후속 회차 73개는 서로를 취소했다
+      # (cancel-in-progress:false 여도 '대기 중'인 회차는 새 회차가 오면 취소된다 - GH
+      # 규칙). 그런데 살아난 회차가 보낸 정지 경고는 "cron-job.org 와 schedule 이 모두
+      # 실패했을 수 있다"고 엉뚱한 곳을 지목했다. 회차 스스로는 대기열에 얼마나 있었는지
+      # 알 수 없으므로 여기서 run_started_at(디스패치 시각)과 지금의 차이를 재서 env 로
+      # 넘긴다 - 경고 문구가 원인을 가려 말한다(monitor/price_check.py
+      # _runner_queue_wait_min). 실패해도 회차는 진행한다(값이 없으면 종전 문구).
+      - name: 러너 배정 대기 시간 측정
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STARTED="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at' 2>/dev/null || true)"
+          if [ -n "$STARTED" ]; then
+            WAIT_MIN=$(( ( $(date -u +%s) - $(date -u -d "$STARTED" +%s) ) / 60 ))
+            echo "RUNNER_QUEUE_WAIT_MIN=$WAIT_MIN" >> "$GITHUB_ENV"
+            echo "러너 배정 대기: ${WAIT_MIN}분 (디스패치 $STARTED)"
+            if [ "$WAIT_MIN" -ge 10 ]; then
+              echo "::warning::러너 배정 대기 ${WAIT_MIN}분 - GitHub Actions 측 지연"
+            fi
+          else
+            echo "::warning::run_started_at 조회 실패 - 대기 시간 미측정"
           fi
 
       - name: 회차 실행 (가격체크 + 조건부 수집·주간리포트)

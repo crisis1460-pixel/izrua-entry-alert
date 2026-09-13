@@ -1410,15 +1410,34 @@ def render_news_brief(coin_symbol: str, channel: str, summary: str,
     return "\n".join(lines)
 
 
-def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float) -> str:
+# 러너 배정 대기가 이 이상이면 정지의 원인을 'GitHub 측 지연'으로 지목한다. 정상
+# 회차의 대기는 0~1분(체크아웃·pip 포함)이라 10분이면 이미 비정상이고, 트리거 유실과는
+# 구분된다(트리거가 안 왔으면 대기 자체가 없다).
+_QUEUE_WAIT_CAUSE_MIN = 10.0
+
+
+def render_price_check_gap_alert(gap_minutes: float, threshold_minutes: float,
+                                 queue_wait_min: Optional[float] = None) -> str:
     """직전 회차와의 공백이 임계를 넘었을 때의 경고. gap_minutes: 감지된 공백(분),
-    threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes)."""
+    threshold_minutes: 임계값(분, config.settings.price_check_gap_alert_minutes),
+    queue_wait_min: 이 회차가 GitHub 러너를 배정받기까지 대기열에 있던 시간(분,
+    price-check.yml 이 측정해 env 로 전달; 로컬/미측정이면 None).
+
+    2026-09-13 291분 정지: cron-job.org 는 4분마다 정상 디스패치했는데 GitHub 가
+    러너를 4시간 47분 배정하지 않았다(당일 GitHub Actions 공식 장애). 종전 문구는
+    이 경우에도 "cron-job.org 와 schedule 이 모두 실패했을 수 있다"고 엉뚱한 곳을
+    지목했다 - 대기 시간이 있으면 원인을 가려 말한다."""
+    if queue_wait_min is not None and queue_wait_min >= _QUEUE_WAIT_CAUSE_MIN:
+        cause = (f"원인: GitHub 러너 배정 대기 {queue_wait_min:.0f}분 - 트리거(cron-job.org)는 "
+                 "도달했고 GitHub Actions 측 지연입니다. githubstatus.com 을 확인하세요.")
+    else:
+        cause = ("cron-job.org 주 경로와 GitHub schedule 백업이 모두 실패했을 수 있습니다 - "
+                 "Actions 실행 이력을 확인하세요.")
     lines = [
         _SEP,
         "🚨 <b>[가격체크 회차 정지 경고]</b>",
         f"직전 회차 이후 공백 {gap_minutes:.0f}분 (임계 {threshold_minutes:.0f}분)",
-        "cron-job.org 주 경로와 GitHub schedule 백업이 모두 실패했을 수 있습니다 - "
-        "Actions 실행 이력을 확인하세요.",
+        cause,
         _SEP,
     ]
     return "\n".join(lines)

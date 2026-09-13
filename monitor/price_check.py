@@ -16,6 +16,7 @@
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -152,6 +153,20 @@ def _check_collect_silence(conn, now: float, cfg_get) -> bool:
 # GH schedule 백업이 있어도 공백이 최대 수십 분까지는 정상 범위다(설정값
 # price_check_gap_alert_minutes 주석 참고) - 임계값을 그 위로 넉넉히 잡아 "백업만으로
 # 도는 정상 상황"을 오탐하지 않는다. 하루 1회만 경보(다른 감시들과 동일 게이트 패턴).
+def _runner_queue_wait_min() -> Optional[float]:
+    """price-check.yml 이 잰 '러너 배정 대기'(분). 회차는 자기가 대기열에 얼마나 앉아
+    있었는지 알 수 없어 워크플로가 run_started_at 과 실행 시각의 차이를 env 로 넘긴다.
+    로컬 실행·측정 실패·이상값이면 None → 경고 문구는 종전 그대로."""
+    raw = os.getenv("RUNNER_QUEUE_WAIT_MIN", "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except ValueError:
+        return None
+    return v if v >= 0 else None
+
+
 def _check_price_check_gap(conn, now: float, cfg_get) -> bool:
     # 2026-07-27 M-A1: 이 감시가 보는 건 **하트비트**(last_cycle_at)다 - "회차가
     # 깨어났는가"를 묻는 것이지 "스캔에 성공했는가"가 아니다(후자는 last_check_at).
@@ -193,10 +208,12 @@ def _check_price_check_gap(conn, now: float, cfg_get) -> bool:
     # (수집급감/가격체크공백/해시체인)이 이제 전부 동일 순서다.
     db.set_meta(conn, "price_check_gap_warned_date", day)
     conn.commit()
-    text = telegram.render_price_check_gap_alert(gap_min, threshold)
+    queue_wait = _runner_queue_wait_min()
+    text = telegram.render_price_check_gap_alert(gap_min, threshold, queue_wait_min=queue_wait)
     if telegram.send(text):
-        logger.warning("[체크] 가격체크 공백 경고 발송 (직전 공백 %.1f분 > 임계 %.1f분)",
-                       gap_min, threshold)
+        logger.warning("[체크] 가격체크 공백 경고 발송 (직전 공백 %.1f분 > 임계 %.1f분, 러너 대기 %s)",
+                       gap_min, threshold,
+                       "미측정" if queue_wait is None else f"{queue_wait:.0f}분")
         return True
     return False
 
