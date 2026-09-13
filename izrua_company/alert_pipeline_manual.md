@@ -1,6 +1,6 @@
 # 엔트리 알림 파이프라인 매뉴얼
 
-> 마지막 업데이트: 2026-08-18 (워쳐 SL률 연동 + VS 테스트 임계값 갱신)  
+> 마지막 업데이트: 2026-09-13 (알림량 A안 — 실시간은 진입만, TP·뉴스는 브리핑)  
 > 목적: 코인 하나가 텔레그램 알림으로 도달하기까지 거치는 모든 관문 정리  
 > 대상 독자: 개발·운영 내부용
 
@@ -159,13 +159,19 @@
 
 ### 게이트 1: 최소 등급
 ```
-등급 ≥ D    (alert_min_grade = "D", 2026-08-17 사용자 결정: C→D 완화. 실측 승률 D 45% > C 36%)
+등급 ≥ C    (alert_min_grade = "C", 2026-09-13 사용자 결정 "A안": D→C 상향 원복.
+            근거 = v5 이후 28일 실측 최하위 D 터치 41건 승률 22.7% · TP1 도달 0건)
 ```
 터치 시점에 현재가로 **재채점** 후 판정 (가격 근접도 점수 변동).
 2026-08-15: 재채점된 `touch_grade`/`touch_score` 를 DB 에 저장(첫 기록 우선,
 발송·억제 무관 전 터치) — 이전엔 수집 시점 등급만 남아 캘리브레이션 축이
-어긋났음(터치까지 등급 변동 35%). 소리 게이트 분리: `alert_sound_min_grade="B"`
-— B 미만 터치는 무음 발송(disable_notification, 내용·양식 동일).
+어긋났음(터치까지 등급 변동 35%). 소리 게이트 분리: `alert_sound_min_grade="C"`
+— 이 등급 미만 터치는 무음 발송(disable_notification, 내용·양식 동일).
+**2026-09-13 A안**: `"B"` → `"C"` (사용자 결정 "진입 알림 전부 소리"). 발송 게이트
+(`alert_min_grade`)도 같은 날 `"C"` 로 올라가 **두 값이 같아졌으므로 통과한 알림은
+전부 유음**이다. 종전엔 82.6% 가 무음(소리 나는 건 하루 1.2건)이었는데, 총량을
+13.4→4.5건/일로 줄인 상태에서 무음까지 유지하면 놓칠 위험이 더 크다는 판단.
+되돌리기는 `"B"`. 회귀: `test_touch_recording` S1~S3(S3 이 가역성을 못 박음).
 
 ### 게이트 2: 타임프레임 필터
 ```
@@ -330,6 +336,8 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 기능 | 설정 키 | 현재값 |
 |------|---------|--------|
 | 예고 알림 (진입 전 접근) | `preview_alert_enabled` | `False` |
+| **TP(목표 도달) 알림** (2026-09-13 A안) | `tp_alert_send_enabled` | `False` — 발송만 중단. CAS 전진·`resolve_outcome`·`record_alert(kind='tpN')`·원장 전부 유지, 아침 브리핑 🏁 블록으로 전달 |
+| **뉴스·시황 알림** (2026-09-13 A안) | `news_alert_send_enabled` | `False` — 발송만 중단. 상한·쿨다운·필터·요약·번역 유지 + `news_digest_queue` 적재, 아침 브리핑 📰 블록으로 전달 |
 | 섹터 집중도 경고 | `risk_checks.check_sector_concentration()` | placeholder (카테고리 데이터 미축적) |
 | 토큰 언락 경고 (2026-09-13 폐기) | `token_unlock_enabled` | `False` — DeFiLlama 유료화(404/402), 무료 대체 없음. 컬럼·모듈 존치 |
 
@@ -394,7 +402,7 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 | 항목 | 이전 | 현재 | 위치 |
 |------|------|------|------|
-| `alert_min_grade` | "C" | **"D"** | config/settings.py |
+| `alert_min_grade` | "C" | **"D"** | config/settings.py — ⚠️ 2026-09-13 A안에서 "C" 로 재상향(아래 절) |
 | `alert_max_per_coin_per_day` | 3 | **5** | config/settings.py |
 | `volume_spike_multiplier` | 5.0 | **3.0** | config/settings.py |
 | `volume_spike_min_krw_60m` | 200_000_000 | **100_000_000** | config/settings.py |
@@ -635,3 +643,140 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 증상 | 한 달째 `touch_token_unlock_pct` 결측률 **100%**, 회차마다 죽은 HTTP 호출만 발생 |
 | 조치 | `settings.token_unlock_enabled` → `False`(사유 주석 기록). `price_check._unlock_data()` 에 스위치 게이트 추가 — 종전엔 설정과 무관하게 호출돼 스위치가 사문화 상태였다. OFF 면 `None` 반환(=조회 실패와 동일 취급)이라 하류 분기 무변동 |
 | 유지 | `levels.touch_token_unlock_pct` 컬럼·`daily_stats.token_unlock_warned`·`monitor/token_events.py` 모두 **존치**(과거 데이터 호환). 무료 대체가 생기면 설정 한 줄 `True` 로 복구 |
+
+## 알림량 A안 — 실시간은 진입만, TP·뉴스는 브리핑 (2026-09-13)
+
+**배경.** 사용자(1인 스윙 트레이더) 요청 = 하루 5건 이하. v5 이후 28일 실측:
+진입가 터치 4.9 + TP 적중 3.5 + 뉴스 5.0(28일 연속 상한 소진) + 모닝 브리핑 1.0 =
+**14.4건/일**.
+
+**채택안(A안).** 실시간 알림은 **진입가 터치만** 남기고, TP 적중·뉴스는 다음 날
+아침 브리핑 1통에 요약한다. 예상 = 3.5(진입, 등급 게이트 상향분 반영) + 1(브리핑)
+= **4.5건/일**.
+
+**핵심 원칙.** "끄는" 게 아니라 **"발송만 끄고 데이터는 계속 쌓는다"** —
+예고 알림을 끌 때 쓴 패턴(`preview_alert_enabled=False`: 발송만 중단, 상태 전이·
+집계 유지)과 동일. 전부 settings 스위치 하나로 원복 가능.
+
+### 변경 3건
+
+| # | 변경 | 설정 키 | 이전 → 현재 |
+|---|------|---------|-------------|
+| 1 | 등급 게이트 상향 | `alert_min_grade` | `"D"` → **`"C"`** |
+| 2 | TP 알림 발송 중단 | `tp_alert_send_enabled` | (신설) → **`False`** |
+| 3 | 뉴스 알림 발송 중단 | `news_alert_send_enabled` | (신설) → **`False`** |
+| 3-b | 뉴스 채널당 상한 | `news_alert_max_per_channel_per_day` | `3` → **`2`** |
+| 4 | 진입 알림 전부 유음 | `alert_sound_min_grade` | `"B"` → **`"C"`** |
+
+#### 4. 소리 — 통과한 알림은 전부 유음
+사용자 결정(2026-09-13 질문카드). 종전엔 **82.6% 가 무음**이라 소리 나는 건 하루
+1.2건뿐이었다. 총량을 13.4→4.5건/일로 줄인 상태에서 무음까지 유지하면 "적게 오는데
+그마저 조용해서 놓치는" 실패 모드가 생긴다. 발송 게이트와 유음 기준을 같은 `"C"` 로
+맞춰 **통과 = 유음**으로 단순화했다. 노이즈 차단은 이미 게이트(1번)가 담당한다.
+되돌리기 `"B"`. 회귀 `test_touch_recording` S1~S3.
+
+#### 1. 등급 게이트 D → C
+근거(`research_2026-09-13_db_analysis.md`): 최하위 D 터치 **41건 · 승률 22.7% ·
+TP1 도달 0건**. 도달이 한 건도 없는 구간이라 노이즈만 잘린다. C 이상은 그대로
+통과하므로 상위 등급 표본은 무손상. 되돌리기 = 이 한 줄.
+
+#### 2. TP 적중 — 발송만 중단, 브리핑 흡수
+`monitor/price_check._tp_dispatch(text, urgency, cfg_get) -> (성공여부, sent플래그)`
+가 단일 분기점. 스위치 OFF 면 `telegram.send` 만 생략하고 **`(True, 0)`** 을 돌린다.
+
+> ⚠️ **OFF 는 반드시 "발송 성공"으로 취급해야 한다.** 호출부는 발송 실패 시
+> `advance_tp_alert_idx` 롤백 + `set_pending_tp` 로 다음 회차 재시도를 걸어둔다.
+> OFF 를 '실패'로 흘리면 매 회차 재시도하는 무한 루프에 빠지고, `pending_tp_kind`
+> 가 영구 잔류해 stale-force-hit 방어(2026-08-03 감사 수정)까지 흔든다.
+
+OFF 여도 그대로 수행되는 것: `advance_tp_alert_idx` CAS 전진 · `resolve_outcome` ·
+`record_mfe_mae` · `db.record_alert(kind='tpN')` · `alert_ledger.append` ·
+클러스터/self-resend 중복 방어. 즉 `alerts_log` 에 `kind='tp1'…` 이 계속 남는다.
+
+#### 3. 뉴스 — 발송 중단 + 대기열 저장, 브리핑 흡수
+`notify/news_brief.maybe_send_news_brief` 는 상한·쿨다운·오탐 필터(모호 심볼·
+프로모션·결과 리캡)·요약·번역까지 **종전대로** 수행한 뒤, 스위치 OFF 면
+`telegram.send` 대신 `news_digest_queue` 에 적재하고 반환값 **`"queued"`**.
+`db.record_alert(kind='news')` 도 종전대로 남겨 상한 카운트를 유지한다 — 안 남기면
+큐가 상한 위로 무한 증식한다.
+채널당 상한 3→2 는 편중 완화용(실측 wolfoftrading 46% · cryptosignals0rg 35%).
+
+### DB 변경 (storage/db.py)
+
+| 대상 | 변경 | 마이그레이션 |
+|------|------|--------------|
+| `alerts_log` | `sent INTEGER DEFAULT 1` 컬럼 추가 — 1=실제 발송, 0=기록만(스위치 OFF) | `_migrate` ALTER (기존 행은 DEFAULT 1 = 전부 실제 발송) |
+| `news_digest_queue` | 신규 테이블 (symbol, channel, summary, url, created_at, day_kst, consumed) + `idx_news_queue_day` | `SCHEMA` CREATE IF NOT EXISTS |
+
+`sent` 는 **발송량 실측 전용**이다 — 상한·중복 방어·M-2 게이트는 종전대로 `sent`
+를 보지 않는다("기록 = 사건 발생"이 계약).
+큐 보존은 7일 (`db.prune_news_digest_queue`, `price_check` 정리 블록에서 매 회차).
+
+### 모닝 브리핑 흡수 블록 (notify/morning_brief.py)
+
+```
+━━━━━━━━━━━━━━━━━
+🎯 어제 터치 알림 3건              ← 어제 일어난 일(터치 → 목표 도달)을 먼저 묶고,
+🏁 <b>어제 목표 도달</b> 2건        ← 최대 8줄, 초과 시 "외 N건"
+   AUCTION TP2/3 (진입 +3.2%)
+   FIL TP1/8 (진입 +5.3%)
+⏳ 대기 레벨 30개 (22개 코인)      ← 앞으로 볼 것을 뒤에 둔다
+━━━━━━━━━━━━━━━━━
+📰 <b>어제의 뉴스</b>               ← 최대 5건, 초과 시 헤더에 "(외 N건)"
+   <b>JUP</b> · @cryptosignals0rg
+   주피터(JUP)의 주간 거래대금이 …   ← 요약 첫 문장 80자 컷, 원문 링크 생략
+```
+
+| 항목 | 규칙 |
+|------|------|
+| 🏁 데이터원 | `db.get_tp_hits_by_day(conn, 어제)` — `alerts_log kind LIKE 'tp%'` → `levels` 조인. 같은 레벨의 TP1·TP2 는 **최고 단계 1행**으로 접는다 |
+| 🏁 코인당 1행 (2026-09-13 CTO 검토) | 같은 코인의 **클러스터 형제 레벨**이 각각 적중하면 원본은 2행이 된다(실측: `AUCTION TP2/3` + `AUCTION TP1/3`). 진입 알림 자체가 클러스터당 1회만 나가므로(`cluster_band_pct` 병합) 사용자가 본 사건은 하나다 — 표시 단위를 알림 단위에 맞춰 **코인별 최고 단계만** 남기고 진입 대비 %도 그 단계 기준으로 낸다. 헤더 건수도 접은 뒤 기준 |
+| 🏁 순서 | `🎯 터치 → 🏁 목표 도달 → ⏳ 대기 레벨` — 과거(어제 일어난 일)를 묶고 미래(앞으로 볼 것)를 뒤에 둔다 |
+| 🏁 진입 대비 % | `(tps_usd[best-1] − entry_usd) / entry_usd × 100` — `render_tp_partial_alert` 와 같은 식(비율이라 환율 불변) |
+| 🏁 상한 | 본문 8줄, 초과 시 `외 N건` |
+| 📰 데이터원 | `db.get_news_digest(conn, 어제, limit=5)` — 오래된 순(실시간 발송 순서 재현) |
+| 📰 상한 | 5건(= 뉴스 글로벌 상한과 동수), 요약 첫 문장 80자 |
+| 📰 소비 | **발송 성공 후에만** `consume_news_digest` — `build_brief(…, consumed_ids)` 가 id 를 채우고 `maybe_send_brief` 가 찍는다. 발송 실패 시 다음 회차가 같은 뉴스를 다시 싣는다(유실 방지) |
+| 빈 블록 | 데이터 0건이면 블록 통째 생략 |
+| 길이 방어 | `_fit_telegram` — 3,900자 초과 시 **뉴스 줄부터** 제거(잘려 나간 만큼 `consumed_ids` 도 취소). 뉴스를 먼저 줄이는 이유: 원문이 채널에 그대로 남아 손실이 가장 작다 |
+
+**샘플**: `izrua_company/sample_brief_2026-09-13.txt` (프로덕션 DB 사본으로 조립,
+838자). ⚠️ 양식은 **사용자 확정 전 배포 금지**.
+
+### 회귀 테스트
+
+| 파일 | 블록 | 검증 |
+|------|------|------|
+| `scripts/test_price_logic.py` | **TPOFF1~7** | 스위치 OFF 시 발송 0 · `alerts_log(kind='tpN', sent=0)` 기록 유지 · CAS 전진 · `pending_tp` 미설정(**재시도 루프 미진입** — 다음 회차 중복 기록 0) · 원장 기록 · `resolve_outcome` 정상 종결 · `get_tp_hits_by_day` 접기 |
+| `scripts/test_infra.py` | **NBQ1~4** | 스위치 OFF 시 발송 0 · 반환 `"queued"` · 큐 적재 · `record_alert(sent=0)` · 큐 경로에서도 코인 24h 쿨다운 유지 |
+| `scripts/test_infra.py` | **MB1~8** | 빈 큐/빈 적중 → 블록 생략 · 뉴스 5건 컷 + "외 N건" · consumed 처리 · TP 최고 단계 접기 · 진입 대비 % · `level_ids` 비정수 행(news) 제외 · 4096자 방어 |
+| `scripts/test_infra.py` | **GG1** | `alert_min_grade == "C"` · D 탈락 · C~S 통과 |
+
+기존 회귀(`T35`/`SA*`/`SB*`, `NB1~NB10`)는 예고 스위치와 같은 방식으로 파일 머리에서
+스위치를 `True` 로 되돌려 **종전 동작 그대로임**을 계속 증명한다. `NB3/NB4` 는
+채널 상한값을 설정에서 읽어 기대치를 맞춘다(숫자 하드코딩 제거).
+
+### 되돌리기 카드
+
+| 증상 | 조치 |
+|------|------|
+| 알림이 너무 적다 / 놓친 셋업 | `alert_min_grade` → `"D"` |
+| TP 도달을 실시간으로 보고 싶다 | `tp_alert_send_enabled` → `True` (브리핑 🏁 블록은 그대로 — 이중 통지가 되므로 선택) |
+| 뉴스를 실시간으로 보고 싶다 | `news_alert_send_enabled` → `True` (큐 적재 중단, 즉시 종전 동작) |
+| 뉴스 채널 다양성 불필요 | `news_alert_max_per_channel_per_day` → `3` |
+| 소리가 너무 잦다 | `alert_sound_min_grade` → `"B"` (C 등급은 다시 무음) |
+
+---
+
+## short 시그널 수집 배제 (2026-09-13, Q3)
+
+| 항목 | 내용 |
+|------|------|
+| **결정** | 사용자 결정 = 배제. `collect_short_enabled: False` (기본값) |
+| **근거** | 전 기간 실측 `direction='short'` **119건(16.8%)** 이 수집·파싱·저장 비용을 다 치르면서 **터치 0건·알림 0건·outcome 전량 NULL**. 원인은 설계 의도 — `price_check` 가 `get_active_levels(conn, direction="long")` 로 롱만 감시하고, 사용자는 업비트 KRW 현물 스윙이라 공매도 자체가 불가. 게다가 같은 날 확인된 진입가 오염 레벨 4건(GMT·MOODENG·KNC·MASK, `entry_usd=12.5`)이 **전부 short** 로 남아 쓰레기 데이터 저장소 역할까지 했다 |
+| **구현** | `run_collect._ingest_idea()` 가 `parse_setup` 직후 `direction=="short"` 이면 팔로워 조회·등급 산정·DB 저장 **전에** 스킵. TradingView·텔레그램 두 입력원이 같은 함수를 타므로 한 곳만 고치면 된다 |
+| ⚠️ **반환 계약** | 스킵 시 `(True, False)` — 즉 `had_setup=True`. `(False, False)` 로 돌리면 텔레그램 루프의 `had_setup is False` 분기가 **유효한 매매 시그널을 뉴스 카드로 오분류해 발송**한다 |
+| **집계** | 스킵 건수는 `skip_counts` dict(선택 인자)로 누적해 수집 종료 로그에 `short 스킵 N건`. `_collect_telegram` 의 반환 튜플 자리수는 `test_resilience` 카드14 T5/T6 가 `== (a,b,c)` 로 직접 비교하므로 **건드리지 않았다** |
+| **기존 데이터** | 119건은 건드리지 않음(과거 데이터 불변 원칙) — 자연 만료 |
+| **되돌리기** | `collect_short_enabled` → `True` (코드 변경 불요) |
+| **회귀** | `test_extractor` SX1(False+short 미저장) · SX2(같은 조건 long 정상 저장) · SX3(True 복원 시 short 도 저장) |

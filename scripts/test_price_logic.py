@@ -33,6 +33,11 @@ settings.SETTINGS["announcement_alert_enabled"] = False
 # (True 면 기존 동작 그대로임의 증명이기도 하다)을 보존하고, False 동작은 전용
 # 블록(PV*)에서 검증한다.
 settings.SETTINGS["preview_alert_enabled"] = True
+# 2026-09-13 TP 발송 스위치(A안) — 운영 기본값이 False(TP 는 아침 브리핑으로
+# 흡수)가 됐지만 T35/SA*/SB* 회귀는 TP 알림 발송을 전제로 짜여 있다. 예고
+# 스위치와 같은 취급: 여기서 True 로 되돌려 기존 검증(= True 면 종전 동작
+# 그대로임의 증명)을 보존하고, False 동작은 전용 블록(TPOFF*)에서 검증한다.
+settings.SETTINGS["tp_alert_send_enabled"] = True
 # 2026-08-15 v5 사다리 감점 중립화 — 이 파일의 T1~T35 손계산(점수 절대값·억제
 # 카운터 연쇄)은 전부 v4 배점 기준으로 짜여 있고, 검증 대상은 파이프라인 역학
 # (클러스터·소급·상한·재발송·집계)이지 배점표가 아니다. v5 의 -3 이 켜지면 경계
@@ -3847,6 +3852,114 @@ if os.path.exists(_EI_DB):
     os.remove(_EI_DB)
 if os.path.exists(_ei_ledger):
     os.remove(_ei_ledger)
+
+# ── TPOFF1~6: TP 발송 스위치 OFF (2026-09-13 A안) ──────────────────────────
+# 계약: tp_alert_send_enabled=False 는 **telegram.send 만** 생략한다. 나머지
+# (advance_tp_alert_idx CAS · record_alert(kind='tpN') · alert_ledger.append ·
+# resolve_outcome · record_mfe_mae)는 전부 종전대로 수행하고, 무엇보다 "발송
+# 성공"과 동일하게 취급해 pending_tp 재시도 루프에 빠지지 않아야 한다.
+_TPO_DB = "cache/_test_tp_off.db"
+if os.path.exists(_TPO_DB):
+    os.remove(_TPO_DB)
+_tpo_ledger = _alert_ledger.ledger_path(_TPO_DB)
+if os.path.exists(_tpo_ledger):
+    os.remove(_tpo_ledger)
+db.init_db(_TPO_DB)
+_tpo_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _TPO_DB
+_tpo_now = time.time()
+
+# TPOFF-pre: 스위치 ON 상태로 본알림(터치)을 먼저 내보내 M-2 게이트를 통과시킨다.
+# 진입가 터치 알림은 이 스위치와 무관하므로 OFF 전환 후에도 계속 나가야 한다.
+with db.connect(_TPO_DB) as conn:
+    _tpo_lv = dict(coin_symbol="TPOF", ticker="KRW-TPOF", direction="long",
+                   entry_usd=100.0, sl_usd=94.0, tp_usd=108.0, rr=1.8,
+                   grade="B", score=60, author="TPO_auth",
+                   author_followers=50000, author_hit_rate=None,
+                   author_hit_count=None, author_whitelisted=False,
+                   mcap_rank=50, mcap_tier_icon="🥇",
+                   post_url="https://tv.com/tpoff", post_age_minutes=10,
+                   collected_at=_tpo_now - 3600,
+                   tps_usd=_json.dumps([108.0, 120.0]))
+    _tpo_lv["signal_key"] = db.make_signal_key("TPOF", 100.0, "TPO_auth", "tpoff")
+    db.upsert_level(conn, _tpo_lv)
+    _tpo_id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (_tpo_lv["signal_key"],)).fetchone()["id"]
+fake["price"] = 100.0 * USDT_KRW * 1.001
+fake["low"] = 99.0 * USDT_KRW
+fake["candles"] = fake["high"] = None
+_tpo_before = len(sent_messages)
+price_check.run_once(_tpo_now)
+check("TPOFF-pre 터치 본알림 1건 (M-2 게이트 통과 전제)",
+      len(sent_messages) == _tpo_before + 1)
+
+# 여기서부터 스위치 OFF (운영 기본값)
+settings.SETTINGS["tp_alert_send_enabled"] = False
+
+# TPOFF1~3: 중간 TP(TP1=108) 적중 — 발송 0, 기록·CAS 는 유지
+fake["price"] = 109.0 * USDT_KRW
+fake["candles"] = [(_tpo_now + 1, _tpo_now + 200, 109.0 * USDT_KRW, 100.0 * USDT_KRW)]
+fake["low"] = fake["high"] = None
+_tpo_before = len(sent_messages)
+price_check.run_once(_tpo_now + 240)
+with db.connect(_TPO_DB) as conn:
+    _tpo_row = conn.execute(
+        "SELECT tp_alert_idx, pending_tp_kind, status FROM levels WHERE id=?",
+        (_tpo_id,)).fetchone()
+    _tpo_log = conn.execute(
+        "SELECT kind, sent FROM alerts_log WHERE kind='tp1'").fetchall()
+check("TPOFF1 스위치 OFF — TP1 적중에 텔레그램 발송 0건",
+      len(sent_messages) == _tpo_before)
+check("TPOFF2 alerts_log 에 kind='tp1' 기록은 그대로 남고 sent=0 으로 구분",
+      len(_tpo_log) == 1 and _tpo_log[0]["sent"] == 0)
+check("TPOFF3 advance_tp_alert_idx CAS 전진 + pending_tp 미설정(재시도 루프 미진입)",
+      _tpo_row["tp_alert_idx"] == 1 and _tpo_row["pending_tp_kind"] is None)
+check("TPOFF3b 원장(alert_ledger)에도 tp1 기록 — 중복 방어선 무손상",
+      _alert_ledger.recent_exists(_TPO_DB, "TPOF", "tp1", [_tpo_id],
+                                  _tpo_now - 600))
+
+# TPOFF4: 같은 조건으로 한 회차 더 — 재시도 루프에 빠지지 않는다(중복 기록 없음)
+_tpo_before = len(sent_messages)
+price_check.run_once(_tpo_now + 480)
+with db.connect(_TPO_DB) as conn:
+    _tpo_n1 = conn.execute(
+        "SELECT COUNT(*) n FROM alerts_log WHERE kind='tp1'").fetchone()["n"]
+check("TPOFF4 다음 회차에도 발송 0 · tp1 중복 기록 없음(재시도 루프 미진입)",
+      len(sent_messages) == _tpo_before and _tpo_n1 == 1)
+
+# TPOFF5~6: 최종 TP(TP2=120) 적중 — 발송 0, 종결(resolve_outcome)은 정상 수행
+fake["price"] = 121.0 * USDT_KRW
+fake["candles"] = [(_tpo_now + 481, _tpo_now + 700,
+                    121.0 * USDT_KRW, 108.0 * USDT_KRW)]
+_tpo_before = len(sent_messages)
+price_check.run_once(_tpo_now + 720)
+with db.connect(_TPO_DB) as conn:
+    _tpo_fin = conn.execute(
+        "SELECT outcome, best_tp_hit, pending_tp_kind FROM levels WHERE id=?",
+        (_tpo_id,)).fetchone()
+    _tpo_log2 = conn.execute(
+        "SELECT sent FROM alerts_log WHERE kind='tp2'").fetchall()
+check("TPOFF5 최종 TP 도 발송 0 · kind='tp2' 기록 sent=0",
+      len(sent_messages) == _tpo_before
+      and len(_tpo_log2) == 1 and _tpo_log2[0]["sent"] == 0)
+check("TPOFF6 resolve_outcome 정상 종결(hit·best_tp_hit=2) · pending 잔류 없음",
+      _tpo_fin["outcome"] == "hit" and _tpo_fin["best_tp_hit"] == 2
+      and _tpo_fin["pending_tp_kind"] is None)
+
+# TPOFF7: 브리핑용 조회 — get_tp_hits_by_day 가 최고 단계 1행으로 접는다
+with db.connect(_TPO_DB) as conn:
+    _tpo_hits = db.get_tp_hits_by_day(conn, price_check._day_kst(_tpo_now + 720))
+check("TPOFF7 get_tp_hits_by_day — TP1·TP2 를 최고 단계(2) 1행으로 접음",
+      len(_tpo_hits) == 1 and _tpo_hits[0]["coin"] == "TPOF"
+      and _tpo_hits[0]["best_tp"] == 2 and _tpo_hits[0]["tp_total"] == 2)
+
+settings.SETTINGS["tp_alert_send_enabled"] = True   # 파일 기본(회귀 전제) 복구
+settings.SETTINGS["db_path"] = _tpo_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+if os.path.exists(_TPO_DB):
+    os.remove(_TPO_DB)
+if os.path.exists(_tpo_ledger):
+    os.remove(_tpo_ledger)
 
 print()
 print("── 본알림 실제 렌더링 ──")

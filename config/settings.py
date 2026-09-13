@@ -115,18 +115,38 @@ SETTINGS = {
                                           # 페이싱(5.0)보다 느슨하게 가지 않는다.
     "telegram_source_max_posts": 20,     # 채널당 채택 상한(1페이지가 20건 — 실측)
 
+    # short 시그널 수집 배제 (2026-09-13 사용자 결정, Q3)
+    # 근거: v5 이후 전 기간 실측 direction='short' 119건(전체 16.8%)이 수집·파싱·
+    # 저장 비용을 다 치르면서 터치 0건·알림 0건·outcome 전량 NULL — 사용자가
+    # 업비트 KRW 현물 스윙 트레이더라 애초에 공매도 불가(monitor/price_check.py 는
+    # long 레벨만 감시). 진입가 오염 레벨(GMT·MOODENG·KNC·MASK, entry_usd=12.5)도
+    # 전부 short 로 남아 쓰레기 데이터 저장소 역할까지 했다. False=신규 short 미저장
+    # (기존 119건은 과거 데이터 불변 원칙에 따라 건드리지 않음, 자연 만료).
+    "collect_short_enabled": False,
+
     # 뉴스·시황 요약 알림 (2026-08-17 사용자 요청) — 저자 채널의 매매 시그널이
     # 아닌 코인별 시황·뉴스 게시글(extractor.parse_setup 실패 + 심볼 매칭 성공)
     # 을 원문 요약으로 별도 알림. kind='news', 무음 발송, 매매 알림 상한과 별개.
     "news_alert_enabled": True,
     "news_alert_max_global_per_day": 5,     # 하루 총 상한 (매매 알림과 별도 카운트)
-    "news_alert_max_per_channel_per_day": 3,# 채널당 하루 상한
+    # 2026-09-13 A안: 3 → 2. 실측 28일 채널 편중(wolfoftrading 46% ·
+    # cryptosignals0rg 35%)이 브리핑 5줄을 두 채널로 도배했다. 글로벌 5/일은
+    # 그대로 두고 채널 상한만 조여 코인·채널 다양성을 확보한다.
+    "news_alert_max_per_channel_per_day": 2,# 채널당 하루 상한
     "news_alert_coin_cooldown_hours": 24,   # 코인당 재발송 최소 간격
     "news_alert_min_length": 60,            # 원문 60자 미만은 노이즈로 스킵
     "news_alert_summary_max_chars": 500,    # 요약 상한(자) — 2026-08-27 250→500 (원문
                                             # 더 담기). MyMemory 폴백 500자 제한 초과 금지
 
     "news_translate_enabled": True,          # 뉴스 요약 한글 번역 (Papago→MyMemory 폴백→원문)
+
+    # 뉴스 실시간 발송 스위치 (2026-09-13 사용자 결정 "A안" — 알림량 감축).
+    # preview_alert_enabled 와 같은 패턴: **발송만** 끄고 파이프라인은 전부 유지한다.
+    # OFF 여도 상한·쿨다운·오탐 필터·요약·번역·record_alert(kind='news') 는 종전대로
+    # 수행하고, 렌더 결과를 news_digest_queue 에 적재해 다음 날 아침 브리핑
+    # "📰 어제의 뉴스" 블록으로 요약 전달한다. True 로 되돌리면 즉시 실시간 재개
+    # (큐는 쌓이지 않고 종전처럼 바로 발송).
+    "news_alert_send_enabled": False,
 
     # 알림 트리거
     "preview_band_pct": 1.0,             # entry 대비 이 % 이내 접근 시 예고
@@ -136,6 +156,15 @@ SETTINGS = {
     # 관찰 집계(previews_total/preview_dwell)는 그대로 유지한다 — True 로 되돌리면
     # 즉시 재개되고 관찰 시계열도 끊기지 않는다.
     "preview_alert_enabled": False,
+    # TP(목표 도달) 알림 발송 스위치 (2026-09-13 사용자 결정 "A안" — 알림량 감축).
+    # preview_alert_enabled 와 동일 패턴: **발송만** 끈다. OFF 여도 tp_alert_idx
+    # CAS 전진·resolve_outcome·record_mfe_mae·record_alert(kind='tpN')·
+    # alert_ledger.append 는 전부 그대로 수행한다 — 적중 통계·중복 방어선 무손상.
+    # 구현 주의: OFF 는 "발송 성공"과 동일하게 취급해야 pending_tp 재시도 루프에
+    # 빠지지 않는다(monitor/price_check._tp_dispatch). 실제 발송 여부는
+    # alerts_log.sent(0/1) 로 구분 기록된다.
+    # 대체 전달: 다음 날 아침 브리핑 "🏁 어제 목표 도달" 블록.
+    "tp_alert_send_enabled": False,
     "cluster_band_pct": 1.0,             # 같은 코인 내 이 % 이내 entry 는 한 클러스터로 병합
     "level_expiry_hours": 168,           # 미터치 레벨 만료 (7일)
 
@@ -166,12 +195,24 @@ SETTINGS = {
     # C 36% (A 12% · S 9% 로 상위 등급 예측력이 오히려 낮음 — v5 산식 재점검
     # 대상). 억제된 D 18건/주 발송 → 하루 +2.5건 예상. Universe300 관찰 원칙과
     # 상충하지만 preview 완전 중단(07-31) 후 알림량 급감 대응.
-    "alert_min_grade": "D",              # 이 등급 이상만 알림 (수집은 전부 저장)
+    # 2026-09-13 사용자 결정 "A안": D → C 원복(상향). 근거(v5 이후 28일 실측,
+    # research_2026-09-13_db_analysis.md): 최하위 D 터치 41건의 승률 22.7%,
+    # **TP1 도달 0건** — 도달이 한 건도 없는 구간이라 노이즈만 잘려 나간다.
+    # C 이상은 그대로 통과하므로 상위 등급 표본은 무손상. D→C 로 되돌리는 건
+    # 이 한 줄 수정으로 즉시 가역.
+    "alert_min_grade": "C",              # 이 등급 이상만 알림 (수집은 전부 저장)
     # 유음(소리) 최소 등급 (2026-08-15 Tier1): 이 등급 이상 터치만 소리, 미만은
     # 무음 발송(disable_notification — 메시지 내용·양식 완전 동일, 소리만 제거).
     # 근거(research_2026-08-15_alert_quality.md): 푸시 2~5건/주에 사용자 46% 이탈,
-    # PagerDuty 경보 예산 15건/주. 즉시 가역 — "C" 로 낮추면 종전과 동일.
-    "alert_sound_min_grade": "B",
+    # PagerDuty 경보 예산 15건/주.
+    # 2026-09-13 사용자 결정 "A안": "B" → "C" 로 낮춰 **통과한 알림 전부 유음**.
+    # 근거: 같은 날 alert_min_grade 를 D→C 로 올려 노이즈(D 41건, TP1 도달 0건)를
+    # 잘라냈고, 남는 실시간 알림이 하루 3.5건 수준이라 경보 예산(15건/주) 안에
+    # 충분히 들어온다. 종전엔 82.6% 가 무음이라 소리 나는 건 하루 1.2건뿐이었고,
+    # 그 상태로 총량까지 줄이면 놓칠 위험이 오히려 커진다. 되돌리려면 "B".
+    # (게이트가 "C" 라 실질적으로 "전건 유음"이며, 게이트를 D 로 되돌리면
+    #  D 는 다시 무음이 된다 — 두 값의 관계가 정책의 전부다.)
+    "alert_sound_min_grade": "C",
     # 2026-08-17 사용자 결정: 3 → 5 완화. 인기 알트 반복 터치 억제 45건/주
     # 완화 목적. 글로벌 상한(15)은 유지 — 코인당만 여유.
     "alert_max_per_coin_per_day": 5,     # 코인당 하루 알림 상한

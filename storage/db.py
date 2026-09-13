@@ -57,13 +57,18 @@ CREATE INDEX IF NOT EXISTS idx_levels_coin   ON levels(coin_symbol);
 CREATE INDEX IF NOT EXISTS idx_levels_author ON levels(author);
 
 -- 알림 발송 로그 (코인당 하루 상한 계산 + 중복 방지용)
+-- sent (2026-09-13 A안): 실제 텔레그램 발송 여부. 1=발송됨(기존 행 전부),
+-- 0=기록만(스위치 OFF 로 발송 생략 — tp_alert_send_enabled/news_alert_send_enabled).
+-- 상한 카운트·중복 방어·게이트 판정은 종전대로 sent 를 보지 않는다(기록 = 사건
+-- 발생). 발송량 실측만 이 컬럼으로 분리한다.
 CREATE TABLE IF NOT EXISTS alerts_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     coin_symbol  TEXT NOT NULL,
-    kind         TEXT NOT NULL,      -- preview / touch
+    kind         TEXT NOT NULL,      -- preview / touch / tpN / news
     level_ids    TEXT,               -- 병합 시 여러 id (콤마구분)
     sent_at      REAL NOT NULL,
-    day_kst      TEXT NOT NULL       -- YYYY-MM-DD (KST) — 일일 카운트 키
+    day_kst      TEXT NOT NULL,      -- YYYY-MM-DD (KST) — 일일 카운트 키
+    sent         INTEGER DEFAULT 1   -- 1=실제 발송, 0=기록만(발송 스위치 OFF)
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_day ON alerts_log(coin_symbol, day_kst);
 
@@ -204,6 +209,24 @@ CREATE TABLE IF NOT EXISTS oi_spike_state (
 -- 콜백을 notify/feedback_poll.py 가 getUpdates 폴링으로 수거해 여기 쌓는다.
 -- **내부 축적 전용** — 알림·필터·등급 어디에도 영향 없음. ref = callback_data 에
 -- 실린 대표 레벨 id 참조. 같은 (ref, 유저) 재투표는 UPDATE(마지막 의견이 남는다).
+-- 뉴스 브리핑 대기열 (2026-09-13 A안) — news_alert_send_enabled=False 일 때
+-- 실시간 발송 대신 여기 쌓았다가 다음 날 아침 브리핑 "📰 어제의 뉴스" 블록으로
+-- 요약 전달한다. 상한·쿨다운·필터·요약·번역은 전부 종전대로 수행한 '발송 직전'
+-- 상태의 결과물이 들어온다(= 큐에 들어온 건 전부 종전이라면 발송됐을 건).
+-- consumed: 브리핑에 실려 나간 행은 1. 7일 지난 행은 prune_news_digest_queue.
+CREATE TABLE IF NOT EXISTS news_digest_queue (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol     TEXT NOT NULL,
+    channel    TEXT NOT NULL,
+    summary    TEXT,
+    url        TEXT,
+    created_at REAL NOT NULL,
+    day_kst    TEXT NOT NULL,      -- YYYY-MM-DD (KST) — 브리핑 조회 키
+    consumed   INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_news_queue_day
+    ON news_digest_queue(day_kst, consumed);
+
 CREATE TABLE IF NOT EXISTS alert_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ref TEXT NOT NULL,            -- callback_data 의 레벨 id 참조
@@ -513,6 +536,14 @@ def _migrate(conn) -> None:
             conn.execute("ALTER TABLE volume_watch ADD COLUMN tps_krw TEXT")
         if "post_urls" not in vw_cols:
             conn.execute("ALTER TABLE volume_watch ADD COLUMN post_urls TEXT")
+
+    # alerts_log.sent (2026-09-13 A안) — daily_stats/volume_watch 와 같은 이유로
+    # 기존 테이블엔 ALTER 로만 붙는다. 과거 행은 전부 '실제 발송'이었으므로
+    # DEFAULT 1 (SQLite ADD COLUMN 은 상수 DEFAULT 를 기존 행에 그대로 채운다).
+    al_cols = {r["name"] for r in conn.execute("PRAGMA table_info(alerts_log)").fetchall()}
+    if al_cols and "sent" not in al_cols:
+        conn.execute("ALTER TABLE alerts_log ADD COLUMN sent INTEGER DEFAULT 1")
+        logger.info("[db] 마이그레이션: alerts_log.sent 추가")
 
     # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
@@ -1971,11 +2002,127 @@ def touch_alert_sent(conn, level_id: int) -> bool:
 
 
 def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: str,
-                 now: Optional[float] = None) -> None:
+                 now: Optional[float] = None, sent: int = 1) -> None:
+    """알림 1건 기록. sent (2026-09-13 A안): 1=실제 텔레그램 발송, 0=기록만
+    (tp_alert_send_enabled/news_alert_send_enabled OFF 로 발송을 생략한 경우).
+    기본값 1 이라 기존 호출부는 무수정으로 종전 동작을 유지한다. 상한·중복·게이트
+    판정은 sent 를 보지 않는다 — '사건이 일어났다'는 사실이 기록의 의미이기 때문."""
     conn.execute(
-        "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst) VALUES (?,?,?,?,?)",
-        (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)), now if now is not None else time.time(), day_kst),
+        "INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, day_kst, sent) "
+        "VALUES (?,?,?,?,?,?)",
+        (coin_symbol, kind, ",".join(str(i) for i in sorted(level_ids)),
+         now if now is not None else time.time(), day_kst, 1 if sent else 0),
     )
+
+
+# ── 뉴스 브리핑 대기열 (2026-09-13 A안) ──────────────────────────────
+
+
+def queue_news_digest(conn, symbol: str, channel: str, summary: str,
+                      url: str, day_kst: str, now: Optional[float] = None) -> None:
+    """뉴스 1건을 아침 브리핑 대기열에 적재 (news_alert_send_enabled=False 경로)."""
+    conn.execute(
+        "INSERT INTO news_digest_queue (symbol, channel, summary, url, created_at, "
+        "day_kst, consumed) VALUES (?,?,?,?,?,?,0)",
+        (symbol, channel, summary, url,
+         now if now is not None else time.time(), day_kst),
+    )
+
+
+def get_news_digest(conn, day_kst: str, limit: int = 5) -> list:
+    """해당 KST 일자의 미소비 뉴스 큐 (오래된 순, 최대 limit 건).
+    오래된 순인 이유: 상한(5/일)에 먼저 들어온 건이 '그날 실제로 발송됐을 건'이라
+    실시간 발송과 같은 순서를 재현한다."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM news_digest_queue WHERE day_kst=? AND consumed=0 "
+        "ORDER BY created_at ASC, id ASC LIMIT ?", (day_kst, limit)).fetchall()]
+
+
+def count_news_digest(conn, day_kst: str) -> int:
+    """해당 일자의 미소비 뉴스 큐 총 건수 (limit 컷 '외 N건' 표기용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM news_digest_queue WHERE day_kst=? AND consumed=0",
+        (day_kst,)).fetchone()["n"]
+
+
+def consume_news_digest(conn, ids: list) -> int:
+    """브리핑에 실려 나간 큐 행을 소비 처리. 반환: 갱신 행 수."""
+    if not ids:
+        return 0
+    qs = ",".join("?" for _ in ids)
+    cur = conn.execute(
+        f"UPDATE news_digest_queue SET consumed=1 WHERE id IN ({qs})",
+        [int(i) for i in ids])
+    return cur.rowcount
+
+
+def prune_news_digest_queue(conn, now: Optional[float] = None,
+                            keep_days: int = 7) -> int:
+    """보존기간(기본 7일) 넘은 뉴스 큐 삭제 — DB 무한 증가 방지.
+    (prune_daily_stats/prune_alerts_log 와 같은 '보존정책' 계열 함수)
+    소비 여부와 무관하게 지운다 — 브리핑은 '어제' 것만 보므로 7일 지난 미소비
+    행은 어차피 영원히 안 나간다(창을 놓친 날)."""
+    now = now if now is not None else time.time()
+    cur = conn.execute("DELETE FROM news_digest_queue WHERE created_at < ?",
+                       (now - keep_days * 86400,))
+    n = cur.rowcount
+    if n:
+        logger.info("[db] news_digest_queue %d건 정리(>%d일)", n, keep_days)
+    return n
+
+
+def get_tp_hits_by_day(conn, day_kst: str) -> list:
+    """해당 KST 일자의 TP 적중 기록(kind LIKE 'tp%')을 레벨별로 묶어 반환.
+
+    아침 브리핑 "🏁 어제 목표 도달" 블록 전용. alerts_log.level_ids 는 TP 알림
+    경로에서 항상 단일 레벨 id 이므로(price_check 는 [lv["id"]] 로 기록) 그대로
+    정수 변환해 levels 와 조인한다 — 변환 실패 행(뉴스처럼 채널명이 들어간 계약
+    재사용 행)은 조용히 건너뛴다.
+
+    반환: [{coin, best_tp, tp_total, entry_usd, tps_usd, level_id}] — 같은 레벨이
+    TP1·TP2 를 연달아 찍었으면 **최고 단계 1행**으로 접는다(사용자가 보고 싶은 건
+    "어디까지 갔나"이지 단계별 이력이 아니다)."""
+    rows = conn.execute(
+        "SELECT level_ids, kind FROM alerts_log "
+        "WHERE day_kst=? AND kind LIKE 'tp%' ORDER BY sent_at ASC", (day_kst,)
+    ).fetchall()
+    best: dict = {}
+    for r in rows:
+        try:
+            lid = int(str(r["level_ids"]).strip())
+        except (TypeError, ValueError):
+            continue  # level_ids 계약 재사용 행(news 등) — TP 가 아님
+        try:
+            n = int(str(r["kind"])[2:])
+        except (TypeError, ValueError):
+            continue
+        if n > best.get(lid, 0):
+            best[lid] = n
+    if not best:
+        return []
+    qs = ",".join("?" for _ in best)
+    lv_rows = conn.execute(
+        f"SELECT id, coin_symbol, entry_usd, tps_usd, tp_usd, tp_ladder_count "
+        f"FROM levels WHERE id IN ({qs})", list(best.keys())).fetchall()
+    out = []
+    for lv in lv_rows:
+        tps = []
+        try:
+            tps = [float(x) for x in json.loads(lv["tps_usd"] or "[]")]
+        except (TypeError, ValueError):
+            tps = []
+        if not tps and lv["tp_usd"]:
+            tps = [float(lv["tp_usd"])]
+        out.append({
+            "level_id": lv["id"],
+            "coin": lv["coin_symbol"],
+            "best_tp": best[lv["id"]],
+            "tp_total": len(tps) or (lv["tp_ladder_count"] or 0),
+            "entry_usd": lv["entry_usd"],
+            "tps_usd": tps,
+        })
+    out.sort(key=lambda d: (-d["best_tp"], d["coin"]))
+    return out
 
 
 def record_feedback(conn, ref: str, vote: str, tg_user_id: Optional[str],

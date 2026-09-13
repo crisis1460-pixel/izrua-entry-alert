@@ -770,6 +770,7 @@ _st.requests.get = _orig_st_get
 # ─── 뉴스·시황 요약 알림 (2026-08-17) ────────────────────────────────
 from notify import news_brief as _nb, telegram as _tg2
 from config import settings as _st_cfg
+from utils.time_kst import day_kst as _day_kst_util
 
 _orig_send = _tg2.send
 _sent_log = []
@@ -786,6 +787,15 @@ import sqlite3 as _sq
 _nbc = _sq.connect(_nb_db)
 _nbc.row_factory = _sq.Row
 
+# 2026-09-13 A안: 운영 기본값이 news_alert_send_enabled=False(브리핑 흡수)로
+# 바뀌었지만 NB1~NB10 회귀는 실시간 발송 경로를 전제로 짜여 있다. price_logic 의
+# preview/TP 스위치와 같은 취급 — 여기서 True 로 되돌려 종전 동작을 보존하고,
+# False 동작은 전용 블록(NBQ*)에서 검증한다.
+_st_cfg.SETTINGS["news_alert_send_enabled"] = True
+# 채널당 상한도 A안에서 3→2 로 조였다. NB3/NB4 는 '상한 도달' 자체를 재는
+# 테스트라 설정값을 읽어 기대치를 맞춘다(숫자 하드코딩 제거 — 다음 조정에도 안 깨짐).
+_NB_MAX_CH = _st_cfg.SETTINGS["news_alert_max_per_channel_per_day"]
+
 # NB1: 정상 발송
 _p = {"description": "AAVE testing this text of 60+ chars long enough for min "
                      "length filter passthrough here", "url": "https://t.me/x/1"}
@@ -801,16 +811,23 @@ _sent_log.clear()
 r = _nb.maybe_send_news_brief(_nbc, _p, "AAVE", "ch1", now=1786900000 + 60)
 check("NB2 같은 코인 24h 쿨다운(스킵)", r == "skipped" and len(_sent_log) == 0)
 
-# NB3: 다른 코인은 발송 가능 (같은 채널 계속)
+# NB3: 다른 코인은 발송 가능 (같은 채널 계속) — NB1 이 이미 ch1 1건을 썼다.
 r = _nb.maybe_send_news_brief(_nbc, _p, "LINK", "ch1", now=1786900000 + 60)
 _nbc.commit()
-check("NB3 다른 코인은 정상 발송", r == "ok" and len(_sent_log) == 1)
-r = _nb.maybe_send_news_brief(_nbc, _p, "UNI", "ch1", now=1786900000 + 120)
-_nbc.commit()
-check("NB3b 3번째 발송 정상", r == "ok" and len(_sent_log) == 2)
-# 4번째: 채널당 상한 3건 도달
-r = _nb.maybe_send_news_brief(_nbc, _p, "ETH", "ch1", now=1786900000 + 180)
-check("NB4 채널당 하루 상한 3건 도달 → 스킵", r == "skipped")
+_nb3_ok = (r == "ok") if _NB_MAX_CH >= 2 else (r == "skipped")
+check("NB3 다른 코인은 상한 안에서 정상 발송", _nb3_ok)
+# 상한을 채울 때까지 같은 채널로 더 밀어넣는다(상한값 변화에 무관하게 동작).
+_nb_syms = ["UNI", "DOT", "ATOM", "NEAR"]
+_nb_t = 1786900000 + 120
+while len(_sent_log) < _NB_MAX_CH - 1 and _nb_syms:
+    _nb.maybe_send_news_brief(_nbc, _p, _nb_syms.pop(0), "ch1", now=_nb_t)
+    _nbc.commit()
+    _nb_t += 60
+check(f"NB3b 채널 상한({_NB_MAX_CH})까지 발송 누적",
+      len(_sent_log) == _NB_MAX_CH - 1)
+# 상한 초과분: 채널당 하루 상한 도달
+r = _nb.maybe_send_news_brief(_nbc, _p, "ETH", "ch1", now=_nb_t + 60)
+check(f"NB4 채널당 하루 상한 {_NB_MAX_CH}건 도달 → 스킵", r == "skipped")
 
 # NB5: 짧은 원문 스킵 (60자 미만)
 _sent_log.clear()
@@ -875,6 +892,37 @@ check("NB10b 독립 title 은 결합 유지",
       and "Body text differs" in _sent_log[0][0])
 _st_cfg.SETTINGS["news_translate_enabled"] = True
 
+# ─── NBQ1~NBQ4: 뉴스 발송 스위치 OFF → 브리핑 대기열 (2026-09-13 A안) ────
+# 계약: OFF 면 telegram.send 만 생략하고 상한·쿨다운·필터·요약·번역은 종전대로
+# 수행한다. 결과물은 news_digest_queue 에 적재되고 record_alert(kind='news')도
+# 그대로 남아 상한 카운트가 유지된다(= 큐가 상한 위로 불어나지 않는다).
+_st_cfg.SETTINGS["news_alert_send_enabled"] = False
+_st_cfg.SETTINGS["news_translate_enabled"] = False
+_sent_log.clear()
+_NBQ_DAY_T = 1786900000 + 86400 * 3          # 상한·쿨다운 충돌 없는 새 KST 일자
+_p_q = {"description": "XRP ledger activity climbs to a new high this quarter. "
+                       "Analysts point to steady settlement volume growth.",
+        "url": "https://t.me/x/42"}
+r = _nb.maybe_send_news_brief(_nbc, _p_q, "XRP", "chq", now=_NBQ_DAY_T)
+_nbc.commit()
+check("NBQ1 스위치 OFF — 발송 0건 · 반환 queued",
+      r == "queued" and len(_sent_log) == 0)
+_nbq_day = _day_kst_util(_NBQ_DAY_T)
+_nbq_rows = db.get_news_digest(_nbc, _nbq_day, limit=5)
+check("NBQ2 news_digest_queue 적재(심볼·채널·요약)",
+      len(_nbq_rows) == 1 and _nbq_rows[0]["symbol"] == "XRP"
+      and _nbq_rows[0]["channel"] == "chq"
+      and "XRP ledger activity" in (_nbq_rows[0]["summary"] or ""))
+_nbq_log = _nbc.execute(
+    "SELECT kind, sent FROM alerts_log WHERE coin_symbol='XRP' AND kind='news'"
+).fetchall()
+check("NBQ3 record_alert(kind='news') 기록 유지 · sent=0 으로 구분(상한 카운트 유지)",
+      len(_nbq_log) == 1 and _nbq_log[0]["sent"] == 0)
+# 같은 코인 24h 쿨다운이 큐 경로에서도 그대로 작동해야 한다(상한 무손상 증명)
+r = _nb.maybe_send_news_brief(_nbc, _p_q, "XRP", "chq", now=_NBQ_DAY_T + 60)
+check("NBQ4 큐 경로에서도 코인 24h 쿨다운 유지(큐 무한증식 방지)", r == "skipped")
+_st_cfg.SETTINGS["news_translate_enabled"] = True
+
 _nbc.close()
 os.unlink(_nb_db)
 _tg2.send = _orig_send
@@ -905,6 +953,126 @@ check("RQ6: 대기 287분 → GitHub 러너 지연 원인 문구, cron-job.org �
       and "cron-job.org 주 경로" not in _rq_new)
 _rq_small = _tg_rq.render_price_check_gap_alert(291, 120, queue_wait_min=3)
 check("RQ7: 대기 3분(정상 범위) → 종전 문구 유지", "cron-job.org 주 경로" in _rq_small)
+
+# ─── MB1~MB8: 모닝 브리핑 흡수 블록 (2026-09-13 A안) ─────────────────────
+# 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑이 대신 전달한다.
+# 여기서는 블록 렌더 함수만 검증한다(build_brief 전체는 test_morning_brief.py).
+from notify import morning_brief as _mb
+
+_MB_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_MB_DB)
+_mbc = sqlite3.connect(_MB_DB)
+_mbc.row_factory = sqlite3.Row
+_MB_DAY = "2026-09-12"
+_MB_NOW = 1789000000.0
+
+# MB1: 빈 큐/빈 적중 → 블록 통째 생략
+check("MB1 빈 TP 적중 → 🏁 블록 생략", _mb._tp_hit_lines(_mbc, _MB_DAY) == [])
+_mb_ids = []
+check("MB2 빈 뉴스 큐 → 📰 블록 생략",
+      _mb._news_lines(_mbc, _MB_DAY, _mb_ids) == [] and _mb_ids == [])
+
+# MB3: 뉴스 5건 컷 + "외 N건" + consumed 처리
+for i in range(7):
+    db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
+                         f"News body number {i}. Second sentence is dropped.",
+                         f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
+_mbc.commit()
+_mb_ids = []
+_mb_news = _mb._news_lines(_mbc, _MB_DAY, _mb_ids)
+check("MB3 뉴스 큐 7건 → 최대 5건만 렌더 + 헤더에 '외 2건'",
+      len(_mb_ids) == 5 and "외 2건" in _mb_news[0])
+check("MB3b 항목 줄에 코인·채널·요약 첫 문장(원문 링크 없음)",
+      any("SYM0" in x and "@chan0" in x for x in _mb_news)
+      and any("News body number 0." in x for x in _mb_news)
+      and not any("https://" in x for x in _mb_news))
+check("MB3c 요약은 첫 문장만 (둘째 문장 제외)",
+      not any("Second sentence" in x for x in _mb_news))
+db.consume_news_digest(_mbc, _mb_ids)
+_mbc.commit()
+check("MB4 consumed=1 처리 후 남은 미소비 2건", db.count_news_digest(_mbc, _MB_DAY) == 2)
+_mb_ids2 = []
+_mb_news2 = _mb._news_lines(_mbc, _MB_DAY, _mb_ids2)
+check("MB4b 소비된 건은 다음 브리핑에 다시 안 나온다",
+      len(_mb_ids2) == 2 and all(i not in _mb_ids for i in _mb_ids2))
+
+# MB5~MB6: 🏁 어제 목표 도달 — 진입 대비 % 계산 + 8줄 컷
+_mb_lids = []
+for i in range(10):
+    _mbc.execute(
+        "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,"
+        " tps_usd, status, collected_at) VALUES (?,?,?,?,?,?,'touched',?)",
+        (f"mbk{i}", f"MBC{i}", f"KRW-MBC{i}", "long", 100.0,
+         json.dumps([110.0, 125.0]), _MB_NOW))
+    _mb_lids.append(_mbc.execute("SELECT last_insert_rowid() AS r").fetchone()["r"])
+for idx, lid in enumerate(_mb_lids):
+    db.record_alert(_mbc, f"MBC{idx}", "tp1", [lid], _MB_DAY, _MB_NOW, sent=0)
+db.record_alert(_mbc, "MBC0", "tp2", [_mb_lids[0]], _MB_DAY, _MB_NOW + 1, sent=0)
+_mbc.commit()
+_mb_tp = _mb._tp_hit_lines(_mbc, _MB_DAY)
+check("MB5 헤더에 총 건수 10건 · 본문은 8줄 컷 + '외 2건'",
+      "10건" in _mb_tp[0] and len(_mb_tp) == 1 + 8 + 1 and "외 2건" in _mb_tp[-1])
+check("MB5b 같은 레벨 TP1·TP2 는 최고 단계 1행으로 접힘(TP2/2)",
+      any("MBC0 TP2/2" in x for x in _mb_tp)
+      and not any("MBC0 TP1/2" in x for x in _mb_tp))
+check("MB6 진입 대비 % = (TP − 진입)/진입 (TP2 125 vs 진입 100 → +25.0%)",
+      any("MBC0 TP2/2 (진입 +25.0%)" in x for x in _mb_tp))
+check("MB6b 중간 단계는 해당 TP 기준 (TP1 110 → +10.0%)",
+      any("TP1/2 (진입 +10.0%)" in x for x in _mb_tp))
+
+# MB7: level_ids 계약 재사용 행(kind='news' 의 채널명)은 TP 집계에 섞이지 않는다
+db.record_alert(_mbc, "ZZZ", "news", ["some_channel"], _MB_DAY, _MB_NOW, sent=0)
+_mbc.commit()
+check("MB7 level_ids 가 정수가 아닌 행(news)은 TP 집계에서 제외",
+      len(db.get_tp_hits_by_day(_mbc, _MB_DAY)) == 10)
+
+# MB6c~MB6e: 코인당 1행 접기 (2026-09-13 CTO 검토). 같은 코인의 **다른 레벨**
+# (클러스터 형제)이 각각 적중하면 원본 rows 는 2행인데, 진입 알림 자체가 클러스터당
+# 1회만 나가므로 표시도 코인 1행이어야 한다 — 최고 단계만 남고 헤더 건수도 접은 뒤
+# 기준으로 세어야 한다("11건"이라 써놓고 10줄만 보이면 안 된다).
+# 위치가 MB7 뒤인 이유: 여기서 레벨을 하나 더 심으므로, 앞에 두면 MB7 의
+# "정확히 10건" 기대값이 11 로 흔들린다(집계 대상 자체를 바꾸는 픽스처다).
+_mbc.execute(
+    "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, entry_usd,"
+    " tps_usd, status, collected_at) VALUES (?,?,?,?,?,?,'touched',?)",
+    ("mbk_sib", "MBC0", "KRW-MBC0", "long", 200.0,
+     json.dumps([210.0, 260.0]), _MB_NOW))
+_mb_sib_id = _mbc.execute("SELECT last_insert_rowid() AS r").fetchone()["r"]
+db.record_alert(_mbc, "MBC0", "tp1", [_mb_sib_id], _MB_DAY, _MB_NOW + 2, sent=0)
+_mbc.commit()
+check("MB6c 형제 레벨이 늘어 원본 집계는 11건이 된다(접기 전 기준선)",
+      len(db.get_tp_hits_by_day(_mbc, _MB_DAY)) == 11)
+_mb_tp2 = _mb._tp_hit_lines(_mbc, _MB_DAY)
+check("MB6d 같은 코인의 형제 레벨 적중은 1행으로 접힌다(MBC0 두 번 안 나옴)",
+      sum(1 for x in _mb_tp2 if "MBC0 " in x) == 1)
+check("MB6e 접힌 뒤에도 최고 단계가 남는다(형제의 TP1 이 아니라 TP2/2)",
+      any("MBC0 TP2/2" in x for x in _mb_tp2))
+check("MB6f 헤더 건수는 접은 뒤 기준 — 원본 11건이어도 코인 수 10건으로 표기",
+      "10건" in _mb_tp2[0])
+
+# MB8: 텔레그램 4096자 방어 — 뉴스 줄부터 줄인다
+_mb_head = ["헤더", _mb.telegram.SEP, "시장환경 A", "시장환경 B"]
+_mb_tail = ["   <b>SYM</b> · @ch", "   " + "가" * 200]
+_mb_lines = _mb_head + ["📰 <b>어제의 뉴스</b>"] + _mb_tail * 40
+_mb_fit = _mb._fit_telegram(list(_mb_lines), news_start=len(_mb_head))
+check("MB8 길이 초과 시 뉴스 줄부터 제거 — 한도 이내로 축소",
+      sum(len(x) + 1 for x in _mb_fit) <= _mb._TELEGRAM_MAX_CHARS
+      and len(_mb_fit) < len(_mb_lines))
+check("MB8b 시장환경 머리 블록은 보존",
+      _mb_fit[:len(_mb_head)] == _mb_head)
+_mb_small = ["가" * 10, "나" * 10]
+check("MB8c 한도 이내면 무변경", _mb._fit_telegram(list(_mb_small), -1) == _mb_small)
+
+_mbc.close()
+os.unlink(_MB_DB)
+
+# ─── GG1: 등급 게이트 상향 (2026-09-13 A안, D → C) ───────────────────────
+from collector.grading import meets_min_grade as _mmg
+check("GG1 alert_min_grade 기본값 'C'", _st_cfg.get("alert_min_grade") == "C")
+check("GG1b D 등급은 게이트 탈락(최하위 승률 22.7% · TP1 도달 0건)",
+      not _mmg("D", _st_cfg.get("alert_min_grade")))
+check("GG1c C 이상은 그대로 통과(상위 표본 무손상)",
+      all(_mmg(g, _st_cfg.get("alert_min_grade")) for g in ("C", "B", "A", "S")))
 
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")

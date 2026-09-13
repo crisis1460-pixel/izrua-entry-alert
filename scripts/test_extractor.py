@@ -556,6 +556,95 @@ for _desc, _passed in [
         ok += 1
 TOTAL_EXTRA += 5
 
+# ── SX: short 시그널 수집 배제 (2026-09-13 Q3, 사용자 결정) ────────────────
+# 근거: v5 이후 direction='short' 119건(16.8%)이 터치 0건·알림 0건·outcome 전량
+# NULL — monitor/price_check.py 가 long 레벨만 감시해 애초에 구조적으로 무의미
+# (사용자는 업비트 KRW 현물 스윙 트레이더라 공매도 불가). config/settings.py 의
+# "collect_short_enabled" 스위치(기본 False)로 신규 short 저장을 막는다.
+# 여기선 _ingest_idea 를 직접 호출해 스위치 3가지 조합(False+short/False+long/
+# True+short)을 검증한다 - test_resilience.py 의 몽키패치 스타일을 그대로 따름.
+import sqlite3 as _sqlite3  # noqa: E402
+from scripts.run_collect import _ingest_idea  # noqa: E402
+from config import settings as _sx_settings  # noqa: E402
+from storage import db as _sx_db  # noqa: E402
+
+_SX_DB = "cache/_test_extractor_short_exclusion.db"
+import os as _os  # noqa: E402
+if _os.path.exists(_SX_DB):
+    _os.remove(_SX_DB)
+_sx_db.init_db(_SX_DB)
+
+_SX_COIN = {"symbol": "SXT", "ticker": "KRW-SXT", "rank": 50, "name": "SX Test",
+            "price_usd": 10.0, "tier_icon": "🥈"}
+
+
+def _sx_idea(url, author="SXAuthor"):
+    return {"title": "SXT setup", "description": "setup text", "author": author,
+            "url": url, "age_minutes": 5, "author_followers": 100}
+
+
+def _sx_make_parse_setup(direction):
+    def _p(text, current_price=None):
+        return {"direction": direction, "entry": 10.0, "entry_low": 10.0,
+                "entry_high": 10.0, "sl": 9.0 if direction == "long" else 11.0,
+                "tp": 12.0 if direction == "long" else 8.0, "rr": 2.0}
+    return _p
+
+
+from scripts import run_collect as _sx_rc  # noqa: E402
+_sx_old_parse_setup = _sx_rc.parse_setup
+_sx_old_grade = _sx_rc.calculate_grade_with_breakdown
+_sx_rc.calculate_grade_with_breakdown = lambda *a, **k: ("B", 60, 2.0, {})
+_sx_rc.judgment_window_hours = lambda *a, **k: 168.0
+_sx_rc.parse_timeframe_hours = lambda text: None
+
+_sx_old_switch = _sx_settings.SETTINGS.get("collect_short_enabled")
+try:
+    # SX1: 스위치 False + short → 저장되지 않는다
+    _sx_settings.SETTINGS["collect_short_enabled"] = False
+    _sx_rc.parse_setup = _sx_make_parse_setup("short")
+    with _sx_db.connect(_SX_DB) as conn:
+        _sx_had, _sx_new = _ingest_idea(conn, _SX_COIN, _sx_idea("u-sx1"), {}, 5.0)
+        conn.commit()
+        _sx_rows1 = conn.execute(
+            "SELECT COUNT(*) c FROM levels WHERE post_url='u-sx1'").fetchone()["c"]
+
+    # SX2: 같은 조건에서 long 셋업은 정상 저장된다
+    _sx_rc.parse_setup = _sx_make_parse_setup("long")
+    with _sx_db.connect(_SX_DB) as conn:
+        _sx_had2, _sx_new2 = _ingest_idea(conn, _SX_COIN, _sx_idea("u-sx2"), {}, 5.0)
+        conn.commit()
+        _sx_rows2 = conn.execute(
+            "SELECT COUNT(*) c FROM levels WHERE post_url='u-sx2'").fetchone()["c"]
+
+    # SX3: 스위치를 True 로 되돌리면 short 도 다시 저장된다(원복 가능성 보장)
+    _sx_settings.SETTINGS["collect_short_enabled"] = True
+    _sx_rc.parse_setup = _sx_make_parse_setup("short")
+    with _sx_db.connect(_SX_DB) as conn:
+        _sx_had3, _sx_new3 = _ingest_idea(conn, _SX_COIN, _sx_idea("u-sx3"), {}, 5.0)
+        conn.commit()
+        _sx_rows3 = conn.execute(
+            "SELECT COUNT(*) c FROM levels WHERE post_url='u-sx3'").fetchone()["c"]
+finally:
+    _sx_rc.parse_setup = _sx_old_parse_setup
+    _sx_rc.calculate_grade_with_breakdown = _sx_old_grade
+    if _sx_old_switch is None:
+        _sx_settings.SETTINGS.pop("collect_short_enabled", None)
+    else:
+        _sx_settings.SETTINGS["collect_short_enabled"] = _sx_old_switch
+
+for _desc, _passed in [
+        ("SX1 스위치 False + short → 저장 안 됨(had_setup=True, is_new=False, 행 0)",
+         _sx_had is True and _sx_new is False and _sx_rows1 == 0),
+        ("SX2 같은 조건 long → 정상 저장(신규, 행 1)",
+         _sx_had2 is True and _sx_new2 is True and _sx_rows2 == 1),
+        ("SX3 스위치 True 로 되돌리면 short 도 저장(원복 가능성)",
+         _sx_had3 is True and _sx_new3 is True and _sx_rows3 == 1)]:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += 3
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
          + len(LADDER_N_CASES) + len(TPSALL_CASES))

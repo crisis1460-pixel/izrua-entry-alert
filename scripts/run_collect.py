@@ -253,7 +253,8 @@ def _sanity_price(coin: dict):
 
 # ── 글 1건 → 레벨 저장 (입력원 공통 경로) ──────────────────────────────
 def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: float,
-                 source: str = "tradingview", lookup_followers: bool = True):
+                 source: str = "tradingview", lookup_followers: bool = True,
+                 skip_counts: dict = None):
     """글 1건을 파싱→등급→저장까지 처리. 반환 (셋업 있었나, 신규 저장인가).
 
     2026-07-26 수리: 글 1건의 파싱/등급/저장 오류가 사이클 전체 커밋을 굴리지 못하게
@@ -265,6 +266,8 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
       · source: levels.source 에 남겨 사후에 "어느 소스가 잘 맞나"를 가른다.
       · lookup_followers: 팔로워 조회는 TradingView 프로필 페이지 전용이라
         텔레그램 채널 작성자에 대고 부르면 무의미한 TV 요청(=차단 위험)만 늘어난다.
+
+    skip_counts: 호출자가 넘기면 {"short": N} 로 스킵 건수를 누적(집계용, 선택).
     """
     try:
         text = f"{idea['title']}\n{idea['description']}"
@@ -272,6 +275,16 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         setup = parse_setup(text, current_price=_sanity_price(coin))
         if not setup or not setup.get("entry"):
             return False, False
+        # short 시그널 수집 배제 (2026-09-13 Q3, 사용자 결정) — 근거는
+        # config/settings.py "collect_short_enabled" 주석 참고: short 119건이
+        # 터치/알림 0건이었고 monitor/price_check.py 는 애초에 long 만 감시한다.
+        # 팔로워 조회·등급 산정·저장 전에 걸러 비용을 아낀다. had_setup=True 로
+        # 돌려줘야(=False 아님) 텔레그램 루프의 `had_setup is False` 뉴스 알림
+        # 분기가 정상 시그널을 뉴스로 오분류하지 않는다.
+        if setup["direction"] == "short" and not settings.get("collect_short_enabled"):
+            if skip_counts is not None:
+                skip_counts["short"] = skip_counts.get("short", 0) + 1
+            return True, False
         stats_row = author_stats.get(idea.get("author") or "", {})
         _db_followers = stats_row.get("followers")
         followers = _db_followers if _db_followers is not None else idea.get("author_followers")
@@ -332,8 +345,12 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
 
 # ── 텔레그램 공개채널 수집 (2026-07-27 기획 카드 #14) ──────────────────
 def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
-                      max_age_hours):
+                      max_age_hours, skip_counts: dict = None):
     """공개채널 화이트리스트를 돌며 글을 수집·저장. 반환 (글수, 셋업수, 신규수).
+
+    skip_counts: 넘기면 {"short": N} 으로 short 스킵 건수를 누적(집계용, 선택).
+    반환 튜플 자리수는 기존 호출부(scripts/test_resilience.py 카드14 T5/T6)가
+    `== (a, b, c)` 로 직접 비교하므로 절대 늘리지 않는다 — 집계는 이 인자로만.
 
     ⚠️ 기본 OFF·빈 화이트리스트가 이 기능의 안전장치다 — settings 의
     telegram_source_enabled 가 False 이거나 telegram_source_channels 가 비어 있으면
@@ -360,6 +377,8 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
     sleep_sec = settings.get("telegram_source_sleep_sec")
     max_posts = settings.get("telegram_source_max_posts")
     n_posts = n_setup = n_new = n_unmatched = 0
+    if skip_counts is None:
+        skip_counts = {}
 
     for i, channel in enumerate(channels):
         if telegram_source.is_blocked():
@@ -385,7 +404,7 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
                 continue
             had_setup, is_new = _ingest_idea(
                 conn, by_symbol[symbol], post, author_stats, timeout,
-                source="telegram", lookup_followers=False)
+                source="telegram", lookup_followers=False, skip_counts=skip_counts)
             n_setup += 1 if had_setup else 0
             n_new += 1 if is_new else 0
             # 뉴스·시황 요약 알림 (2026-08-17) — 매매 셋업 파싱 실패지만 심볼은
@@ -489,6 +508,9 @@ def main() -> int:
     author_stats = watcher_stats.load_author_stats()
 
     n_posts = n_new = n_setup = n_ingest_errors = 0
+    # short 시그널 스킵 집계 (2026-09-13 Q3) - TV·텔레그램 두 경로가 같은 dict 를
+    # 공유해 _ingest_idea 호출마다 누적한다(반환 튜플 자리수는 안 건드림).
+    skip_counts = {}
     sleep_sec = settings.get("tv_fetch_sleep_sec")
     # 랜덤 지터 상한 (2026-08-02) — 고정 간격 봇 패턴 희석. min>max 설정 실수는
     # 지터 없는 고정 간격으로 강등(방어적). 테스트는 양쪽 다 0 으로 덮어쓴다.
@@ -601,7 +623,8 @@ def main() -> int:
             n_posts += len(ideas)
 
             for idea in ideas:
-                had_setup, is_new = _ingest_idea(conn, coin, idea, author_stats, timeout)
+                had_setup, is_new = _ingest_idea(conn, coin, idea, author_stats, timeout,
+                                                 skip_counts=skip_counts)
                 if had_setup is None:
                     n_ingest_errors += 1
                 n_setup += 1 if had_setup else 0
@@ -644,10 +667,11 @@ def main() -> int:
         # TradingView 루프 뒤에 붙인다. 기본 OFF·빈 화이트리스트라 사장님이 채널을
         # 넣기 전까지는 이 호출이 요청 없이 즉시 0 을 반환한다(동작 변화 0).
         tg_posts, tg_setup, tg_new = _collect_telegram(
-            conn, universe, author_stats, timeout, max_age_h)
+            conn, universe, author_stats, timeout, max_age_h, skip_counts=skip_counts)
         n_posts += tg_posts
         n_setup += tg_setup
         n_new += tg_new
+        n_short_skipped = skip_counts.get("short", 0)
 
         # ── 뒷정리 구간 ─────────────────────────────────────────────────
         # ⚠️ 아래 셋은 하드킬로 아예 실행되지 않아도 데이터 정합이 깨지지 않는다
@@ -700,9 +724,10 @@ def main() -> int:
         #  '앞'으로 이동. 이유는 위 호출부 주석 참고 — 되돌리면 다시 기아가 된다.)
 
     logger.info(
-        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 오류 %d건 / 재파싱치유 %d건 / 만료 %d건 / "
-        "삭제감지 %d건 / DB %s",
-        time.time() - t0, n_posts, n_setup, n_new, n_ingest_errors, reparsed, expired, n_deleted, st,
+        "수집 완료(%.0f초): 글 %d건 → 셋업 %d건 → 신규 %d건 / 오류 %d건 / short 스킵 %d건 / "
+        "재파싱치유 %d건 / 만료 %d건 / 삭제감지 %d건 / DB %s",
+        time.time() - t0, n_posts, n_setup, n_new, n_ingest_errors, n_short_skipped,
+        reparsed, expired, n_deleted, st,
     )
     return 0
 

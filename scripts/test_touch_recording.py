@@ -312,14 +312,27 @@ check("Q6 진행 중 터치 캔들 → (None, None), 뒤 캔들로 폴스루 금
       _tq([(160, 220, 101.0, 99.0, 99.5),
            (130, 190, 101.0, 97.0, 97.0)], 100, 100.0, 200) == (None, None))
 
-# ── 5) C등급 무음 푸시 결정 (alert_sound_min_grade='B', settings.py 기본값) ──
+# ── 5) 유·무음 푸시 결정 (alert_sound_min_grade, settings.py 기본값) ──────
+# 2026-09-13 A안: 기본값이 'B' → 'C' 로 낮아졌다(사용자 결정 "진입 알림 전부 소리").
+# 같은 날 alert_min_grade 를 D→C 로 올려 노이즈를 잘라냈고 남는 실시간 알림이
+# 하루 3.5건 수준이라, 그 상태에서 82.6% 를 무음으로 두면 놓칠 위험이 더 크다.
+# 게이트('C')와 유음 기준('C')이 같아 **통과한 알림은 전부 유음**이 되는 게 현 정책이며,
+# D 는 애초에 발송되지 않으므로 아래 D 검증은 "게이트를 D 로 되돌렸을 때 D 는 다시
+# 무음"이라는 두 값의 관계를 못 박는 회귀다(정책의 전부가 이 관계에 있다).
 _ug = price_check._touch_sound_urgency
-check("S1 무음 결정 — B 이상(S/A/B)은 유음 high",
+check("S1 유음 결정 — 유음 기준(C) 이상(S/A/B/C)은 전부 high",
       _ug("S", settings.get) == "high" and _ug("A", settings.get) == "high"
-      and _ug("B", settings.get) == "high")
-check("S2 무음 결정 — B 미만(C/D)·등급 없음은 무음 low",
-      _ug("C", settings.get) == "low" and _ug("D", settings.get) == "low"
-      and _ug(None, settings.get) == "low")
+      and _ug("B", settings.get) == "high" and _ug("C", settings.get) == "high")
+check("S2 무음 결정 — 기준 미만(D)·등급 없음은 무음 low",
+      _ug("D", settings.get) == "low" and _ug(None, settings.get) == "low")
+# S3: 기준을 'B' 로 되돌리면 종전 동작(C 무음)이 그대로 복원된다 — 즉시 가역성 보장.
+_old_sound = settings.SETTINGS["alert_sound_min_grade"]
+try:
+    settings.SETTINGS["alert_sound_min_grade"] = "B"
+    _s3 = (_ug("B", settings.get) == "high" and _ug("C", settings.get) == "low")
+finally:
+    settings.SETTINGS["alert_sound_min_grade"] = _old_sound
+check("S3 기준을 'B' 로 되돌리면 C 는 다시 무음(가역성)", _s3)
 
 # ── 8) ATR20% 수학 (upbit.atr20_pct — 손계산 픽스처) ─────────────────────
 # 21캔들 동형(고105/저95/종100): TR 20개 전부 max(10, 5, 5)=10 → ATR=10

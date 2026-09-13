@@ -437,6 +437,22 @@ def _touch_sound_urgency(rep_grade, cfg_get) -> str:
         rep_grade or "D", cfg_get("alert_sound_min_grade")) else "low"
 
 
+def _tp_dispatch(text: str, urgency: str, cfg_get) -> tuple:
+    """TP 알림 발송 디스패치 (2026-09-13 A안). 반환 (성공여부, sent플래그).
+
+    tp_alert_send_enabled=False 면 **telegram.send 만 생략**하고 (True, 0) 을
+    돌려준다 — 즉 발송 성공과 동일하게 취급한다. 이게 핵심 계약이다: 호출부는
+    실패 시 인덱스 롤백 + set_pending_tp 로 다음 회차 재시도를 걸어두므로,
+    OFF 를 '실패'로 흘리면 매 회차 재시도하는 무한 루프에 빠지고 pending_tp 가
+    영구 잔류해 stale-force-hit 방어까지 흔든다.
+    sent 플래그는 alerts_log.sent 에 그대로 실려 '기록은 됐지만 발송은 안 됨'을
+    구분한다. 나머지(CAS 전진·record_alert·ledger·resolve_outcome)는 전부 종전대로.
+    """
+    if not cfg_get("tp_alert_send_enabled"):
+        return True, 0
+    return bool(telegram.send(text, urgency=urgency)), 1
+
+
 def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
                     band_pct: float, since: float) -> bool:
     """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
@@ -1642,6 +1658,7 @@ def run_once(now: float | None = None) -> dict:
         db.bump_daily_stats(conn, day, **obs)
         db.prune_daily_stats(conn, now)
         db.prune_alerts_log(conn)
+        db.prune_news_digest_queue(conn, now)   # 2026-09-13 A안 뉴스 큐 7일 보존
 
 
         # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의
@@ -1984,10 +2001,13 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                     # 유/무음은 본알림과 동일 정책 (2026-08-16 리뷰 Fix8): 원
                     # 레벨의 터치 시점 등급(touch_grade, 없으면 grade) 기준 —
                     # C등급 무음 신호의 후속 TP 만 고음량이던 비대칭 제거.
-                    if telegram.send(text, urgency=_touch_sound_urgency(
-                            lv.get("touch_grade") or lv.get("grade"), cfg_get)):
+                    # 2026-09-13 A안: 스위치 OFF 면 send 만 생략(= 성공 취급).
+                    _ok, _sent_flag = _tp_dispatch(text, _touch_sound_urgency(
+                        lv.get("touch_grade") or lv.get("grade"), cfg_get), cfg_get)
+                    if _ok:
                         db.record_alert(conn, lv["coin_symbol"],
-                                        _kind_inter, [lv["id"]], _tp_day, now)
+                                        _kind_inter, [lv["id"]], _tp_day, now,
+                                        sent=_sent_flag)
                         alert_ledger.append(db_path, lv["coin_symbol"],
                                             _kind_inter, [lv["id"]], now)
                         if _pending_tp:
@@ -2029,10 +2049,13 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                             resolve_price, entry_krw, post_url=lv.get("post_url"),
                             next_tp_krw=_nxt2)
                         # 유/무음 본알림 정책 승계 (Fix8) — 위 중간 TP 와 동일.
-                        if telegram.send(text, urgency=_touch_sound_urgency(
-                                lv.get("touch_grade") or lv.get("grade"), cfg_get)):
+                        # 2026-09-13 A안: 스위치 OFF 면 send 만 생략(= 성공 취급).
+                        _ok2, _sent_flag2 = _tp_dispatch(text, _touch_sound_urgency(
+                            lv.get("touch_grade") or lv.get("grade"), cfg_get), cfg_get)
+                        if _ok2:
                             db.record_alert(conn, lv["coin_symbol"],
-                                            _kind, [lv["id"]], _tp_day, now)
+                                            _kind, [lv["id"]], _tp_day, now,
+                                            sent=_sent_flag2)
                             alert_ledger.append(db_path, lv["coin_symbol"],
                                                 _kind, [lv["id"]], now)
                             if _pending_tp:

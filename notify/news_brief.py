@@ -177,10 +177,12 @@ def _summary(text: str) -> str:
 
 def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
                           now: Optional[float] = None) -> str:
-    """뉴스 요약 알림 발송 시도. 반환 "skipped"|"ok"|"failed".
+    """뉴스 요약 알림 발송 시도. 반환 "skipped"|"ok"|"queued"|"failed".
 
     호출부(run_collect)는 심볼 매칭 성공 + parse_setup 실패인 게시글만 여기 넘긴다.
-    상한·쿨다운·최소 길이 미달·설정 OFF 는 조용히 skipped."""
+    상한·쿨다운·최소 길이 미달·설정 OFF 는 조용히 skipped.
+    "queued" (2026-09-13 A안): news_alert_send_enabled=False — 실시간 발송 대신
+    news_digest_queue 적재. 상한 카운트(record_alert)는 종전대로 남는다."""
     if not settings.get("news_alert_enabled"):
         return "skipped"
 
@@ -235,6 +237,23 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
         logger.warning("[news] %s render 실패: %s", symbol, e)
         return "failed"
 
+    today = day_kst(now)
+
+    # 발송 스위치 (2026-09-13 A안) — OFF 면 telegram.send 대신 대기열 적재.
+    # 상한·쿨다운·필터·요약·번역은 위에서 전부 종전대로 돌았으므로 큐에 들어온
+    # 건은 "종전이라면 실시간 발송됐을 건" 그 자체다. record_alert 도 종전대로
+    # 남겨 상한 카운트(글로벌 5/일·채널 2/일·코인 24h)를 그대로 유지한다 —
+    # 큐가 상한을 넘어 불어나면 브리핑 5줄 컷이 무의미해진다.
+    if not settings.get("news_alert_send_enabled"):
+        try:
+            db.queue_news_digest(conn, symbol, channel, summary, url, today, now)
+        except Exception as e:  # noqa: BLE001 — 회차 생존 최우선
+            logger.warning("[news] %s 큐 적재 실패: %s", symbol, e)
+            return "failed"
+        _record(conn, symbol, channel, today, now, sent=0)
+        logger.debug("[news] %s 발송 스위치 OFF — 브리핑 큐 적재", symbol)
+        return "queued"
+
     try:
         sent_mid = telegram.send(text_out, urgency="low")
     except Exception as e:  # noqa: BLE001
@@ -243,10 +262,15 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     if not sent_mid:
         return "failed"
 
-    try:
-        today = day_kst(now)
-        # kind='news' + level_ids 필드에 채널명 저장 (뉴스는 레벨과 무관해 재활용).
-        db.record_alert(conn, symbol, _NEWS_KIND, [channel], today, now)
-    except Exception as e:  # noqa: BLE001 — 발송은 성공, 기록만 실패
-        logger.warning("[news] %s 기록 실패(발송 완료): %s", symbol, e)
+    _record(conn, symbol, channel, today, now, sent=1)
     return "ok"
+
+
+def _record(conn, symbol: str, channel: str, today: str, now: float,
+            sent: int) -> None:
+    """alerts_log 기록 — 기록 실패가 발송/적재를 되돌리지는 않는다.
+    kind='news' + level_ids 필드에 채널명 저장 (뉴스는 레벨과 무관해 재활용)."""
+    try:
+        db.record_alert(conn, symbol, _NEWS_KIND, [channel], today, now, sent=sent)
+    except Exception as e:  # noqa: BLE001 — 발송/적재는 성공, 기록만 실패
+        logger.warning("[news] %s 기록 실패: %s", symbol, e)
