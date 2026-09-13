@@ -556,6 +556,34 @@ for _desc, _passed in [
         ok += 1
 TOTAL_EXTRA += 5
 
+# ── FB6~FB12: 진입가 sanity **비대칭** (2026-09-14, 감사 F3) ──────────────
+# 위아래가 뜻하는 바가 다르다. 위(진입가 > 현재가)는 '이미 지나간 자리/오파싱'
+# 이라 60% 로 좁게, 아래는 '가격이 오른 뒤의 깊은 눌림목 대기'라 정상이므로
+# 현재가의 10% 미만(= 자릿수 오파싱)일 때만 기각한다.
+# 이 비대칭이 없으면 실측 NEAR(진입 1,360원 vs 현재 3,138원 = −56.7%, 감시 중인
+# 정상 레벨)가 커트에서 3.3%p 차이로 아슬아슬했다. FB6 이 그 경계를 박아둔다.
+from collector.extractor import _sanity as _ext_sanity  # noqa: E402
+for _desc, _passed in [
+        ("FB6 하단 −56.7%(실측 NEAR)는 통과 — 대칭 60%면 여기서 죽는다",
+         _ext_sanity(1.0, 2.31, 0.60) is True),
+        ("FB7 하단 −80%(깊은 눌림목)도 통과", _ext_sanity(0.2, 1.0, 0.60) is True),
+        ("FB8 하단 −95%(자릿수 오파싱 0.83→0.083)는 기각",
+         _ext_sanity(0.05, 1.0, 0.60) is False),
+        ("FB9 상단 +50% 통과 / +61% 기각(상단은 종전 60% 유지)",
+         _ext_sanity(1.5, 1.0, 0.60) is True
+         and _ext_sanity(1.61, 1.0, 0.60) is False),
+        ("FB10 상단 +2552%(실측 오염 MASK)는 기각",
+         _ext_sanity(26.52, 1.0, 0.60) is False),
+        ("FB11 현재가 모르면 통과(판단보류 — 종전 계약 불변)",
+         _ext_sanity(12.5, None, 0.60) is True
+         and _ext_sanity(12.5, 0, 0.60) is True),
+        ("FB12 value 가 None 이면 통과(판단보류)",
+         _ext_sanity(None, 1.0, 0.60) is True)]:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += 7
+
 # ── SX: short 시그널 수집 배제 (2026-09-13 Q3, 사용자 결정) ────────────────
 # 근거: v5 이후 direction='short' 119건(16.8%)이 터치 0건·알림 0건·outcome 전량
 # NULL — monitor/price_check.py 가 long 레벨만 감시해 애초에 구조적으로 무의미

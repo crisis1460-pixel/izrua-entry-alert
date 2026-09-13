@@ -3790,10 +3790,15 @@ _ei_now = now + 70000
 _EI_CUR_USD = 0.0523
 _EI_NEAR_DEV = -56.7   # 실측: NEAR 진입 1,360원 vs 현재 3,138원
 _EI_MASK_DEV = 2552.0  # 실측: 오염 레벨 4건 중 최소 상단 이탈
+# 정상 급락: 가격이 진입가의 절반으로 빠진 상태(dev=+100%). 이건 잡아야 할
+# 오파싱이 아니라 **놓치면 안 되는 터치**다 — 커트가 60 이던 시절엔 여기서
+# 죽었다(감사 F2). 커트 300 의 존재 이유가 이 한 줄이다.
+_EI_CRASH_DEV = 100.0
 _ei_ids = {}
 with db.connect(_EI_DB) as conn:
     for _tag, _entry in [("sane", 0.0500), ("insane", 12.5),
                          ("near", _EI_CUR_USD * (1 + _EI_NEAR_DEV / 100.0)),
+                         ("crash", _EI_CUR_USD * (1 + _EI_CRASH_DEV / 100.0)),
                          ("mask", _EI_CUR_USD * (1 + _EI_MASK_DEV / 100.0))]:
         _lvei = dict(
             coin_symbol="ZEIX", ticker="KRW-ZEIX", direction="long",
@@ -3826,18 +3831,21 @@ with db.connect(_EI_DB) as conn:
     ).fetchone() for t, i in _ei_ids.items()}
     _ei_stats = db.get_daily_stats(conn, 7)
 
-check("EI1 진입가가 현재가 위로 60% 넘게 벗어난 레벨은 expired 로 끊긴다",
+check("EI1 진입가가 현재가 위로 허용폭(300%)을 넘게 벗어난 레벨은 expired 로 끊긴다",
       _ei_rows["insane"]["status"] == "expired")
 check("EI2 만료 사유는 entry_insane (shadow_touch/공지 만료와 구분)",
       _ei_rows["insane"]["expired_reason"] == "entry_insane")
+# EI3: 끊긴 레벨 **자체**가 판정 경로에 남지 않는지만 본다. 회차 전체의
+# touches 를 0 으로 못 박던 옛 기대는 crash 픽스처(정상 급락 → 실제 터치)를
+# 추가하면서 성립하지 않는다 — 그 터치는 일어나야 맞다(EI8).
 check("EI3 끊긴 레벨은 터치 판정도 알림도 받지 않는다",
       _ei_rows["insane"]["touched_at"] is None
-      and _ei_summary["touches"] == 0
-      and len(sent_messages) == _ei_msg_before)
+      and _ei_rows["mask"]["touched_at"] is None
+      and not any("ZEIX" in m[0] and "12.5" in m[0] for m in sent_messages[_ei_msg_before:]))
 check("EI4 정상 범위 레벨은 그대로 감시 유지(과잉 만료 없음)",
       _ei_rows["sane"]["status"] in ("watching", "previewed")
       and _ei_rows["sane"]["expired_reason"] is None)
-check("EI5 관찰집계 expired_entry_insane 에 만료분(insane+mask) 2건 누적",
+check("EI5 관찰집계 expired_entry_insane 에 만료분(insane+mask) 2건 누적 — crash 는 불포함",
       sum(r["expired_entry_insane"] for r in _ei_stats) == 2)
 # ── 비대칭 기준 회귀 (2026-09-13 실측 경계) ────────────────────────────
 check("EI6 하단 이탈 -56.7%(실측 NEAR)는 만료되지 않는다 — 대칭 60%면 깨진다",
@@ -3846,6 +3854,13 @@ check("EI6 하단 이탈 -56.7%(실측 NEAR)는 만료되지 않는다 — 대�
 check("EI7 상단 이탈 +2552%(실측 MASK)는 entry_insane 으로 만료된다",
       _ei_rows["mask"]["status"] == "expired"
       and _ei_rows["mask"]["expired_reason"] == "entry_insane")
+# EI8: 이번 커트 상향(60→300, 감사 F2)의 핵심 계약. 회차가 길게 끊긴 뒤 가격이
+# 반토막 난 정상 레벨(dev=+100%)은 **만료가 아니라 터치 대상**이어야 한다.
+# 커트를 60 으로 되돌리면 이 케이스가 반드시 깨진다.
+check("EI8 정상 급락(+100%, 가격 반토막)은 만료가 아니라 **터치**된다 — 커트 60이면 깨진다",
+      _ei_rows["crash"]["expired_reason"] is None
+      and _ei_rows["crash"]["status"] == "touched"
+      and _ei_rows["crash"]["touched_at"] is not None)
 
 settings.SETTINGS["db_path"] = _ei_prev_db
 if os.path.exists(_EI_DB):

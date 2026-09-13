@@ -136,6 +136,9 @@ _LADDER_MAX_WINDOW = 200
 # 뭉개면 사다리 감점(-3)을 잘못 물리기 때문. 저장은 참 개수, 표시만 12 컷.
 _SANITY_LO_MULT = settings.get("sanity_lo_mult")
 _SANITY_HI_MULT = settings.get("sanity_hi_mult")
+# 진입가 sanity 하단 허용폭 (2026-09-14, 감사 F3) — _sanity 독스트링 참고.
+# 0.90 = 현재가의 10% 미만이면 기각(자릿수 오파싱). 상단은 parse_setup(max_dev).
+_SANITY_BELOW_MAX = settings.get("sanity_below_max_dev")
 
 # 오인 유발 토큰 제거용: 레버리지 10x, 퍼센트, 날짜(문맥 한정)
 _LEVERAGE = re.compile(r"\b\d{1,3}\s*x\b", re.I)
@@ -362,10 +365,29 @@ def _grab_after(label_pat, text: str) -> list:
 
 
 def _sanity(value: float, current_price: Optional[float], max_dev: float) -> bool:
-    """현재가 대비 ±max_dev(비율) 안이면 유효. 현재가 모르면 통과(판단보류)."""
+    """현재가 대비 유효 범위 검사. 현재가 모르면 통과(판단보류).
+
+    **비대칭이다** (2026-09-14). 위아래가 뜻하는 바가 다르기 때문:
+      · 위(value > 현재가): 롱 진입가가 현재가보다 높다 = 이미 지나간 자리이거나
+        오파싱. 여기가 오파싱 탐지축이라 `max_dev`(기본 60%)로 좁게 잡는다.
+      · 아래(value < 현재가): 가격이 오른 뒤의 **깊은 눌림목 대기**로 정상이다.
+        같은 60%로 자르면 멀쩡한 셋업이 죽는다 — 실측 NEAR(진입 1,360원 vs 현재
+        3,138원 = −56.7%)는 감시 중인 정상 레벨인데 커트에서 3.3%p 차이였다.
+        같은 날 감시 단계 방어선(price_check)도 "하단 이탈은 정상"이라 판단해
+        비대칭을 택했는데, 수집 단계만 대칭이라 두 관문의 기준이 어긋나 있었다.
+    하단은 `_SANITY_BELOW_MAX`(기본 0.90 = 현재가의 10% 미만이면 기각)로 둔다 —
+    그 아래는 자릿수 오파싱(0.83 → 0.083)이지 눌림목이 아니다.
+
+    이 비대칭이 수집을 **느슨하게** 만드는 방향이라는 점은 의도된 것이다: 종전엔
+    CoinGecko 달러가가 있는 코인만 이 관문을 탔고, 2026-09-13 업비트 폴백가를
+    붙이면서 157개 코인이 새로 이 관문에 들어왔다. 새 관문이 정상 셋업을 자르는
+    부작용을 막는 게 이 수정의 목적이다(감사 F3)."""
     if current_price is None or current_price <= 0 or value is None:
         return True
-    return abs(value - current_price) / current_price <= max_dev
+    dev = (value - current_price) / current_price
+    if dev >= 0:
+        return dev <= max_dev
+    return -dev <= _SANITY_BELOW_MAX
 
 
 def parse_setup(text: str, current_price: Optional[float] = None,
