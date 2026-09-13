@@ -89,6 +89,52 @@ def _is_trade_result(text: str) -> bool:
                 return True
     return False
 
+
+# 진입 시그널 글 필터 (2026-09-14) — 위 _RESULT_PATTERNS 가 '지난 거래 자랑'을
+# 막는다면 이쪽은 '앞으로의 매매 지시'를 막는다. 둘 다 뉴스가 아니다.
+#
+# 왜 필요했나: extractor.parse_setup 이 포맷을 못 읽으면 그 글은 "셋업 아님"으로
+# 뉴스 경로에 떨어진다. 실측(09-14 브리핑 큐 id=1)에서 아래 글이 시황 뉴스로
+# 실렸다 — "❤️❤️❤️FREE SIGNAL!❤️❤️❤️ / Instrument: LSKUSDT / My opinion: BUY /
+# Entry: $0.83 / Target: $0.842 / RRR: 1:3". 파싱 실패한 시그널이 뉴스로 둔갑한
+# 전형이다. 실시간 발송 때는 하루에 흩어져 눈에 덜 띄었는데 브리핑 5줄에 모으니
+# 노이즈가 그대로 드러났다.
+#
+# 점수제인 이유는 _RESULT_PATTERNS 와 같다 — 단독 단어로 끊으면 정상 시황글이
+# 함께 죽는다("entry point for buyers", "price target of $5" 는 뉴스에도 흔하다).
+# 그래서 **라벨 형태(콜론이 붙은 지시문)** 와 시그널 전용 어휘만 본다.
+# 번역 전 원문에 적용되지만, 한글 채널·번역본 재검사까지 커버하도록 양쪽을 넣었다.
+_SETUP_PATTERNS = (
+    # ── 고정밀(2점): 시그널 카드에만 나오는 어휘 ──
+    (2, re.compile(r"\bfree\s+signals?\b|무료\s*신호", re.I)),
+    (2, re.compile(r"\binstrument\s*:|기기\s*:", re.I)),
+    (2, re.compile(r"\brrr\s*[:=]|\br\s*:\s*r\s*[:=]|위험\s*보상\s*비", re.I)),
+    (2, re.compile(r"\bmy\s+opinion\s*:|내\s*의견\s*:", re.I)),
+    (2, re.compile(r"\b(?:buy|sell)\s+(?:zone|setup)\s*:", re.I)),
+    # ── 보조(1점): 라벨 형태일 때만 — 본문 속 같은 단어와 구분된다 ──
+    (1, re.compile(r"\bentry\s*(?:price|point)?\s*:|진입가?\s*:|입장료\s*:", re.I)),
+    (1, re.compile(r"\btargets?\s*\d*\s*:|목표가?\s*:|경유지\s*:", re.I)),
+    (1, re.compile(r"\b(?:stop\s*-?\s*loss|sl)\s*:|손절가?\s*:", re.I)),
+    (1, re.compile(r"\btake\s*-?\s*profits?\s*\d*\s*:|\btp\s*\d*\s*:", re.I)),
+    (1, re.compile(r"\bleverage\s*:|레버리지\s*:", re.I)),
+)
+_SETUP_SCORE_MIN = 3
+
+
+def _is_trade_setup(text: str) -> bool:
+    """진입 시그널 글 판정 — 점수 3 이상이면 True (뉴스 경로에서 제외).
+
+    문턱이 리캡(2)보다 높은 이유: 보조 패턴이 라벨 형태라도 분석글에 한둘은
+    섞일 수 있다("Key levels — Support: 0.79"). 고정밀 1개 + 보조 1개,
+    또는 보조 3개가 모여야 시그널 카드로 본다."""
+    score = 0
+    for pts, rx in _SETUP_PATTERNS:
+        if rx.search(text):
+            score += pts
+            if score >= _SETUP_SCORE_MIN:
+                return True
+    return False
+
 # level_ids 필드 재사용 계약 (2026-08-17): news 알림은 매매 레벨 개념이 없어
 # alerts_log.level_ids 에 '단일 원소 = 채널명 문자열' 로 저장한다. record_alert
 # 는 정렬+CSV join 하므로 실제 저장값은 그대로 채널명. _rate_limit_ok 의 채널당
@@ -212,6 +258,10 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
 
     if _is_trade_result(text):
         logger.debug("[news] %s 매매 결과 리캡 스킵", symbol)
+        return "skipped"
+
+    if _is_trade_setup(text):
+        logger.debug("[news] %s 진입 시그널 글 스킵(파싱 실패한 시그널)", symbol)
         return "skipped"
 
     now = now if now is not None else time.time()

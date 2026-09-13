@@ -892,6 +892,50 @@ check("NB10b 독립 title 은 결합 유지",
       and "Body text differs" in _sent_log[0][0])
 _st_cfg.SETTINGS["news_translate_enabled"] = True
 
+# ─── NBS1~NBS8: 진입 시그널 글 필터 (2026-09-14) ──────────────────────────
+# 사고: extractor.parse_setup 이 포맷을 못 읽은 시그널 글이 "셋업 아님"으로 뉴스
+# 경로에 떨어져 시황 뉴스인 척 실렸다. 실측(브리핑 큐 id=1) —
+# "❤️❤️❤️FREE SIGNAL!❤️❤️❤️ / Instrument: LSKUSDT / My opinion: BUY /
+#  Entry: $0.83 / Target: $0.842 / RRR: 1:3".
+# 아래 후반부(정상 뉴스)가 이 필터의 진짜 계약이다 — 시황글을 잡으면 안 된다.
+_nbs = _nb._is_trade_setup
+for _d, _t, _want in [
+    ("NBS1 FREE SIGNAL 카드(실측 원문)",
+     "❤️❤️❤️FREE SIGNAL!❤️❤️❤️\nInstrument: LSKUSDT\nMy opinion: BUY\n"
+     "Entry: $0.83\nTarget: $0.842\nRRR: 1:3", True),
+    ("NBS2 같은 글의 한글 번역본(번역 후 재검사 대비)",
+     "❤️❤️❤️무료 신호!❤️❤️❤️\n기기: LSKUSDT\n내 의견: 구매\n입장료: $ 0.83\n"
+     "경유지: $ 0.826\n목표: $ 0.842\nRRR: 1: 3", True),
+    ("NBS3 전형적 시그널 카드(Entry/TP/SL/Leverage)",
+     "BTC/USDT LONG\nEntry: 62000\nTP1: 64000\nSL: 60000\nLeverage: 10x", True),
+    ("NBS4 정상 시장분석은 통과(실측 FIL)",
+     "# FIL Market Analysis\nFIL exploded to 0.9363 over six hours, cleanly "
+     "leaving the demand zone near 0.7900.\nBull case: hold above 0.9000.", False),
+    ("NBS5 고래 매수 뉴스는 통과(실측 SOL)",
+     "A whale bought $9,000,000 of #SOL this week. Smart money is now "
+     "focusing more on alts.", False),
+    ("NBS6 차트 코멘트는 통과(실측 NEO)",
+     "$NEOUSDT update: 30m\nThis trendline will soon create a new opportunity.", False),
+    ("NBS7 'entry point'·'price target' 산문은 통과(과필터 방지)",
+     "Bitcoin found a good entry point for buyers near support. Analysts see "
+     "a price target of $120,000 this quarter.", False),
+    ("NBS8 'Support:'·'Resistance:' 라벨만으론 통과(보조 2점 < 문턱 3점)",
+     "Key levels to watch — Support: 0.79, Resistance: 0.95. The market "
+     "remains range-bound.", False),
+]:
+    check(_d, _nbs(_t) is _want)
+
+# 파이프라인 통과 검증 — 필터가 실제 발송 경로에서 동작하는가
+_sent_log.clear()
+_p_sig = {"title": "", "description":
+          "FREE SIGNAL! Instrument: ADAUSDT My opinion: BUY Entry: $0.83 "
+          "Target: $0.842 RRR: 1:3 — plenty long to clear the min length gate.",
+          "url": ""}
+r = _nb.maybe_send_news_brief(_nbc, _p_sig, "ADA", "chsig",
+                              now=1786900000 + 86400 * 9)
+check("NBS9 시그널 글은 발송·큐 적재 둘 다 안 된다(skipped)",
+      r == "skipped" and len(_sent_log) == 0)
+
 # ─── NBQ1~NBQ4: 뉴스 발송 스위치 OFF → 브리핑 대기열 (2026-09-13 A안) ────
 # 계약: OFF 면 telegram.send 만 생략하고 상한·쿨다운·필터·요약·번역은 종전대로
 # 수행한다. 결과물은 news_digest_queue 에 적재되고 record_alert(kind='news')도
@@ -1101,6 +1145,23 @@ _mb2_news = _mb._news_lines(_mb2, _mb2_ids)
 check("MB12 적재 날짜와 무관하게 미소비 뉴스는 당일 브리핑에 실린다 — 사고 재발 방지",
       len(_mb2_ids) == 1 and any("DAWN" in x for x in _mb2_news))
 _mb2.close()
+
+# ── NBB1~NBB5: 뉴스 본문 정제 (2026-09-14) ───────────────────────────────
+# 브리핑은 요약 첫 문장 80자만 싣는데, 채널 원문의 장식이 그 자리를 차지해
+# 정작 내용이 안 보였다(실측: "# FIL 시장 분석 FIL은 6시간 동안…" / 본문이 한
+# 글자도 안 나온 "❤️❤️❤️무료 신호!❤️❤️❤️" 글).
+check("NBB1 선행 마크다운 헤더 줄은 걷어내고 본문부터 싣는다(실측 FIL)",
+      _mb._first_sentence("# FIL 시장 분석\nFIL은 6시간 동안 급등했다. 다음 문장.")
+      .startswith("FIL은 6시간"))
+check("NBB2 본문 중간의 #(해시태그)은 보존 — 헤더만 스킵한다(실측 SOL)",
+      "#SOL" in _mb._first_sentence("고래가 이번 주 #SOL 을 샀다."))
+check("NBB3 반복 기호 이후 채널 꼬리말은 잘라낸다",
+      "Bitcoin Bullets" not in
+      _mb._first_sentence("XRP 가 지지선을 시험했다.\n➖➖➖➖➖➖➖\nBitcoin Bullets ® 거래"))
+check("NBB4 글자 없는 장식 줄은 건너뛴다",
+      _mb._first_sentence("🔥🔥🔥\n\n실제 본문이 여기 있다.").startswith("실제 본문"))
+check("NBB5 장식만 있는 글은 빈 문자열(요약 줄 자체가 생략된다)",
+      _mb._first_sentence("🔥🔥🔥\n➖➖➖➖") == "")
 
 # ── MB13~MB15: 잘린 뉴스의 소비 취소 (2026-09-14 감사 F1) ────────────────
 # 사고: _fit_telegram 이 인자를 제자리 변형하고 같은 객체를 반환해, 호출부의

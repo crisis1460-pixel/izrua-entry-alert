@@ -18,6 +18,7 @@ meta 선기록(중복 방지 우선)과 반대인 이유: 브리핑은 하루 �
 
 import html
 import logging
+import re
 import time
 import unicodedata
 from datetime import datetime
@@ -208,10 +209,43 @@ def _tp_hit_lines(conn, now: float) -> list:
     return lines
 
 
+def _news_body(text: str) -> str:
+    """뉴스 요약에서 **알맹이만** 남긴다 (2026-09-14).
+
+    채널 원문에는 본문 앞뒤로 정보가 없는 장식이 붙는다. 종전엔 개행만 공백으로
+    바꿔 이어 붙였더니 첫 문장 자리를 장식이 차지해 정작 내용이 안 보였다 —
+    실측: "# FIL 시장 분석 FIL은 6시간 동안 0.9363으로 폭발하여…" 처럼 제목이
+    80자 컷의 절반을 먹었고, "❤️❤️❤️무료 신호!❤️❤️❤️" 로 시작하는 글은 아예
+    본문이 한 글자도 안 나왔다.
+
+    걷어내는 것:
+      · 선행 마크다운 헤더 줄("# 제목") — 심볼·채널은 바로 윗줄에 이미 있다
+      · 장식만 있는 줄(이모지·기호만, 글자 없음)
+      · 채널 꼬리말 — 3자 이상 반복되는 구분 기호(➖➖➖, ---) **이후** 전부
+    """
+    raw = (text or "").replace("\r", "")
+    # 꼬리말 절단: 같은 기호가 3번 이상 연속되면 그 뒤는 채널 서명·홍보다.
+    cut = re.search(r"([-=~_➖—–·•*]{3,})", raw)
+    if cut:
+        raw = raw[:cut.start()]
+    kept = []
+    for line in raw.split("\n"):
+        ln = line.strip()
+        if not ln:
+            continue
+        if not kept and ln.startswith("#"):
+            continue                      # 선행 제목 줄만 스킵(본문 중 #은 보존)
+        if not re.search(r"[0-9A-Za-z가-힣]", ln):
+            continue                      # 글자가 없는 장식 줄
+        kept.append(ln)
+    return " ".join(kept)
+
+
 def _first_sentence(text: str, max_chars: int = _NEWS_SUMMARY_MAX_CHARS) -> str:
     """요약 첫 문장만 max_chars 안에서 뽑는다(브리핑 길이 방어).
-    문장 경계가 안 잡히면 그냥 길이로 자르고 '…' 을 붙인다."""
-    t = " ".join((text or "").split())
+    문장 경계가 안 잡히면 그냥 길이로 자르고 '…' 을 붙인다.
+    2026-09-14: 장식 제거(_news_body)를 먼저 태운다."""
+    t = " ".join(_news_body(text).split())
     if not t:
         return ""
     for sep in (". ", "。", "! ", "? "):
