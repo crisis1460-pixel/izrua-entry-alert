@@ -1024,7 +1024,8 @@ check("MB2 빈 뉴스 큐 → 📰 블록 생략",
 # MB3: 뉴스 5건 컷 + "외 N건" + consumed 처리
 for i in range(7):
     db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
-                         f"News body number {i}. Second sentence is dropped.",
+                         f"SYM{i} trades near 1,2{i}0 after reclaiming support. "
+                         f"Second sentence is dropped.",
                          f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
 _mbc.commit()
 _mb_ids = []
@@ -1033,7 +1034,7 @@ check("MB3 뉴스 큐 7건 → 최대 5건만 렌더 + 헤더에 '외 2건'",
       len(_mb_ids) == 5 and "외 2건" in _mb_news[0])
 check("MB3b 항목 줄에 코인·채널·요약 첫 문장(원문 링크 없음)",
       any("SYM0" in x and "@chan0" in x for x in _mb_news)
-      and any("News body number 0." in x for x in _mb_news)
+      and any("SYM0 trades near 1,200" in x for x in _mb_news)
       and not any("https://" in x for x in _mb_news))
 check("MB3c 요약은 첫 문장만 (둘째 문장 제외)",
       not any("Second sentence" in x for x in _mb_news))
@@ -1044,6 +1045,50 @@ _mb_ids2 = []
 _mb_news2 = _mb._news_lines(_mbc, _mb_ids2)
 check("MB4b 소비된 건은 다음 브리핑에 다시 안 나온다",
       len(_mb_ids2) == 2 and all(i not in _mb_ids for i in _mb_ids2))
+
+# ── MBQ1~MBQ5: 큐 노이즈 2차 필터 (2026-09-17 실사고) ────────────────────
+# 사고: 09-17 아침 브리핑에 시그널 카드("📍신호 ID: #2227📍 / 코인: $JUP/USDT
+# (2-5X) / 방향: 긴 / 정지 손실: 0.2160")가 실렸다. 수집 단계 필터는 큐 적재
+# **전에만** 돌기 때문에, 큐 적재(03:23)가 필터 수정 배포(07:04)보다 빨랐던 것.
+# 필터를 고쳐도 이미 쌓인 항목에는 소급되지 않는다 → 렌더 직전에 한 번 더 본다.
+# 전용 DB 를 쓴다 — 큐는 오래된 순으로 나가므로 다른 블록의 잔여 미소비분이
+# 섞이면 "무엇이 실렸는가" 검증이 흔들리고, 반대로 여기서 큐를 비우면 뒤쪽
+# 테스트(MB12)의 픽스처가 사라진다. 서로 건드리지 않는 게 맞다.
+_MBQ_DAY = "2026-09-17"
+_MBQ_NOW = 1789500000.0
+_MBQ_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_MBQ_DB)
+if True:
+    _mbqc = sqlite3.connect(_MBQ_DB)
+    _mbqc.row_factory = sqlite3.Row
+    # 노이즈 3종 + 정상 2건을 오래된 순으로 심는다(get_news_digest 가 오래된 순).
+    for _sym, _ch, _sum in [
+        ("JUP", "sig", "📍신호 ID: #2227📍\n코인: $JUP/USDT (2-5X)\n방향: 긴\n정지 손실: 0.2160"),
+        ("ZRX", "wolf", "투자하기 좋은 코인을 찾고 계신가요?\n$ZRX는 좋은 선택입니다."),
+        ("IN", "cs", "트레이딩 이론 설명이 길게 이어지는 교육용 글이며 코인과는 무관한 내용이다."),
+        ("XRP", "cs", "XRP는 엄청난 성장 잠재력을 보여줍니다\n"
+                      "XRP 시장이 상승세를 보일 가능성이 있다는 것을 쉽게 인식할 수 "
+                      "있습니다.\n또한 명확성 법은 상원의 공개 투표를 위해 "
+                      "마련되었으며 이는 XRP의 상당한 가격 변동을 촉진할 수 있습니다."),
+        ("ETH", "bb", "강세 사례: 2,540을 클리어합니다.\n약세: 2,460 부근에서 무너집니다."),
+    ]:
+        db.queue_news_digest(_mbqc, _sym, _ch, _sum, "", _MBQ_DAY, _MBQ_NOW)
+    _mbqc.commit()
+    _mbq_ids = []
+    _mbq_lines = _mb._news_lines(_mbqc, _mbq_ids)
+_mbq_body = "\n".join(_mbq_lines)
+check("MBQ1 큐에 이미 들어간 시그널 카드는 표시에서 제외(실사고 재현)",
+      "신호 ID" not in _mbq_body and "JUP" not in _mbq_body)
+check("MBQ2 광고·모호심볼도 같은 기준으로 제외(news_brief 기준 재사용)",
+      "ZRX" not in _mbq_body and "교육용" not in _mbq_body)
+check("MBQ3 정상 뉴스는 그대로 실린다(과필터 방지)",
+      "XRP" in _mbq_body and "ETH" in _mbq_body
+      and "↑ 2,540 위 강세" in _mbq_body)
+check("MBQ4 걸러진 항목도 **소비 처리**한다 — 큐에 남아 뒤를 굶기면 안 된다",
+      len(_mbq_ids) == 5)
+_mbq_left = db.count_news_digest(_mbqc)
+check("MBQ5 노이즈를 제외하고도 정상분을 채우려 상한보다 넉넉히 꺼낸다",
+      _mbq_left == 5 and _mb._NEWS_FETCH_MULT >= 2)
 
 # MB5~MB6: 🏁 어제 목표 도달 — 진입 대비 % 계산 + 8줄 컷
 _mb_lids = []
@@ -1142,8 +1187,11 @@ _mb2.commit()
 check("MB11b meta 가 미래 시각이면 신뢰하지 않고 24시간 폴백",
       any("DAWN TP2/2" in x for x in _mb._tp_hit_lines(_mb2, _MB2_NOW)))
 # 뉴스: '오늘' 날짜로 적재된 건도 당일 브리핑에 실려야 한다(종전엔 0건이었다)
-db.queue_news_digest(_mb2, "DAWN", "chan", "Dawn news body.", "", "2026-09-13",
-                     _MB2_NOW - 7200)
+# 픽스처에 가격을 넣는다 — 2026-09-17 정보 밀도 게이트(짧은데 가격 수치가 없는
+# 글은 알맹이 없음)가 렌더 단계에도 걸리므로, 더미 문장은 "정상 뉴스" 역할을 못 한다.
+db.queue_news_digest(_mb2, "DAWN", "chan",
+                     "DAWN trades near 1,250 after reclaiming the support zone.",
+                     "", "2026-09-13", _MB2_NOW - 7200)
 _mb2.commit()
 _mb2_ids = []
 _mb2_news = _mb._news_lines(_mb2, _mb2_ids)

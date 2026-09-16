@@ -62,6 +62,10 @@ _MACRO_LOOKAHEAD_DAYS = 7
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
 _TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
 _NEWS_BLOCK_MAX = 5          # 📰 주요 뉴스 — 뉴스 상한(5/일)과 동수
+# 큐에서 꺼낼 배수 (2026-09-17). 렌더 직전 2차 필터(_is_queued_noise)가 걸러내는
+# 만큼을 채우려면 상한보다 넉넉히 꺼내야 한다 — 딱 5건만 꺼내면 그중 3건이
+# 노이즈일 때 2건만 실린다. 3배면 실측 노이즈 비율(약 절반)을 충분히 흡수한다.
+_NEWS_FETCH_MULT = 3
 # 요약 첫 문장 컷. 2026-09-16 사용자 요청("핵심주제만 두괄식으로, 내용이 계속
 # 잘린다")으로 80 → 55. 줄이는 게 곧 개선인 이유: 채널 원문은 이미 두괄식이라
 # (첫 줄이 제목) 그 제목만 온전히 실으면 되고, 80자는 제목을 넘어 본문 중간까지
@@ -454,6 +458,31 @@ def _first_sentence(text: str, max_chars: int = _NEWS_SUMMARY_MAX_CHARS) -> str:
     return t[:max_chars].rstrip() + "…"
 
 
+def _is_queued_noise(symbol: str, summary: str) -> bool:
+    """큐에 **이미 들어간** 항목을 렌더 직전에 한 번 더 거른다 (2026-09-17).
+
+    왜 두 번 거르나: 수집 단계 필터(news_brief)는 큐 적재 **전에만** 돈다. 그래서
+    ① 필터를 고쳐도 이미 쌓인 항목에는 소급되지 않고 ② 새 노이즈 유형이 나타나면
+    고치기 전에 들어온 것들이 그대로 나간다. 실제로 09-17 아침 브리핑에 시그널
+    카드가 실렸다 — 큐 적재는 03:23 수집 회차, 필터 수정 배포는 07:04 였다.
+    진입가 sanity 를 수집·감시 두 곳에서 보는 것과 같은 이유다(마지막 방어선).
+
+    판정 기준은 news_brief 와 **같은 것을 재사용**한다 — 두 곳의 기준이 갈리면
+    어느 쪽이 정본인지 알 수 없게 된다. 지연 import 는 순환 방지용."""
+    from notify import news_brief as nb
+
+    if (symbol or "").upper() in nb._AMBIGUOUS_SYMBOLS:
+        return True
+    text = summary or ""
+    if any(k in text.lower() for k in nb._PROMO_KEYWORDS):
+        return True
+    if nb._is_trade_result(text) or nb._is_trade_setup(text):
+        return True
+    if len(text) < nb._DENSITY_MIN_LEN and not nb._NUMBER_RX.search(text):
+        return True
+    return False
+
+
 def _news_lines(conn, consumed_ids: list) -> list:
     """"📰 주요 뉴스" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
 
@@ -467,23 +496,43 @@ def _news_lines(conn, consumed_ids: list) -> list:
     새벽에 쌓인 뉴스가 당일 브리핑에서 빠지고 다음 날에야 나갔다(실측: 배포
     다음 날 브리핑의 뉴스 0건, 큐에는 5건이 '오늘' 날짜로 대기). consumed 플래그가
     이미 중복을 막으므로 "아직 안 보여준 것을 오래된 순으로"면 충분하다."""
-    rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX)
+    # 큐를 상한보다 넉넉히 꺼낸다 — 아래 2차 필터에서 걸러지는 만큼을 채우기 위해.
+    rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT)
     if not rows:
         return []
-    total = db.count_news_digest(conn)
-    head = "📰 <b>주요 뉴스</b>"
-    if total > len(rows):
-        head += f" (외 {total - len(rows)}건)"
-    lines = [head]
+
+    picked = []
     for r in rows:
+        # 걸러지는 항목도 **소비 처리는 한다** — 안 그러면 큐에 영원히 남아
+        # 매일 아침 같은 노이즈를 다시 판정하고, 뒤에 쌓인 정상 뉴스를 계속
+        # 밀어낸다(get_news_digest 는 오래된 순이라 머리에서 막히면 그 뒤가 굶는다).
         consumed_ids.append(r["id"])
+        if _is_queued_noise(r.get("symbol") or "", r.get("summary") or ""):
+            logger.info("[brief] 큐 노이즈 제외: %s (%s)",
+                        r.get("symbol"), (r.get("summary") or "")[:40])
+            continue
+        summ = _first_sentence(r.get("summary") or "")
+        if not summ:
+            continue                    # 정제 후 남는 게 없으면 실을 가치도 없다
+        picked.append((r, summ))
+        if len(picked) >= _NEWS_BLOCK_MAX:
+            break
+
+    if not picked:
+        return []
+    # "외 N건" 은 **아직 안 본 잔여분** 기준. 위에서 소비한 건 이미 처리된 것이라
+    # 세면 안 된다(노이즈까지 '남았다'고 표시되면 숫자가 거짓이 된다).
+    remain = max(0, db.count_news_digest(conn) - len(consumed_ids))
+    head = "📰 <b>주요 뉴스</b>"
+    if remain:
+        head += f" (외 {remain}건)"
+    lines = [head]
+    for r, summ in picked:
         sym = html.escape(str(r.get("symbol") or "?"))
         ch = html.escape(str(r.get("channel") or ""))
-        summ = html.escape(_first_sentence(r.get("summary") or ""))
         ch_part = f" · @{ch}" if ch else ""
         lines.append(f"   <b>{sym}</b>{ch_part}")
-        if summ:
-            lines.append(f"   {summ}")
+        lines.append(f"   {html.escape(summ)}")
     return lines
 
 
