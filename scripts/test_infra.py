@@ -797,8 +797,13 @@ _st_cfg.SETTINGS["news_alert_send_enabled"] = True
 _NB_MAX_CH = _st_cfg.SETTINGS["news_alert_max_per_channel_per_day"]
 
 # NB1: 정상 발송
-_p = {"description": "AAVE testing this text of 60+ chars long enough for min "
-                     "length filter passthrough here", "url": "https://t.me/x/1"}
+# 2026-09-16: 픽스처에 가격을 넣었다. 정보 밀도 게이트(짧은데 가격 수치가 하나도
+# 없는 글은 알맹이가 없다고 보고 스킵)가 생기면서, 종전의 더미 문장은 "정상 뉴스"
+# 역할을 못 한다 — 실제 시황 뉴스라면 가격·수치가 있는 게 정상이므로 픽스처를
+# 현실에 맞춘다(테스트 의도인 '정상 뉴스는 발송된다'는 그대로).
+_p = {"description": "AAVE holds near 126.19 after pulling back from the 140.00 "
+                     "high, keeping the multi-month uptrend intact.",
+      "url": "https://t.me/x/1"}
 r = _nb.maybe_send_news_brief(_nbc, _p, "AAVE", "ch1", now=1786900000)
 _nbc.commit()
 check("NB1 정상 뉴스 알림 발송(ok)", r == "ok" and len(_sent_log) == 1)
@@ -882,8 +887,8 @@ check("NB10 title=첫줄 중복 제거(1회만 표기)",
 # NB10b: 독립 title(desc 와 다름)은 종전대로 결합 유지 — 다음 날로 넘겨 상한 회피
 _sent_log.clear()
 _p_sep = {"title": "Headline about Cardano outlook",
-          "description": "Body text differs from the headline and is long "
-                         "enough to pass the minimum length filter easily.",
+          "description": "Body text differs from the headline: ADA trades near "
+                         "0.8420 after reclaiming the 0.8000 support zone.",
           "url": ""}
 r = _nb.maybe_send_news_brief(_nbc, _p_sep, "ADA", "ch6", now=1786900000 + 86400 + 600)
 _nbc.commit()
@@ -1162,6 +1167,57 @@ check("NBB4 글자 없는 장식 줄은 건너뛴다",
       _mb._first_sentence("🔥🔥🔥\n\n실제 본문이 여기 있다.").startswith("실제 본문"))
 check("NBB5 장식만 있는 글은 빈 문자열(요약 줄 자체가 생략된다)",
       _mb._first_sentence("🔥🔥🔥\n➖➖➖➖") == "")
+
+# ── NBC1~NBC12: "왜 사야 하는가" 우선 추출 (2026-09-16 사용자 요청) ────────
+# "결국 뉴스 첫줄에는 보는 사람이 이걸 왜 사야하는가에 포커스를 맞춰 핵심 이슈를
+# 먼저 언급" — 제목은 대개 수사(修辭)라 살 이유를 담지 못한다. 아래 케이스는
+# 전부 실제 발송분(news_digest_queue 15건)에서 가져왔다.
+check("NBC1 규제 촉매가 수사적 제목을 제친다(실측 XRP — 제목 '엄청난 성장 잠재력')",
+      _mb._first_sentence(
+          "XRP는 엄청난 성장 잠재력을 보여줍니다\nXRP 시장이 거대한 움직임을 위해 "
+          "자리를 잡았을 수 있습니다.\n또한, 명확성 법은 상원의 공개 투표를 위해 "
+          "마련되었으며, 이는 XRP 가격을 촉매할 수 있습니다."
+      ).startswith("명확성 법은 상원"))
+check("NBC2 선행 접속사('또한,')는 떼어낸다",
+      not _mb._first_sentence("제목입니다\n또한, 고래가 $9,000,000를 샀습니다.")
+      .startswith("또한"))
+check("NBC3 자금 유입이 촉매로 잡힌다(실측 SOL)",
+      "9,000,000" in _mb._first_sentence("고래가 이번 주 #Sol에서 $ 9,000,000를 샀습니다."))
+check("NBC4 기호-티커 사이 번역 공백 정리($ 9,000 → $9,000 / # Sol → #Sol)",
+      "$9,000,000" in _mb._first_sentence("고래가 #Sol 에서 $ 9,000,000를 샀습니다.")
+      and "# " not in _mb._first_sentence("고래가 # Sol에서 $ 9,000,000를 샀습니다."))
+# 시나리오 분기 템플릿 — 실측 @BitcoinBullets 4건이 전부 이 꼴이고 서술이 길어
+# 반드시 잘렸다. 위아래 분기 가격만 뽑으면 30자 안에 들어간다.
+_nbc_tpl = ("# FIL 시장 분석\nFIL은 6시간 동안 0.9363으로 폭발하여 0.7900 근처의 "
+            "수요 구역을 깨끗하게 벗어났습니다.\n황소 케이스: 0.9000을 초과하여 유지하고 "
+            "계속 밀어붙입니다.\n베어 케이스: 0.8600 아래로 페이드백합니다.\n"
+            "➖➖➖➖➖➖➖\nBitcoin Bullets ® 거래")
+check("NBC5 황소/베어 케이스에서 분기 가격만 뽑아 한 줄로",
+      _mb._first_sentence(_nbc_tpl) == "↑ 0.9000 위 강세 · ↓ 0.8600 아래 약세")
+check("NBC6 분기 가격이 같으면 하나의 기준선으로 표현(실측 AAVE)",
+      _mb._first_sentence("황소 케이스: 122.00 이상으로 유지합니다.\n"
+                          "베어 케이스: 122.00을 잃고 98.50으로 미끄러집니다.")
+      == "122.00 지키면 강세 · 잃으면 약세")
+check("NBC7 bull/bear case 영문 표기도 인식",
+      _mb._first_sentence("Bull case: 0.9000 hold.\nBear case: 0.8600 breakdown.")
+      == "↑ 0.9000 위 강세 · ↓ 0.8600 아래 약세")
+# 무의미한 제목 — 심볼 + 일반명사뿐이라 정보가 0이다
+check("NBC8 '# FIL 시장 분석' 류 제목은 버리고 본문을 올린다",
+      _mb._is_generic_title("# FIL 시장 분석") is True
+      and _mb._is_generic_title("$BTCUSDT 중요 업데이트") is True)
+check("NBC9 타임프레임만 붙은 제목도 무의미로 본다(실측 NEO '업데이트: 30분')",
+      _mb._is_generic_title("$ NEOUSDT 업데이트: 30분") is True)
+check("NBC10 내용 있는 제목은 살린다 — 두괄식 요지이므로",
+      _mb._is_generic_title("XRP는 엄청난 성장 잠재력을 보여줍니다") is False)
+check("NBC11 긴 촉매 문장은 절 경계에서 끊는다(동사 중간 절단 금지)",
+      _mb._first_sentence(
+          "제목\n명확성 법은 상원의 공개 투표를 위해 마련되었으며, 이는 XRP에 대한 "
+          "상당한 가격 움직임을 촉매할 수 있습니다.").endswith("…")
+      and "마련되었으며" in _mb._first_sentence(
+          "제목\n명확성 법은 상원의 공개 투표를 위해 마련되었으며, 이는 XRP에 대한 "
+          "상당한 가격 움직임을 촉매할 수 있습니다."))
+check("NBC12 차트 용어 1점짜리 단독은 촉매로 채택하지 않는다(과추출 방지)",
+      _mb._catalyst_sentence("이 저항선을 지켜보고 있습니다.", 55) == "")
 
 # ── MB13~MB15: 잘린 뉴스의 소비 취소 (2026-09-14 감사 F1) ────────────────
 # 사고: _fit_telegram 이 인자를 제자리 변형하고 같은 객체를 반환해, 호출부의

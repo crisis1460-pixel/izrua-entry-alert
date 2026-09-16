@@ -38,6 +38,10 @@ _AMBIGUOUS_SYMBOLS = frozenset({
     "RE", "LA", "ME", "AI", "IO", "OP",
     "HOME", "SUPER", "PUMP", "RED", "SKY", "TREE",
     "MASK", "SUN", "MOVE", "ERA",
+    # 2026-09-16 추가 — 브리핑 실물에서 잡힌 오탐. "IN" 은 영어 전치사라
+    # 트레이딩 교육 글("...5 losses limited to -5R, a 6-trade sequence...")이
+    # IN 코인 뉴스로 실렸다. 나머지도 같은 부류의 흔한 영단어.
+    "IN", "ON", "AT", "IT", "BY", "SO", "UP", "OG", "WIN", "BEST", "NEXT",
 })
 
 # 광고·프로모션 키워드 — 이 패턴이 본문에 있으면 뉴스가 아니라 홍보글.
@@ -46,6 +50,29 @@ _PROMO_KEYWORDS = (
     "join now", "sign up", "register now", "limited offer", "exclusive offer",
     "mt5", "mt4", "자동화 시스템", "vip channel", "premium channel",
     "free trial", "discount code", "promo code",
+    # 2026-09-16 추가 — 브리핑 실물에서 잡힌 종목 추천 광고.
+    # 실측(@wolfoftrading): "투자하기 좋은 코인을 찾고 계신가요? $ZRX는 좋은 선택입니다"
+    # — 근거 숫자가 하나도 없는 순수 추천문이다.
+    "찾고 계신가요", "좋은 선택", "looking for a coin", "looking for a good coin",
+    "great pick", "good pick", "best coin to",
+)
+
+# 정보 밀도 게이트 (2026-09-16) — "짧은데 숫자 하나 없는" 글은 알맹이가 없다.
+# 실측 노이즈: "$BTCUSDT 중요 업데이트: 현재 보유하고 있는 이 수준을 잃으면
+# 비트코인이 하락할 것으로 예상할 수 있습니다"(65자) — 그 '수준'이 얼마인지
+# 끝내 말하지 않아 읽어도 할 수 있는 게 없다.
+# 가격·비율 같은 **수치가 하나라도 있으면** 통과시킨다(고래 매수액·목표가·
+# 지지선 등 구체 정보가 있다는 뜻). 길면 서술형 분석일 수 있으니 역시 통과.
+_DENSITY_MIN_LEN = 100          # 이 길이 이상이면 수치가 없어도 통과(서술형 분석)
+# "수치"는 **가격다운 수치**여야 한다. 그냥 \d 로 보면 타임프레임 하나로 통과해
+# 버린다 — 실측 "$NEOUSDT 업데이트: 30분 / 이 추세선은 곧 새로운 기회를 창출할
+# 것입니다"(85자)가 '30분' 때문에 살아남아 브리핑에 실렸는데, 읽어도 가격이
+# 얼마인지·무엇을 하라는지가 없다. 달러 표기·소수점 가격·천단위 수만 인정한다.
+_NUMBER_RX = re.compile(
+    r"[\$￦]\s?[\d,]+(?:\.\d+)?"                  # $9,000,000 · ￦1,200
+    r"|\d+\.\d+"                                 # 0.9363 · 249.2 (소수 = 가격/비율)
+    r"|\d[\d,]{3,}"                              # 9,000 · 2540 (천단위)
+    r"|\d+(?:\.\d+)?\s*(?:%|퍼센트|percent)"      # 249.2 percent
 )
 
 # 매매 결과 리캡 필터 (2026-08-21 사용자 요청): "manually closed. +929.8 pips.
@@ -262,6 +289,11 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
 
     if _is_trade_setup(text):
         logger.debug("[news] %s 진입 시그널 글 스킵(파싱 실패한 시그널)", symbol)
+        return "skipped"
+
+    # 정보 밀도 게이트 (2026-09-16) — 위 상수 주석 참고.
+    if len(text) < _DENSITY_MIN_LEN and not _NUMBER_RX.search(text):
+        logger.debug("[news] %s 정보 밀도 미달 스킵(%d자, 수치 없음)", symbol, len(text))
         return "skipped"
 
     now = now if now is not None else time.time()

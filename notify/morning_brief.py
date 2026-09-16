@@ -62,7 +62,12 @@ _MACRO_LOOKAHEAD_DAYS = 7
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
 _TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
 _NEWS_BLOCK_MAX = 5          # 📰 주요 뉴스 — 뉴스 상한(5/일)과 동수
-_NEWS_SUMMARY_MAX_CHARS = 80  # 요약 첫 문장 컷 (브리핑 길이 방어)
+# 요약 첫 문장 컷. 2026-09-16 사용자 요청("핵심주제만 두괄식으로, 내용이 계속
+# 잘린다")으로 80 → 55. 줄이는 게 곧 개선인 이유: 채널 원문은 이미 두괄식이라
+# (첫 줄이 제목) 그 제목만 온전히 실으면 되고, 80자는 제목을 넘어 본문 중간까지
+# 물어 와서 "…" 로 끊기기만 했다. 제목이 무의미한 글은 _is_generic_title 이
+# 걷어내고 본문 첫 문장을 올린다.
+_NEWS_SUMMARY_MAX_CHARS = 55
 # 텔레그램 메시지 하드 리밋 4096자. 여유를 두고 이 값을 넘으면 뉴스 줄부터 줄인다
 # (뉴스는 다음 날 큐에 남지 않고 소비되므로 '줄이는' 게 아니라 '요약을 자르는' 쪽).
 _TELEGRAM_MAX_CHARS = 3900
@@ -223,6 +228,42 @@ def _news_body(text: str) -> str:
       · 장식만 있는 줄(이모지·기호만, 글자 없음)
       · 채널 꼬리말 — 3자 이상 반복되는 구분 기호(➖➖➖, ---) **이후** 전부
     """
+    return _news_body_impl(text)
+
+
+# 무의미한 제목 판정용 (2026-09-16). 채널 템플릿의 첫 줄이 "# FIL 시장 분석",
+# "$BTCUSDT 중요 업데이트" 처럼 **심볼 + 일반명사**뿐이면 정보가 0이다. 심볼과
+# 채널명은 브리핑에서 바로 윗줄에 이미 찍히므로 이런 제목은 자리만 차지한다.
+# 실측 4건(BitcoinBullets FIL·XRP·AAVE·ETH)이 전부 이 형태였고, 80자 컷의 절반을
+# 제목이 먹어 정작 "황소/베어 케이스" 분기점이 밀려났다.
+_GENERIC_TITLE_WORDS = (
+    "시장 분석", "시장분석", "중요 업데이트", "업데이트", "분석", "시황", "차트",
+    "전망", "리포트", "뉴스", "소식",
+    "market analysis", "market update", "price analysis", "update", "analysis",
+    "chart", "outlook", "report", "news",
+)
+# 제목에서 심볼·장식을 걷어낼 때 쓰는 패턴 — 티커 표기($BTC, BTCUSDT, #ETH)와
+# 구두점·이모지를 지운 뒤 남는 게 일반명사뿐인지 본다.
+_TITLE_STRIP_RX = re.compile(
+    r"[#$*_~`\[\](){}:：,.\-—–·•!?]|"
+    r"\b[A-Z0-9]{2,10}(?:USDT|USD|KRW|PERP)?\b", re.I)
+
+
+def _is_generic_title(line: str) -> bool:
+    """제목 줄이 '심볼 + 일반명사'뿐이라 정보가 없는가 (2026-09-16)."""
+    t = _TITLE_STRIP_RX.sub(" ", line or "")
+    # 타임프레임·기간 표기는 제목의 정보량에 보태지 않는다 — 실측
+    # "$NEOUSDT 업데이트: 30분" 은 숫자가 있다는 이유만으로 통과했지만
+    # 읽는 사람이 얻는 건 없다.
+    t = re.sub(r"\d+\s*(?:분|시간|일|주|개월|m|h|d|w)\b", " ", t, flags=re.I)
+    t = " ".join(t.split()).strip().lower()
+    if not t:
+        return True                     # 심볼·기호만 남은 줄 = 정보 0
+    return any(t == w or t.replace(" ", "") == w.replace(" ", "")
+               for w in _GENERIC_TITLE_WORDS)
+
+
+def _news_body_impl(text: str) -> str:
     raw = (text or "").replace("\r", "")
     # 꼬리말 절단: 같은 기호가 3번 이상 연속되면 그 뒤는 채널 서명·홍보다.
     cut = re.search(r"([-=~_➖—–·•*]{3,})", raw)
@@ -233,19 +274,168 @@ def _news_body(text: str) -> str:
         ln = line.strip()
         if not ln:
             continue
-        if not kept and ln.startswith("#"):
-            continue                      # 선행 제목 줄만 스킵(본문 중 #은 보존)
         if not re.search(r"[0-9A-Za-z가-힣]", ln):
             continue                      # 글자가 없는 장식 줄
+        if not kept:
+            # 선행 제목 줄 처리 (2026-09-16). 마크다운 헤더든 아니든, **정보가
+            # 없는 제목**이면 버리고 다음 줄을 머리로 올린다. 종전엔 '#' 로
+            # 시작하는 줄만 스킵해서 "$BTCUSDT 중요 업데이트" 같은 무기호 제목은
+            # 그대로 남았다. 반대로 "XRP는 엄청난 성장 잠재력을 보여줍니다" 처럼
+            # 내용이 있는 제목은 그 자체가 두괄식 요지이므로 반드시 살린다.
+            if _is_generic_title(ln.lstrip("#").strip()):
+                continue
+            kept.append(ln.lstrip("#").strip())
+            continue
         kept.append(ln)
-    return " ".join(kept)
+    # 불릿 기호는 한 줄로 이어 붙일 때 의미가 없다 — 앞머리 기호만 걷는다.
+    kept = [re.sub(r"^[*\-•]\s*", "", k) for k in kept]
+    # 줄 구조를 보존해 반환한다 (2026-09-16) — 호출부가 제목 줄과 본문
+    # 문장을 구분해야 하기 때문. 종전엔 여기서 공백으로 이어 붙여
+    # 그 구분이 사라졌고, 그래서 제목 뒤에 본문이 따라붙어 잘렸다.
+    return "\n".join(k for k in kept if k)
+
+
+# 시나리오 분기 템플릿 (2026-09-16). 실측 15건 중 4건(@BitcoinBullets)이 전부
+# 이 꼴이고, 정보량이 가장 많은 글들이다:
+#   "# FIL 시장 분석 / FIL은 6시간 동안 … / 황소 케이스: 0.9000을 초과하여 유지…
+#    / 베어 케이스: 0.8600 아래로 페이드백… / {수사적 질문} / ➖➖➖ / 채널 서명"
+# 이 글의 핵심은 **위아래 분기 가격** 하나뿐인데, 서술을 그대로 실으면 장황해서
+# 반드시 잘린다(사용자 지적 "내용이 계속 잘리더라"). 두 숫자만 뽑아 한 줄로 만든다.
+# 실패하면(패턴 불일치) 아래 일반 경로로 자연스럽게 떨어진다 — 채널이 포맷을
+# 바꿔도 조용히 종전 동작으로 돌아갈 뿐 깨지지 않는다.
+_BULL_RX = re.compile(r"(?:황소|불|강세)\s*케이스\s*[:：]\s*([\d,]+(?:\.\d+)?)|"
+                      r"bull\s*case\s*[:：]\s*([\d,]+(?:\.\d+)?)", re.I)
+_BEAR_RX = re.compile(r"(?:베어|곰|약세)\s*케이스\s*[:：]\s*([\d,]+(?:\.\d+)?)|"
+                      r"bear\s*case\s*[:：]\s*([\d,]+(?:\.\d+)?)", re.I)
+
+
+def _scenario_line(text: str) -> str:
+    """'황소/베어 케이스' 템플릿에서 분기 가격 두 개만 뽑아 한 줄로. 없으면 ""."""
+    b = _BULL_RX.search(text or "")
+    r = _BEAR_RX.search(text or "")
+    if not b or not r:
+        return ""
+    up = b.group(1) or b.group(2)
+    dn = r.group(1) or r.group(2)
+    if not up or not dn:
+        return ""
+    # 두 시나리오가 같은 숫자를 기준으로 갈리는 경우가 흔하다(실측 AAVE: 황소
+    # "122.00 이상 유지" / 베어 "122.00을 잃고"). 그대로 쓰면 "↑122 · ↓122" 라
+    # 오히려 헷갈리므로 하나의 분기선으로 표현한다.
+    if up == dn:
+        return f"{up} 지키면 강세 · 잃으면 약세"
+    return f"↑ {up} 위 강세 · ↓ {dn} 아래 약세"
+
+
+# 촉매(catalyst) 패턴 (2026-09-16 사용자 요청) — "보는 사람이 이걸 왜 사야
+# 하는가에 포커스를 맞춰 핵심 이슈를 먼저 언급".
+#
+# 왜 제목만으론 부족한가: 채널 제목은 대개 "XRP는 엄청난 성장 잠재력을
+# 보여줍니다" 같은 수사(修辭)라 읽어도 살 이유를 모른다. 정작 이유는 본문에
+# 있다 — 같은 글의 "명확성 법은 상원의 공개 투표를 위해 마련되었으며, 이는
+# XRP 가격을 촉매할 수 있습니다" 가 그것이다. 그래서 **문장 단위로 점수를
+# 매겨 가장 '살 이유'에 가까운 문장**을 머리에 올린다.
+#
+# 배점은 행동 근거의 강도 순이다: 외부 사건(규제·자금 유입) > 예정된 이벤트
+# (상장·업그레이드) > 차트 신호. 차트 신호를 낮게 둔 이유는 그것만으론
+# "왜 지금"에 답하지 못해서다.
+_CATALYST_PATTERNS = (
+    # ── 외부 사건: 가장 강한 매수 근거 ──
+    (3, re.compile(r"법안?\b|상원|하원|의회|규제|승인|ETF|SEC\b|소송|판결|"
+                   r"\bbill\b|\bsenate\b|\bapproval\b|\bruling\b|\blawsuit\b", re.I)),
+    (3, re.compile(r"고래|기관|큰손|\bwhale\b|\binstitution|"
+                   r"[\$￦]\s?[\d,]+(?:\.\d+)?\s*(?:억|만|[MBK]\b|백만|천만)|"
+                   r"순유입|자금\s*유입|\binflow", re.I)),
+    # ── 예정 이벤트: 날짜가 있어 '왜 지금'에 답한다 ──
+    (2, re.compile(r"상장|메인넷|업그레이드|하드포크|파트너십|제휴|에어드랍|"
+                   r"언락|해제|\blisting\b|\bmainnet\b|\bupgrade\b|\bpartnership\b", re.I)),
+    (2, re.compile(r"신고가|사상\s*최고|역대\s*최고|\ball[- ]?time high\b|\bATH\b", re.I)),
+    # ── 차트 신호: 보조 ──
+    (1, re.compile(r"과매도|초과\s*판매|과매수|골든\s*크로스|데드\s*크로스|"
+                   r"돌파|브레이크아웃|\boversold\b|\bbreakout\b|\bgolden cross\b", re.I)),
+    (1, re.compile(r"목표가?|저항선?|지지선?|\btarget\b|\bresistance\b|\bsupport\b", re.I)),
+)
+_SENT_SPLIT_RX = re.compile(r"(?<=[.。!?])\s+|\n+")
+
+# 촉매 문장을 본문 중간에서 뽑으면 접속사로 시작하는 일이 잦다(실측 XRP:
+# "또한, 명확성 법은 상원의…"). 머리에 올릴 문장이라 앞의 연결어는 군더더기다.
+_LEAD_CONJ_RX = re.compile(
+    r"^(?:또한|그리고|그러나|하지만|한편|게다가|더욱이|아울러|따라서|그래서|"
+    r"however|moreover|also|additionally|furthermore|meanwhile|but|and)"
+    r"\s*[,，]?\s*", re.I)
+# 번역 아티팩트: "# Sol", "$ ZRX" 처럼 기호와 티커 사이에 공백이 끼어 들어온다.
+_SYMBOL_GAP_RX = re.compile(r"([#$￦])\s+(?=[A-Za-z0-9])")
+# 한 문장이 상한을 넘을 때 "…"로 뭉개는 대신 **절 경계**에서 끊는다. 실측 XRP
+# 규제 문장이 "…가격 움직임을 촉매할…" 처럼 동사 중간에서 잘려 뜻이 끊겼다.
+_CLAUSE_END_RX = re.compile(r"(?<=[,，])\s*|(?<=며)\s+|(?<=고)\s+|(?<=만)\s+|(?<=서)\s+")
+
+
+def _strip_lead(s: str) -> str:
+    """머리에 올릴 문장 다듬기 — 선행 접속사 제거 + 기호-티커 공백 정리."""
+    out = _LEAD_CONJ_RX.sub("", (s or "").strip())
+    out = _SYMBOL_GAP_RX.sub(r"\1", out)
+    return out.strip()
+
+
+def _clip_clause(s: str, max_chars: int) -> str:
+    """max_chars 안에서 **절 경계**까지만 남긴다. 경계가 없으면 길이로 자른다."""
+    if len(s) <= max_chars:
+        return s
+    cut = s[:max_chars]
+    best = 0
+    for m in _CLAUSE_END_RX.finditer(cut):
+        if m.start() > max_chars // 2:      # 너무 앞에서 끊지 않는다
+            best = m.start()
+    if best:
+        return cut[:best].rstrip(" ,，") + "…"
+    return cut.rstrip() + "…"
+
+
+def _catalyst_sentence(body: str, max_chars: int) -> str:
+    """본문에서 '살 이유'에 가장 가까운 문장 1개. 근거가 없으면 "".
+
+    동점이면 **앞선 문장**이 이긴다(원문의 두괄식 의도를 존중). 뽑은 문장이
+    길면 호출부가 자르되, 자르기 전에 문장 자체가 핵심이라는 점은 지켜진다."""
+    best, best_score = "", 0
+    for raw in _SENT_SPLIT_RX.split(body):
+        s = raw.strip()
+        if len(s) < 8:                      # 조각·머리말은 후보 제외
+            continue
+        score = sum(pts for pts, rx in _CATALYST_PATTERNS if rx.search(s))
+        if score > best_score:
+            best, best_score = s, score
+    return best if best_score >= 2 else ""  # 차트 신호 1점짜리 단독은 채택 안 함
 
 
 def _first_sentence(text: str, max_chars: int = _NEWS_SUMMARY_MAX_CHARS) -> str:
-    """요약 첫 문장만 max_chars 안에서 뽑는다(브리핑 길이 방어).
-    문장 경계가 안 잡히면 그냥 길이로 자르고 '…' 을 붙인다.
-    2026-09-14: 장식 제거(_news_body)를 먼저 태운다."""
-    t = " ".join(_news_body(text).split())
+    """브리핑에 실을 **핵심 한 줄**. 없으면 "".
+
+    우선순위 (2026-09-16 사용자 요청 "왜 사야 하는가에 포커스"):
+      ① 촉매 문장 — 규제·자금 유입·예정 이벤트처럼 **행동 근거**가 담긴 문장
+      ② 시나리오 분기 템플릿이면 분기 가격 한 줄 (_scenario_line)
+      ③ 정보 있는 제목 줄이 있으면 **그 줄에서 끝낸다** — 채널 원문은 대개
+         첫 줄이 제목이라 이미 두괄식이다. 종전엔 모든 줄을 공백으로 이어 붙여
+         제목 뒤에 본문이 따라붙었고, 그래서 제목이 멀쩡한데도 "…"로 잘렸다.
+      ④ 그 외에는 첫 문장을 max_chars 안에서.
+    ①이 ②보다 앞서는 이유: 분기 가격은 "어디서 사라"이지 "왜 사라"가 아니다.
+    """
+    body = _news_body(text)
+    if not body:
+        return ""
+
+    cat = _catalyst_sentence(body, max_chars)
+    if cat:
+        return _clip_clause(_strip_lead(cat), max_chars)
+
+    scen = _scenario_line(text)
+    if scen:
+        return scen
+
+    head = body.split("\n", 1)[0].strip() if "\n" in body else ""
+    if head and len(head) <= max_chars:
+        return head
+
+    t = _strip_lead(" ".join(body.split()))
     if not t:
         return ""
     for sep in (". ", "。", "! ", "? "):
