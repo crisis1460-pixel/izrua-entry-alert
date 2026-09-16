@@ -144,6 +144,15 @@ _SETUP_PATTERNS = (
     (1, re.compile(r"\b(?:stop\s*-?\s*loss|sl)\s*:|손절가?\s*:", re.I)),
     (1, re.compile(r"\btake\s*-?\s*profits?\s*\d*\s*:|\btp\s*\d*\s*:", re.I)),
     (1, re.compile(r"\bleverage\s*:|레버리지\s*:", re.I)),
+    # 2026-09-17 추가 — 실측(@BitmexSignalsFee)에서 **번역된 시그널 카드**가
+    # 그대로 통과했다: "📍신호 ID: #2227📍 / 코인: $JUP/USDT (2-5X) / 방향: 긴 /
+    # 정지 손실: 0.2160 / 🚫20% 손실(2x)🚫". 무료 번역기가 Stop Loss 를 "정지
+    # 손실", Long 을 "긴"으로 옮기는 바람에 기존 한글 라벨(`손절가:`)이 전부
+    # 빗나갔다. 번역 변형까지 라벨로 잡는다.
+    (2, re.compile(r"신호\s*ID|\bsignal\s*id\b", re.I)),          # 시그널 채널 전용 메타
+    (1, re.compile(r"정지\s*손실\s*[:：]|스탑\s*로스\s*[:：]", re.I)),
+    (1, re.compile(r"^\s*코인\s*[:：]|\n\s*코인\s*[:：]|^\s*방향\s*[:：]|\n\s*방향\s*[:：]", re.I)),
+    (1, re.compile(r"\(\s*\d+\s*-\s*\d+\s*[xX]\s*\)|\(\s*\d+\s*[xX]\s*\)"), ),  # (2-5X)·(2x)
 )
 _SETUP_SCORE_MIN = 3
 
