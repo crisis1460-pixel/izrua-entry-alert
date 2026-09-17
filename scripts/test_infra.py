@@ -1083,12 +1083,35 @@ check("MBQ2 광고·모호심볼도 같은 기준으로 제외(news_brief 기준
       "ZRX" not in _mbq_body and "교육용" not in _mbq_body)
 check("MBQ3 정상 뉴스는 그대로 실린다(과필터 방지)",
       "XRP" in _mbq_body and "ETH" in _mbq_body
-      and "↑ 2,540 위 강세" in _mbq_body)
+      and "↑ 2,540 강세" in _mbq_body)
 check("MBQ4 걸러진 항목도 **소비 처리**한다 — 큐에 남아 뒤를 굶기면 안 된다",
       len(_mbq_ids) == 5)
 _mbq_left = db.count_news_digest(_mbqc)
 check("MBQ5 노이즈를 제외하고도 정상분을 채우려 상한보다 넉넉히 꺼낸다",
       _mbq_left == 5 and _mb._NEWS_FETCH_MULT >= 2)
+
+# ── MBW1~MBW7: 요약 줄 행잉 인덴트 (2026-09-16 사용자 요청) ───────────────
+# "줄내림 발생시 줄내림만 들어가는 게 아니고, 줄내림 직전 텍스트 시작열과
+#  동일한 위치에서 시작되게" — 텔레그램에는 CSS 가 없어 한 줄이 화면 폭을
+# 넘으면 클라이언트가 접고 **접힌 줄은 0열에 붙는다**. 미리 폭에 맞춰 나누고
+# 각 줄에 같은 들여쓰기를 넣어 접힘 자체를 없앤다.
+_W, _IND = _mb._NEWS_WRAP_W, _mb._NEWS_INDENT
+_mbw = _mb._wrap_indented("명확성법(Clarity Act)은 상원의 공개 투표로 예정되어 있으며…",
+                          _W, _IND)
+check("MBW1 긴 요약은 여러 줄로 나뉜다", len(_mbw) >= 2)
+check("MBW2 **모든 줄**이 같은 들여쓰기로 시작한다(핵심 계약)",
+      all(x.startswith(_IND) and not x[len(_IND):].startswith(" ") for x in _mbw))
+check("MBW3 어느 줄도 표시 너비 상한을 넘지 않는다(넘으면 클라이언트가 다시 접는다)",
+      all(_mb._display_width(x) <= _W for x in _mbw))
+check("MBW4 원문 어절이 유실되지 않는다",
+      "".join(x[len(_IND):] for x in _mbw).replace(" ", "")
+      == "명확성법(ClarityAct)은상원의공개투표로예정되어있으며…".replace(" ", ""))
+check("MBW5 짧은 줄은 접지 않는다(불필요한 줄바꿈 금지)",
+      len(_mb._wrap_indented("↑ 2,540 강세 · ↓ 2,460 약세", _W, _IND)) == 1)
+_mbw_long = _mb._wrap_indented("a" * 80, _W, _IND)
+check("MBW6 공백 없는 긴 덩어리(URL 등)는 글자 단위로 쪼갠다",
+      len(_mbw_long) >= 2 and all(_mb._display_width(x) <= _W for x in _mbw_long))
+check("MBW7 빈 문자열은 줄을 만들지 않는다", _mb._wrap_indented("", _W, _IND) == [])
 
 # MB5~MB6: 🏁 어제 목표 도달 — 진입 대비 % 계산 + 8줄 컷
 _mb_lids = []
@@ -1241,14 +1264,14 @@ _nbc_tpl = ("# FIL 시장 분석\nFIL은 6시간 동안 0.9363으로 폭발하�
             "계속 밀어붙입니다.\n베어 케이스: 0.8600 아래로 페이드백합니다.\n"
             "➖➖➖➖➖➖➖\nBitcoin Bullets ® 거래")
 check("NBC5 황소/베어 케이스에서 분기 가격만 뽑아 한 줄로",
-      _mb._first_sentence(_nbc_tpl) == "↑ 0.9000 위 강세 · ↓ 0.8600 아래 약세")
+      _mb._first_sentence(_nbc_tpl) == "↑ 0.9000 강세 · ↓ 0.8600 약세")
 check("NBC6 분기 가격이 같으면 하나의 기준선으로 표현(실측 AAVE)",
       _mb._first_sentence("황소 케이스: 122.00 이상으로 유지합니다.\n"
                           "베어 케이스: 122.00을 잃고 98.50으로 미끄러집니다.")
       == "122.00 지키면 강세 · 잃으면 약세")
 check("NBC7 bull/bear case 영문 표기도 인식",
       _mb._first_sentence("Bull case: 0.9000 hold.\nBear case: 0.8600 breakdown.")
-      == "↑ 0.9000 위 강세 · ↓ 0.8600 아래 약세")
+      == "↑ 0.9000 강세 · ↓ 0.8600 약세")
 # 무의미한 제목 — 심볼 + 일반명사뿐이라 정보가 0이다
 check("NBC8 '# FIL 시장 분석' 류 제목은 버리고 본문을 올린다",
       _mb._is_generic_title("# FIL 시장 분석") is True
@@ -1277,10 +1300,10 @@ check("NBC13 '강세 사례:' / '약세:' 조합도 분기로 인식(실측 ETH)
       _mb._first_sentence(
           "#ETH 시장 분석\nETH는 4시간째 2,500.42에 있습니다.\n"
           "강세 사례: 2,540을 클리어합니다.\n약세: 2,460 부근에서 무너집니다."
-      ) == "↑ 2,540 위 강세 · ↓ 2,460 아래 약세")
+      ) == "↑ 2,540 강세 · ↓ 2,460 약세")
 check("NBC14 종전 '황소/베어 케이스' 표기도 계속 인식(회귀 보호)",
       _mb._first_sentence("황소 케이스: 0.9000 유지.\n베어 케이스: 0.8600 이탈.")
-      == "↑ 0.9000 위 강세 · ↓ 0.8600 아래 약세")
+      == "↑ 0.9000 강세 · ↓ 0.8600 약세")
 check("NBC15 한쪽만 있으면 분기 압축 안 하고 촉매로 넘어간다(실측 BTC)",
       _mb._first_sentence(
           "#BTC 시장분석\nBTC는 일일 76,155에 있습니다.\n"

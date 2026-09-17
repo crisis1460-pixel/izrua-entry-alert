@@ -54,6 +54,53 @@ def _display_width(text: str) -> int:
     """한글·CJK·이모지 = 2, 나머지 = 1 로 환산한 표시 너비."""
     return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
+
+def _wrap_indented(text: str, max_w: int, indent: str) -> list:
+    """표시 너비 기준으로 줄을 나누고 **모든 줄에 같은 들여쓰기**를 붙인다
+    (2026-09-16 사용자 요청 — 행잉 인덴트).
+
+    왜 직접 나누나: 텔레그램에는 CSS 가 없어서, 한 줄이 화면 폭을 넘으면
+    클라이언트가 알아서 접고 **접힌 줄은 왼쪽 끝(0열)에 붙는다**. 그러면
+    항목 들여쓰기가 무너져 어디까지가 한 항목인지 읽기 어렵다. 우리가 미리
+    폭에 맞춰 나누고 각 줄 머리에 같은 indent 를 넣으면 접힘이 일어나지
+    않으므로 시작 열이 유지된다.
+
+    어절 경계로 나누되, 한 어절이 폭보다 길면(긴 URL·붙여쓴 영문) 그 어절만
+    글자 단위로 쪼갠다 — 안 그러면 그 줄이 폭을 넘어 다시 클라이언트 접힘이
+    일어나 목적을 잃는다."""
+    avail = max_w - _display_width(indent)
+    if avail <= 0 or not text:
+        return [indent + text] if text else []
+
+    def _split_long(word: str) -> list:
+        """한 어절이 avail 을 넘으면 글자 단위로 조각낸다."""
+        out, cur, w = [], "", 0
+        for ch in word:
+            cw = _display_width(ch)
+            if cur and w + cw > avail:
+                out.append(cur)
+                cur, w = ch, cw
+            else:
+                cur += ch
+                w += cw
+        if cur:
+            out.append(cur)
+        return out
+
+    lines, cur, cur_w = [], [], 0
+    for raw in text.split():
+        for word in (_split_long(raw) if _display_width(raw) > avail else [raw]):
+            ww = _display_width(word)
+            if cur and cur_w + 1 + ww > avail:
+                lines.append(" ".join(cur))
+                cur, cur_w = [word], ww
+            else:
+                cur_w += (1 if cur else 0) + ww
+                cur.append(word)
+    if cur:
+        lines.append(" ".join(cur))
+    return [indent + ln for ln in lines]
+
 # 매크로 이벤트 예고 범위(일). get_nearby_macro_event 는 24h 창이라 브리핑용
 # 7일 예고는 get_macro_events(conn) 자동 캘린더를 사용한다.
 _MACRO_LOOKAHEAD_DAYS = 7
@@ -66,6 +113,11 @@ _NEWS_BLOCK_MAX = 5          # 📰 주요 뉴스 — 뉴스 상한(5/일)과 �
 # 만큼을 채우려면 상한보다 넉넉히 꺼내야 한다 — 딱 5건만 꺼내면 그중 3건이
 # 노이즈일 때 2건만 실린다. 3배면 실측 노이즈 비율(약 절반)을 충분히 흡수한다.
 _NEWS_FETCH_MULT = 3
+# 뉴스 요약 줄의 표시 너비 상한과 들여쓰기 (2026-09-16 행잉 인덴트).
+# 매크로 캘린더 줄(_MACRO_LINE_MAX_W=32)과 같은 계열의 값 — 모바일 텔레그램에서
+# 한 줄에 무리 없이 들어가는 폭이다. 들여쓰기를 포함한 전체 너비 기준.
+_NEWS_WRAP_W = 36
+_NEWS_INDENT = "   "         # 코인·채널 줄과 요약 줄이 같은 열에서 시작한다
 # 요약 첫 문장 컷. 2026-09-16 사용자 요청("핵심주제만 두괄식으로, 내용이 계속
 # 잘린다")으로 80 → 55. 줄이는 게 곧 개선인 이유: 채널 원문은 이미 두괄식이라
 # (첫 줄이 제목) 그 제목만 온전히 실으면 되고, 80자는 제목을 넘어 본문 중간까지
@@ -335,7 +387,9 @@ def _scenario_line(text: str) -> str:
     # 오히려 헷갈리므로 하나의 분기선으로 표현한다.
     if up == dn:
         return f"{up} 지키면 강세 · 잃으면 약세"
-    return f"↑ {up} 위 강세 · ↓ {dn} 아래 약세"
+    # "위/아래"는 화살표와 중복이라 뺀다 — 한 줄(표시 너비 36)에 들어가야
+    # 행잉 인덴트로 접히지 않고 한눈에 읽힌다.
+    return f"↑ {up} 강세 · ↓ {dn} 약세"
 
 
 # 촉매(catalyst) 패턴 (2026-09-16 사용자 요청) — "보는 사람이 이걸 왜 사야
@@ -531,8 +585,12 @@ def _news_lines(conn, consumed_ids: list) -> list:
         sym = html.escape(str(r.get("symbol") or "?"))
         ch = html.escape(str(r.get("channel") or ""))
         ch_part = f" · @{ch}" if ch else ""
-        lines.append(f"   <b>{sym}</b>{ch_part}")
-        lines.append(f"   {html.escape(summ)}")
+        lines.append(f"{_NEWS_INDENT}<b>{sym}</b>{ch_part}")
+        # 요약은 폭에 맞춰 직접 접고 **모든 줄을 같은 열에서 시작**시킨다.
+        # escape 는 접은 **뒤에** 각 줄에 적용한다 — 먼저 escape 하면 `&amp;`
+        # 같은 엔티티가 줄 경계에서 쪼개져 깨진 문자로 보인다.
+        for ln in _wrap_indented(summ, _NEWS_WRAP_W, _NEWS_INDENT):
+            lines.append(_NEWS_INDENT + html.escape(ln[len(_NEWS_INDENT):]))
     return lines
 
 
