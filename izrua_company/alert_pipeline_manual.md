@@ -297,6 +297,15 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 
 ---
 
+## GitHub Actions Node 20 런타임 제거 대응 (2026-09-17)
+
+| 항목 | 내용 |
+|------|------|
+| **배경** | GitHub 이 2026-06-16 러너 기본 런타임을 Node 24 로 전환하고 **2026-09-23 Node 20 을 완전 제거**한다(2025-09-19 최초 공지). 그때까지는 node20 액션도 러너가 Node 24 로 강제 실행해 주지만(회차 로그의 `Node.js 20 is deprecated … forced to run on Node.js 24` 경고), 제거 이후 동작은 보장되지 않는다 |
+| **점검 결과** | 액션 태그별 `runs.using` 을 직접 확인(레포 `action.yml`): checkout **v4=node20 / v5+=node24**, setup-python **v5=node20 / v6+=node24**, upload-artifact **v5=node20 / v6+=node24**. 알림봇 5개 워크플로가 전부 v4·v5(node20)였고, 워쳐는 09-13 에 올렸지만 `upload-artifact@v5` 가 여전히 node20 이었다 |
+| **조치** | 두 레포 모두 **v7 로 통일**(전부 node24). v7 의 breaking change 는 이 프로젝트와 무관 — checkout v7 은 fork PR 체크아웃 차단(`pull_request_target`/`workflow_run` 전용, 우리는 workflow_dispatch·push·schedule 만 씀), setup-python v7 은 ESM 마이그레이션, upload-artifact v7 은 `archive` 파라미터 추가(기본 true = 종전 zip 동작 유지, 워쳐의 `gh api …/zip` 복원 경로 무영향) |
+| **교훈** | 메이저 태그만 보고 "올렸으니 됐다"고 판단하면 안 된다 — **`runs.using` 을 직접 확인**해야 한다. 09-13 에 워쳐를 v5/v6/v5 로 올렸지만 checkout·upload-artifact 는 v5 가 아직 node20 이라 절반만 해결된 상태였다 |
+
 ## 운영 인프라 (2026-08-13)
 
 | 항목 | 파일 | 내용 |

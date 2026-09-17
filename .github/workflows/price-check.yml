@@ -60,8 +60,8 @@ jobs:
     # 하드 타임아웃이 걸려 있어 잡 타임아웃(20분)에 먼저 닿지 않는다.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
