@@ -453,6 +453,53 @@ def _tp_dispatch(text: str, urgency: str, cfg_get) -> tuple:
     return bool(telegram.send(text, urgency=urgency)), 1
 
 
+# ── 결과 이모지 반응 (2026-09-22 Q4 사용자 결정) ────────────────────────────
+# 우선순위: 좋은 결과가 나쁜 결과에 **덮이지 않는다**. 클러스터 형제는 같은
+# touch_message_id 를 공유하는데(터치 본알림 1건), 형제마다 판정 시점·결과가
+# 다르므로 순서를 정하지 않으면 최종 완주(🏆) 뒤에 형제의 손절(👎)이 덮어쓴다.
+# 앞쪽일수록 강함 — 이미 같거나 더 강한 반응이 달려 있으면 새 반응을 달지 않는다.
+_REACTION_PRIORITY = ("hit", "tp_partial", "timeboxed_win", "fail")
+
+
+def _react(conn, lv: dict, key: str, cfg_get) -> bool:
+    """터치 본알림 메시지에 결과 이모지 반응을 단다. 성공 시 True (2026-09-22 Q4).
+
+    - `tp_alert_send_enabled`(현 운영값 False)와 **무관하게** 동작한다 — 반응은
+      '발송'이 아니라 이미 보낸 메시지의 속성이고, 새 알림이 0건이기 때문이다.
+    - touch_message_id 가 없는 레벨(억제 터치·발송 실패·기능 배포 이전 과거 행)은
+      조용히 건너뛴다.
+    - 이미 같거나 더 강한 반응이 달려 있으면 건너뛴다(_REACTION_PRIORITY).
+    - **모든 실패는 삼킨다**: 반응이 판정·종결·회차를 막으면 절대 안 된다."""
+    try:
+        if not cfg_get("result_reaction_enabled"):
+            return False
+        if key == "fail" and not cfg_get("result_reaction_fail_enabled"):
+            return False   # 손절 표시만 따로 끄는 스위치(사용자 취향 분리)
+        emoji = (cfg_get("result_reaction_emoji") or {}).get(key)
+        if not emoji:
+            return False
+        mid = db.get_touch_message_id(conn, lv["id"])
+        if not mid:
+            return False   # 억제 터치·발송 실패·구 행 — 조용히 스킵
+        try:
+            rank = _REACTION_PRIORITY.index(key)
+        except ValueError:
+            return False
+        for prev in db.get_touch_reactions(conn, mid):
+            if prev in _REACTION_PRIORITY and _REACTION_PRIORITY.index(prev) <= rank:
+                return False   # 이미 같거나 더 좋은 결과가 달려 있다
+        if not telegram.set_reaction(mid, emoji):
+            return False
+        db.set_touch_reaction(conn, mid, key)
+        conn.commit()
+        logger.info("[적중판정] %s 결과 반응 %s (msg=%d)",
+                    lv.get("coin_symbol"), emoji, mid)
+        return True
+    except Exception as e:  # noqa: BLE001 - 반응 실패는 무조건 무해해야 한다
+        logger.warning("[적중판정] 결과 반응 실패(무시): %s", e)
+        return False
+
+
 def _tp_cluster_dup(lv: dict, all_touched: list, kind: str, db_path: str,
                     band_pct: float, since: float) -> bool:
     """클러스터 형제 레벨이 이미 같은 TP 종류를 최근 발송했는지 확인.
@@ -911,6 +958,17 @@ def run_once(now: float | None = None) -> dict:
                 except Exception as e:  # noqa: BLE001 - 발송 경로 생존 최우선
                     logger.warning("[체크] %s 작성자 실적 조회 실패(가점 없이 진행): %s",
                                    coin, e)
+
+                # 수집→터치 지연 감점 주입 (2026-09-22 v6 Q1) — 작성자 실적 주입과
+                # 같은 이유로 _rep(대표 선정)·전 멤버 재채점보다 **앞**이어야 한다.
+                # 둘 다 regrade_current 를 타고, regrade_current 는 명시 인자가
+                # 없으면 레벨 dict 의 touch_delay_minutes 키를 보기 때문이다.
+                # **터치에만** 실린다 — 예고(previewing)는 아직 닿지 않았으므로
+                # 지연 자체가 정의되지 않는다(None → 감점 0).
+                for _lv in cluster:
+                    _col = _lv.get("collected_at")
+                    _lv["touch_delay_minutes"] = (
+                        max(0.0, (now - _col) / 60.0) if (touched and _col) else None)
 
                 rep = _rep(cluster, current_usd)  # 재채점 기준 대표 선정
                 ids = [l["id"] for l in cluster]
@@ -1404,6 +1462,15 @@ def run_once(now: float | None = None) -> dict:
                                 db.set_preview_message_id(conn, ids, _sent_mid)
                             except Exception as e:  # noqa: BLE001
                                 logger.warning("[체크] %s preview msgid 저장 실패(무시): %s",
+                                               coin, e)
+                        # 결과 반응용 message_id 저장 (2026-09-22 Q4) — 터치
+                        # 본알림만. 클러스터 전 멤버에 같은 값(preview 전례).
+                        # 저장 실패해도 알림은 나갔으므로 격리 — 반응만 생략된다.
+                        if touched and _sent_mid > 0:
+                            try:
+                                db.set_touch_message_id(conn, ids, _sent_mid)
+                            except Exception as e:  # noqa: BLE001
+                                logger.warning("[체크] %s touch msgid 저장 실패(무시): %s",
                                                coin, e)
                         # 표시된 판정 2종 로깅 (2026-08-07 자가검증) — 터치 본알림만.
                         # 발송 성공 직후에 기록해 "표시된 것만 기록" 불변식 유지.
@@ -1909,6 +1976,21 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 outcome, resolve_price = "miss", sl_krw
             if outcome:
                 break
+
+        # ── MFE/MAE 누적 갱신 (2026-09-22 P1 수리) ────────────────────────
+        # 종전엔 종결 시 1회만 기록했는데 스캔 캔들이 직전 회차 이후 ≈4~6분뿐이라
+        # "종결이 일어난 그 회차의 몇 분"만 남았다(승리 건 98.3% mae=0, 패배 건
+        # 97.5% mfe=0 — research_2026-09-17_db_analysis.md §1-3). 이제 **매 회차**
+        # 이 회차 극값을 DB 에 단조로 이어 붙여 터치 이후 전 구간을 누적한다.
+        # 추가 API 콜 0(위 루프가 이미 읽은 캔들 재사용). 미종결 행만 갱신하므로
+        # 이번 회차에 종결되는 건은 아래 record_mfe_mae 가 확정값으로 마감한다.
+        # 기록 실패가 판정을 막으면 안 되므로 격리.
+        if _running_mfe > 0 or _running_mae < 0:
+            try:
+                db.update_mfe_mae_running(conn, lv["id"], _running_mfe, _running_mae)
+            except Exception as e:  # noqa: BLE001 - 판정 경로 생존 최우선
+                logger.warning("[적중판정] %s MFE/MAE 누적 실패(무시): %s", ticker, e)
+
         if not outcome:
             # 캔들 부재(예산/실패) 폴백: 현재가 스냅샷 (다음 회차가 보완)
             if tp_krw > 0 and current >= tp_krw:
@@ -1962,6 +2044,12 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 and _b_swing_pass(lv)
             if _is_multi_tp and _tp_alert_idx < len(_tps_valid) - 1:
                 # 중간 TP 적중 — 다음 TP 로 진행, 아직 종결하지 않는다.
+                # Q4 (2026-09-22): 첫/중간 목표 도달 👍 를 터치 본알림에 단다.
+                # TP 알림 발송 게이트(_touch_sent·클러스터 중복·스위치 OFF)와
+                # **무관하게** 시도한다 — 반응은 '발송'이 아니라 이미 보낸
+                # 메시지의 속성이고, touch_message_id 가 없으면 어차피 조용히
+                # 스킵된다. 같은 키 재호출은 우선순위 비교에서 no-op.
+                _react(conn, lv, "tp_partial", cfg_get)
                 _next_idx = _tp_alert_idx + 1
                 _kind_inter = f"tp{_tp_alert_idx + 1}"
                 _sib_dup = _tp_cluster_dup(
@@ -2078,17 +2166,28 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                                    r_multiple=_r(resolve_price), best_tp_hit=_best, now=now)
                 db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
                 resolved += 1
+                # Q4: 최종 목표 완주 🏆 — 우선순위 최상위라 👍 를 덮는다.
+                _react(conn, lv, "hit", cfg_get)
         elif outcome == "miss":
             db.resolve_outcome(conn, lv["id"], "miss", resolve_price, mode,
                                r_multiple=_r(resolve_price), ambiguous=ambiguous, now=now)
             db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
+            _react(conn, lv, "fail", cfg_get)   # Q4: 실패 종결 👎
         elif elapsed >= window_sec:
             oc = "timeboxed_win" if current >= base_eff else "timeboxed_loss"
             db.resolve_outcome(conn, lv["id"], oc, current, mode,
                                r_multiple=_r(current), now=now)
             db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
+            # Q4: 이익 상태 기간만료 👌 / 손실 상태 기간만료는 실패(👎)와 동급.
+            _react(conn, lv, "timeboxed_win" if oc == "timeboxed_win" else "fail",
+                   cfg_get)
+
+    # MFE/MAE 누적·종결분 확정 (2026-09-22 P1) — 루프 안에서 commit 하지 않은
+    # UPDATE 를 여기서 한 번에 확정한다. 회차 후반 예외로 롤백되면 이 회차의
+    # 극값(그 몇 분)이 영영 사라진다 — 캔들 창이 이동해 재조회가 불가능하다.
+    conn.commit()
 
     if resolved:
         logger.info("[적중판정] %d건 종결", resolved)

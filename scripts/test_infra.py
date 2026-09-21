@@ -460,9 +460,20 @@ db.record_mfe_mae(_mc, 1, 5.2, -3.1)
 _row = _mc.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=1").fetchone()
 check("MFE/MAE: 최초 기록", abs(_row[0] - 5.2) < 0.01 and abs(_row[1] - (-3.1)) < 0.01)
 
+# 2026-09-22 P1 수리로 계약 변경: 종전 `WHERE mfe_pct IS NULL`("최초 1회만")
+# 가드는 **단조 병합(MAX/MIN)** 으로 대체됐다. 이유는 그 가드 때문에 누적값이
+# 확정값을 영원히 막았기 때문이다 — `update_mfe_mae_running` 이 미종결 구간 내내
+# 값을 채워 두므로, IS NULL 가드가 남아 있으면 종결 확정이 아예 기록되지 않는다.
+# 검증 의도("값이 조용히 나빠지지 않는다 · 재호출이 안전하다")는 그대로 지킨다.
 db.record_mfe_mae(_mc, 1, 99.0, -99.0)
 _row = _mc.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=1").fetchone()
-check("MFE/MAE: 재기록 방지", abs(_row[0] - 5.2) < 0.01)
+check("MFE/MAE: 더 극단값으로 단조 갱신 (99.0 / -99.0)",
+      abs(_row[0] - 99.0) < 0.01 and abs(_row[1] - (-99.0)) < 0.01)
+
+db.record_mfe_mae(_mc, 1, 1.0, -1.0)
+_row = _mc.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=1").fetchone()
+check("MFE/MAE: 덜 극단값은 무시 — 재호출이 값을 되돌리지 않는다(멱등)",
+      abs(_row[0] - 99.0) < 0.01 and abs(_row[1] - (-99.0)) < 0.01)
 _mc.close()
 
 
@@ -1021,30 +1032,45 @@ _mb_ids = []
 check("MB2 빈 뉴스 큐 → 📰 블록 생략",
       _mb._news_lines(_mbc, _mb_ids) == [] and _mb_ids == [])
 
-# MB3: 뉴스 5건 컷 + "외 N건" + consumed 처리
-for i in range(7):
+# MB3: 후보 판정 + 중요도 정렬 + 5건 컷 + "외 N건" + consumed 처리
+# (2026-09-13 A안 → 2026-09-22 중요도순 랭킹 리팩터로 픽스처 갱신)
+# 종전엔 큐 앞에서부터 5건만 판정해 그 5건이 그대로 실렸다(도착순 = 게재순).
+# 지금은 상한(_NEWS_FETCH_MULT=3배 = 15건)만큼 넉넉히 꺼낸 후보 **전부**를
+# 촉매 점수로 매겨 상위 5건을 고른다 — 그래서 "판정한 후보는 전부 소비"까지
+# 검증하려면 15건 넘게 채워야 한다. SYM0~4 는 촉매(support, 1점)가 있어
+# SYM5~14(무촉매, 0점)보다 항상 위고, SYM15~17 은 상한 밖이라 아예 안 꺼내진다
+# — 그 3건이 "외 3건"의 잔여다.
+for i in range(15):
+    tail = "reclaiming support" if i < 5 else "a routine session"
     db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
-                         f"SYM{i} trades near 1,2{i}0 after reclaiming support. "
+                         f"SYM{i} trades near 1,2{i}0 after {tail}. "
                          f"Second sentence is dropped.",
+                         f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
+for i in range(15, 18):
+    db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
+                         f"SYM{i} trades near 1,2{i}0 after a routine session.",
                          f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
 _mbc.commit()
 _mb_ids = []
 _mb_news = _mb._news_lines(_mbc, _mb_ids)
-check("MB3 뉴스 큐 7건 → 최대 5건만 렌더 + 헤더에 '외 2건'",
-      len(_mb_ids) == 5 and "외 2건" in _mb_news[0])
+check("MB3 후보 15건(상한) 전부 판정 + 상위 5건만 렌더 + 헤더에 '외 3건'",
+      len(_mb_ids) == 15 and "외 3건" in _mb_news[0])
 check("MB3b 항목 줄에 코인·채널·요약 첫 문장(원문 링크 없음)",
       any("SYM0" in x and "@chan0" in x for x in _mb_news)
       and any("SYM0 trades near 1,200" in x for x in _mb_news)
       and not any("https://" in x for x in _mb_news))
 check("MB3c 요약은 첫 문장만 (둘째 문장 제외)",
       not any("Second sentence" in x for x in _mb_news))
+check("MB3d 촉매 없는 나머지 후보(SYM5~14)는 5건 컷에서 밀려난다",
+      not any(f"SYM{i}" in x for i in range(5, 15) for x in _mb_news))
 db.consume_news_digest(_mbc, _mb_ids)
 _mbc.commit()
-check("MB4 consumed=1 처리 후 남은 미소비 2건", db.count_news_digest(_mbc) == 2)
+check("MB4 consumed=1 처리 후 남은 미소비 3건(상한 밖이라 아예 안 꺼내진 SYM15~17)",
+      db.count_news_digest(_mbc) == 3)
 _mb_ids2 = []
 _mb_news2 = _mb._news_lines(_mbc, _mb_ids2)
-check("MB4b 소비된 건은 다음 브리핑에 다시 안 나온다",
-      len(_mb_ids2) == 2 and all(i not in _mb_ids for i in _mb_ids2))
+check("MB4b 소비된 건은 다음 브리핑에 다시 안 나온다(잔여 3건만 후보)",
+      len(_mb_ids2) == 3 and all(i not in _mb_ids for i in _mb_ids2))
 
 # ── MBQ1~MBQ5: 큐 노이즈 2차 필터 (2026-09-17 실사고) ────────────────────
 # 사고: 09-17 아침 브리핑에 시그널 카드("📍신호 ID: #2227📍 / 코인: $JUP/USDT
@@ -1089,6 +1115,99 @@ check("MBQ4 걸러진 항목도 **소비 처리**한다 — 큐에 남아 뒤를
 _mbq_left = db.count_news_digest(_mbqc)
 check("MBQ5 노이즈를 제외하고도 정상분을 채우려 상한보다 넉넉히 꺼낸다",
       _mbq_left == 5 and _mb._NEWS_FETCH_MULT >= 2)
+
+# ── MBR1~MBR8: 뉴스 중요도 랭킹 (2026-09-22 P5) ───────────────────────────
+# 실측: 뉴스가 00~04시 수집 회차에 몰려 들어와 쿼터(5건/일)를 도착순으로
+# 채운다 — "먼저 온 5건" ≠ "중요한 5건". 전용 임시 DB(MBQ 블록과 같은 패턴).
+_MBR_DAY = "2026-09-22"
+_MBR_NOW = 1790000000.0
+_MBR_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_MBR_DB)
+_mbr = sqlite3.connect(_MBR_DB)
+_mbr.row_factory = sqlite3.Row
+
+# MBR1~2: 늦게 온 규제 촉매 뉴스가 먼저 온 무촉매 뉴스를 순위에서 제친다
+db.queue_news_digest(_mbr, "EARLY", "cha",
+                     "EARLY trades near 1,000 after a routine session.",
+                     "", _MBR_DAY, _MBR_NOW)              # 먼저 도착, 무촉매
+db.queue_news_digest(_mbr, "LATE", "chb",
+                     "상원은 LATE 관련 법안 표결을 예정하고 있으며 가격 3,000대에 "
+                     "거래되고 있습니다.",
+                     "", _MBR_DAY, _MBR_NOW + 100)         # 늦게 도착, 규제 촉매
+_mbr.commit()
+_mbr_ids1 = []
+_mbr_lines1 = _mb._news_lines(_mbr, _mbr_ids1)
+_early_pos = next((i for i, x in enumerate(_mbr_lines1) if "EARLY" in x), None)
+_late_pos = next((i for i, x in enumerate(_mbr_lines1) if "LATE" in x), None)
+check("MBR1 늦게 온 규제 촉매 뉴스도 실린다", _late_pos is not None)
+check("MBR2 촉매 있는 뉴스가 먼저 온 무촉매 뉴스보다 위에 실린다(도착순 아님)",
+      _early_pos is not None and _late_pos < _early_pos)
+_mbr.execute("DELETE FROM news_digest_queue")
+_mbr.commit()
+
+# MBR3~3b: 6건 이상일 때 저점수 후보는 5건 컷에서 탈락하지만 소비는 전부 된다
+db.queue_news_digest(_mbr, "HI", "chc",
+                     "규제 승인 소식으로 HI 가 4,500 부근까지 상승했습니다.",
+                     "", _MBR_DAY, _MBR_NOW)
+for i in range(6):
+    db.queue_news_digest(_mbr, f"LO{i}", f"chd{i}",
+                         f"LO{i} trades near 2,{i}00 after a routine session.",
+                         "", _MBR_DAY, _MBR_NOW + 10 + i)
+_mbr.commit()
+_mbr_ids2 = []
+_mbr_lines2 = _mb._news_lines(_mbr, _mbr_ids2)
+_mbr_body2 = "\n".join(_mbr_lines2)
+check("MBR3 6건 이상일 때 저점수 후보는 5건 컷에서 탈락(고점수 HI 는 남음)",
+      "HI" in _mbr_body2 and sum(1 for i in range(6) if f"LO{i}" in _mbr_body2) == 4)
+check("MBR3b 후보 7건 전부 소비 처리(컷에서 탈락한 것도 포함)", len(_mbr_ids2) == 7)
+_mbr.execute("DELETE FROM news_digest_queue")
+_mbr.commit()
+
+# MBR4~4c: 같은 코인 중복은 점수 최고 1건만 (실측 XRP·BTC CLARITY 법안 중복)
+db.queue_news_digest(_mbr, "XRP", "cha",
+                     "XRP는 1,200에서 상승세를 보이고 있습니다.",  # 촉매 없음 → 낮은 점수
+                     "", _MBR_DAY, _MBR_NOW)
+db.queue_news_digest(_mbr, "XRP", "chb",
+                     "명확성 법안이 상원 표결을 앞두고 있어 XRP 가격을 촉매할 "
+                     "수 있으며 XRP는 1,500에 거래되고 있습니다.",
+                     "", _MBR_DAY, _MBR_NOW + 10)
+_mbr.commit()
+_mbr_ids3 = []
+_mbr_lines3 = _mb._news_lines(_mbr, _mbr_ids3)
+check("MBR4 같은 코인 중복은 점수 최고 1건만 렌더",
+      sum(1 for x in _mbr_lines3 if "<b>XRP</b>" in x) == 1)
+check("MBR4b 소비 처리는 판정한 후보 둘 다(중복이어도 큐에서는 둘 다 뺀다)",
+      len(_mbr_ids3) == 2)
+check("MBR4c 남는 건 높은 점수 쪽(법안 촉매, @chb)",
+      "@chb" in "\n".join(_mbr_lines3) and "@cha" not in "\n".join(_mbr_lines3))
+_mbr.execute("DELETE FROM news_digest_queue")
+_mbr.commit()
+
+# MBR5~6: 동점이면 채널 다양성이 먼저, 그다음 최신순 — 같은 채널 두 건 중
+# 더 최근 것(AAA)이 먼저 뽑히고 나면, 그다음은 "다른 채널"(CCC)이 같은 채널의
+# 나머지(BBB, 더 최근인데도)보다 우선한다.
+db.queue_news_digest(_mbr, "AAA", "cha",
+                     "AAA trades near 1,100 after a routine session.",
+                     "", _MBR_DAY, _MBR_NOW + 20)          # 채널 cha, 최신
+db.queue_news_digest(_mbr, "BBB", "cha",
+                     "BBB trades near 1,200 after a routine session.",
+                     "", _MBR_DAY, _MBR_NOW + 10)          # 채널 cha, 중간
+db.queue_news_digest(_mbr, "CCC", "chb",
+                     "CCC trades near 1,300 after a routine session.",
+                     "", _MBR_DAY, _MBR_NOW)                # 채널 chb, 가장 오래됨
+_mbr.commit()
+_mbr_ids4 = []
+_mbr_lines4 = _mb._news_lines(_mbr, _mbr_ids4)
+check("MBR5 세 건 모두 5건 컷 안이라 전부 실린다(채널 다양성은 순서에만 영향)",
+      all(s in "\n".join(_mbr_lines4) for s in ("AAA", "BBB", "CCC")))
+_aaa_pos = next(i for i, x in enumerate(_mbr_lines4) if "AAA" in x)
+_bbb_pos = next(i for i, x in enumerate(_mbr_lines4) if "BBB" in x)
+_ccc_pos = next(i for i, x in enumerate(_mbr_lines4) if "CCC" in x)
+check("MBR6 동점 시 채널 다양성이 먼저(다른 채널 CCC 가 같은 채널 BBB 보다 위) "
+      "→ 그다음 최신순(AAA 가 가장 먼저)",
+      _aaa_pos < _ccc_pos < _bbb_pos)
+_mbr.close()
+os.unlink(_MBR_DB)
 
 # ── MBW1~MBW7: 요약 줄 행잉 인덴트 (2026-09-16 사용자 요청) ───────────────
 # "줄내림 발생시 줄내림만 들어가는 게 아니고, 줄내림 직전 텍스트 시작열과

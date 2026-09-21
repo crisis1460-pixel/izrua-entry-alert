@@ -84,7 +84,7 @@
 
 **파일:** `collector/grading.py`  
 **시점:** 수집 직후 (저장 전), 가격 터치 시 재채점 (regrade)  
-**산식 버전:** `grade_formula_ver = "v5"` (2026-08-15)
+**산식 버전:** `grade_formula_ver = "v6"` (2026-09-22) — 상세는 아래 "등급 v6" 절
 
 ### 3-1. 점수 구성 요소
 
@@ -96,18 +96,29 @@
 | 데이터 완성도 | 23점 | 진입+목표=20, 추가 SL=+3; 하나만=8, 둘다없음=2 |
 | 작성자 실적 | 15점 | Wilson 80% 하한 기준 TP1 적중률: ≥55%=+15, ≥40%=+10, ≥25%=+5 (최소 5건 필요) |
 | TP 사다리 (v5) | -3 | `tp_ladder_count` 0~1단(NULL 포함)=-3, 2단+=0. 실측 근거: 2단+ 48.2% vs 0~1단 31.7% (+16.5%p, n=189 — research_2026-08-15_db_signal_analysis.md). score_breakdown 키 "ladder" |
+| 수집→터치 지연 (v6) | -6 | `touch_delay_minutes` < 30분이면 -6, 그 외 0. **터치 재채점에서만** 실린다(수집 시점엔 값이 없어 0). score_breakdown 키 "delay". 근거표는 아래 "등급 v6" 절 |
 
 **총 만점: 약 95점** (항목별 조합에 따라 다름)
 
-### 3-2. 등급 경계
+### 3-2. 등급 경계 (2026-09-22 v6)
 
 | 등급 | 최소 점수 |
 |------|----------|
-| S | 85점 이상 |
-| A | 70점 이상 |
-| B | 55점 이상 |
+| A | 55점 이상 |
+| B | 47점 이상 |
 | C | 40점 이상 |
 | D | 40점 미만 |
+
+**S 등급은 신규 발급 중단**(v6). 과거 DB 행에는 'S' 가 남아 있고 읽기 경로
+(`GRADE_ORDER`·`meets_min_grade`·캘리브레이션·주간리포트)는 계속 S 를 이해한다 —
+소급 재라벨 금지(D4)의 필연적 귀결이다.
+
+⚠️ **이 경계는 예측력 목적이 아니다.** 같은 판정축(`judgment_mode='tp_sl'`) 안에서
+`touch_score`↔승패 점-이연 상관은 **r = −0.028 로 사실상 0**이다. 경계를 옮겨도
+승률은 1%p도 안 움직인다 — 목적은 v5 이후 발급 0건이던 죽은 라벨(S·A)의
+**표시 정상화**뿐이다. 상세는 아래 "등급 v6" 절.
+
+경계는 `settings.grade_thresholds` 로 외부화돼 있어 설정 한 줄로 되돌린다.
 
 ---
 
@@ -265,7 +276,8 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 | 경제일정 자동 캘린더 (2026-08-16) | `macro.get_macro_events(conn)` — FOMC: the-calendar.net JSON 자동 수집(무인증). NFP·ISM: 규칙 기반(첫금·첫영업일). CPI·PPI·PCE·GDP·소매: 규칙 근사(±1~2일). 7일 DB 캐시, 정적 폴백. `get_nearby_macro_event(conn=conn)` 24h 전~2h 후 이벤트 감지 시 warn+1. 한국 발표시각 자동 계산(서머/윈터타임 반영, "한국 21:30" 또는 "한국 익일03:00") | `monitor/macro.py` (수급 보정 입력 + 브리핑) |
 | BTC 청산 클러스터 (2026-08-14) | `liquidation.fetch_btc_liq_context()` — ByKaranteli pressure score·direction. long_heavy → warn, short_heavy → confirm. 5분 TTL 캐시, BTC 전용·전 코인 적용 | `monitor/liquidation.py` (내부 보정 전용, 컬럼 미저장) |
 | 수급/자리 판정 | 터치 시점 스냅샷 (알림에도 표시). 2026-08-14: CVD·호가·옵션·청산·DXY·USDT.D·DVOL·FOMC/CPI로 수급 라벨 보정 — 우호+경고1→중립, 중립+경고2→주의, 중립+확인2→우호, 주의는 상향 불가 (`SUPPLY_CVD_NEG=-0.15/POS=0.15`, `SUPPLY_OBI_SELL_WALL=0.67/BUY_WALL=1.5`, `SUPPLY_PC_EXTREME_HIGH=1.0/LOW=0.30`, `SUPPLY_LIQ_WARN=long_heavy/CONFIRM=short_heavy`, DXY>105=warn/<100=confirm, USDT.D>8%=warn/<5%=confirm, DVOL>80=warn+2/>60=warn+1, FOMC/CPI 24h이내=warn+1) | `levels.touch_supply_verdict` / `touch_position_verdict` |
-| MFE/MAE (2026-08-14) | `db.record_mfe_mae()` — 터치 후 판정 종결까지 최대유리이동(MFE%)·최대불리이동(MAE%). Freqtrade max_rate/min_rate 패턴. 1회 기록, 재기록 방지 | `levels.mfe_pct` / `levels.mae_pct` |
+| MFE/MAE (2026-08-14, **2026-09-22 수리**) | `db.update_mfe_mae_running()` 이 **매 회차** 단조 누적(MAX/MIN) + `db.record_mfe_mae()` 가 종결 시 확정. Freqtrade max_rate/min_rate 패턴. ⚠️ `meta.mfe_mae_fixed_since` **이전 터치분은 무효** — 상세는 "MFE/MAE 계산 수리" 절 | `levels.mfe_pct` / `levels.mae_pct` |
+| 결과 이모지 반응 (2026-09-22) | `telegram.set_reaction()` — 이미 보낸 터치 본알림에 🏆/👍/👌/👎 를 붙인다. **새 메시지 0건**. `levels.touch_message_id` 에 저장한 message_id 사용. 상세는 "결과 이모지 반응" 절 | `levels.touch_message_id` / `levels.touch_reaction` |
 | 다구간 수익률 (2026-08-14 확장) | 기존 ret_24h/ret_72h에 ret_4h/ret_12h 추가 — 초기 반응(4h)·중기 추세(12h) 포착. 1h는 2분 폴링 대비 오차 과대로 제외 | `levels.ret_4h` / `levels.ret_12h` |
 | 김프 급변 화살표 (2026-08-14) | `db.push_kimchi_history()` — 알림 시점 김프 이력 축적(meta, 12h 보존), ~6h 전 대비 ±0.5%p 이상이면 김프 행 끝 ▲/▼ 1글자 (`telegram._KIMCHI_DELTA_TH`) | `meta.kimchi_hist` (JSON) |
 | 터치 소요시간 분석 (2026-08-13) | `audit_dump._compute_touch_time_stats()` — 구간별 적중률 + 등급 교차분석 | `data/audit/grade_stats_YYYY-WXX.json` (주간) |
@@ -790,6 +802,24 @@ OFF 여도 그대로 수행되는 것: `advance_tp_alert_idx` CAS 전진 · `res
 를 보지 않는다("기록 = 사건 발생"이 계약).
 큐 보존은 7일 (`db.prune_news_digest_queue`, `price_check` 정리 블록에서 매 회차).
 
+### 뉴스 선별 — 도착순에서 중요도순으로 (2026-09-22, P5)
+근거: 뉴스가 00~04시 수집 회차에 몰려 들어와 쿼터(5건/일)를 도착순으로 채웠다
+(`_news_lines`가 큐 앞 5건을 그대로 실음) — "먼저 온 5건" ≠ "중요한 5건".
+
+규칙:
+- 큐에서 상한만큼(_NEWS_BLOCK_MAX*_NEWS_FETCH_MULT=15) 꺼낸 후보 전체를
+  `_news_importance`(= `_catalyst_score`(본문 전체 최고 문장) + 시나리오 분기 +1)로
+  채점해 상위 5건만 렌더. `_catalyst_score`는 기존 `_catalyst_sentence`와 같은
+  루프(`_catalyst_best`)를 재사용 — 동작 불변, 리팩터만.
+- 같은 코인은 점수 최고 1건만(실측 XRP·BTC CLARITY 법안 중복).
+- 동점이면 채널 다양성(그리디) → 최신순.
+- 소비 계약 변경: 판정한 후보는 실리든 안 실리든 **전부** consumed_ids 에 넣는다
+  (꺼내지 않은 잔여분만 "외 N건"에 남는다).
+
+회귀: `scripts/test_infra.py` MB3~MB4(15건 후보/5건 컷/소비 계약 갱신),
+MBR1~MBR6(신설 — 규제 촉매 역전/저점수 탈락/코인 중복 1건/채널 다양성·최신순),
+MBQ·MBW·NBC 전부 회귀 없이 통과. `scripts/test_morning_brief.py`도 exit 0.
+
 ### 요약 줄 행잉 인덴트 (2026-09-16)
 
 **사용자 요청**: "뉴스의 세부내용 설명할 때 줄내림 발생 시 줄내림만 들어가는 게 아니고, 줄내림 직전 텍스트 시작열과 동일한 위치에서 시작되게."
@@ -897,3 +927,233 @@ OFF 여도 그대로 수행되는 것: `advance_tp_alert_idx` CAS 전진 · `res
 | **번역 변형 대응 (2026-09-17)** | 실물 브리핑에서 두 건이 더 샜다. 원인은 둘 다 **무료 번역기의 표현 흔들림**이다. ① 시그널 카드가 뉴스로: `📍신호 ID: #2227📍 / 코인: $JUP/USDT (2-5X) / 방향: 긴 / 정지 손실: 0.2160` — Stop Loss→"정지 손실", Long→"긴" 이라 기존 한글 라벨(`손절가:`)이 전부 빗나갔다. `신호 ID`(2점)·`정지 손실:`·`코인:`/`방향:` 줄머리·`(2-5X)` 레버리지 표기를 추가. ② 분기 인식 실패 → 위 ② 항목 참고. 회귀 NBC13~NBC16 · NBS10~NBS11 |
 
 | **회귀** | `test_extractor` SX1(False+short 미저장) · SX2(같은 조건 long 정상 저장) · SX3(True 복원 시 short 도 저장) |
+
+---
+
+## MFE/MAE 계산 수리 (2026-09-22, P1)
+
+근거: `izrua_company/research_2026-09-17_db_analysis.md` §1-3 (CTO 재쿼리 확인).
+
+### 버그
+
+| | 실측 |
+|---|---|
+| 승리 건 중 `mae_pct == 0` | **118/120 (98.3%)** |
+| 패배 건 중 `mfe_pct == 0` | **118/121 (97.5%)** |
+
+원인은 `monitor/price_check._judge_outcomes` 에서 `_running_mfe/_running_mae` 가
+**매 회차 0.0 으로 초기화**되는데, 스캔 대상 캔들은
+`upbit.fetch_range_since(ticker, since_min, …)` 즉 **직전 회차 이후 ≈4~6분**뿐이라는
+것. `record_mfe_mae` 가 종결 시 1회만(재기록 방지 가드) 호출되므로 결국
+**"종결이 일어난 그 회차의 몇 분"만 기록**됐다. TP 로 종결되면 그 몇 분은 상승만
+있어 `mae=0`, SL·타임박스면 하락만 있어 `mfe=0` — 관측된 98% 패턴과 정확히 일치.
+
+### 수리
+
+| 항목 | 내용 |
+|------|------|
+| **핵심** | 미종결 터치 레벨에 대해 **매 회차** 그 회차 극값을 DB 에 이어 붙인다. 더 큰 MFE / 더 작은 MAE 일 때만 갱신(`MAX`/`MIN` 단조) → 터치 이후 전 구간이 자연히 누적 |
+| **신규 함수** | `db.update_mfe_mae_running(conn, level_id, mfe, mae)` — `WHERE outcome IS NULL` 가드(종결 후 가격이 판정 스냅샷을 오염시키지 않는다) |
+| **종결 확정** | `db.record_mfe_mae` 의 `WHERE mfe_pct IS NULL` 가드를 **단조 병합으로 교체**. 누적값과 종결 회차 값의 극값이 확정값. 멱등 연산이라 "재기록 방지" 목적도 그대로 충족 |
+| **F1 파생값** | `touch_mfe_atr_ratio` 는 **확정 MFE(병합 후 DB 값)** 기준으로 계산 — 인자로 받은 그 회차 MFE 가 아니다 |
+| **API 비용** | **0콜** — 판정 루프가 이미 읽는 캔들을 재사용할 뿐 |
+| **커밋** | `_judge_outcomes` 끝에서 1회 `conn.commit()`. 회차 후반 예외로 롤백되면 그 회차 극값이 영영 사라진다(캔들 창 이동으로 재조회 불가) |
+
+### ⚠️ 무효 기간 — 과거는 소급하지 않는다
+
+캔들 재조회 비용 때문에 과거 행은 고칠 수 없다. 대신 `meta.mfe_mae_fixed_since`
+(epoch)를 `_migrate` 가 **최초 1회** 기록한다. **이 시각 이전에 터치된 행의
+`mfe_pct`/`mae_pct`/`touch_mfe_atr_ratio` 는 전부 무효**이며, 이 값을 쓴 과거 분석
+(09-13 보고서의 MFE/MAE 표, 터치 품질 버킷)도 근거로 쓸 수 없다.
+
+- `scripts/analyze_touch_quality.py` — `load_mfe_mae_fixed_since()` 로 기준 시각을
+  읽어, 그 이전 터치분의 MFE/MAE 를 `None` 으로 비운 뒤 통계를 낸다(승률·관통
+  깊이 통계는 무관하므로 그대로 쓴다). 리포트 머리에 유효 표본 수 경고를 출력.
+- `scripts/analyze_factors.py` — 현재 MFE/MAE 를 **쓰지 않는다**(승률·`ret_*` 축만).
+  나중에 들여올 때 같은 게이트를 반드시 걸라는 주석을 `load_rows` 에 박아 뒀다.
+- 읽기 헬퍼: `db.get_mfe_mae_fixed_since(conn)`.
+
+### 회귀
+
+`test_price_logic` **MFE1~MFE8** — 기획서 지정 시나리오(회차1 하락 → 회차2 상승 →
+TP 종결)에서 `mae` 가 0 이 아니라 **회차1 값(-4%)** 으로 남는지(MFE3 이 이 버그의
+회귀 방어선), 단조 갱신(MFE4), 확정 병합(MFE5), ratio 가 확정 MFE 기준인지(MFE6),
+종결 행 보호(MFE7), meta 표식(MFE8).
+
+---
+
+## 등급 v6 — 지연 감점 + 경계 재보정 (2026-09-22, Q1·Q3)
+
+근거: `izrua_company/research_2026-09-17_db_analysis.md`,
+`izrua_company/plan_2026-09-17_고도화_기획안.md` (사용자 결정 Q1·Q3, 2026-09-22).
+
+### ⚠️ 먼저 알아야 할 사실 — 점수는 tp_sl 층에서 예측력이 0이다
+
+| judgment_mode | n | 점-이연 상관 r | 승자 평균점 | 패자 평균점 |
+|---|---|---|---|---|
+| **tp_sl** (SL 있음 — 유일하게 공정한 축) | 73 | **−0.028** | 45.6 | 46.2 |
+| tp_only (SL 없음 → miss 불가) | 64 | −0.266 | 53.9 | 58.5 |
+| timeboxed | 32 | +0.377 | 38.6 | 31.3 |
+| 전체(층화 안 함) | 169 | **+0.226** | 50.0 | 44.6 |
+
+전체 r = +0.226 은 "점수가 높으면 잘 맞는다"처럼 보이지만 **tp_sl 안에서는
+−0.028 로 사실상 0**이다. 지금까지의 등급 신뢰는 "SL 안 쓰는 작성자가 고득점이고,
+그 글은 구조적으로 miss 가 안 난다"는 사실을 예측력으로 오독한 것이다.
+**따라서 경계 재보정(Q3)의 목적은 예측력이 아니라 표시 정상화다.**
+
+### Q1. 수집→터치 지연 감점 (예측력 쪽 변경)
+
+`judgment_mode` 층화를 통과한 **유일한** 신호 (tp_sl 한정, n=188):
+
+| 지연 | n | 승률 | Wilson LB80 |
+|---|---|---|---|
+| **< 30분** | 81 | **25.9%** | 20.2% |
+| 30분~3h | 18 | 27.8% | 16.6% |
+| 3~24h | 46 | 37.0% | 28.4% |
+| **24h+** | 39 | **48.7%** | 38.7% |
+
+격차 **+22.8%p**, 단조 증가, 양 끝 n≥20, **LB80 구간 비겹침**(20.2 vs 38.7).
+의미: **글이 올라오자마자 닿는 진입가는 이미 지나간 자리**다. 반대로 하루 이상
+기다려 닿은 자리는 작성자가 실제로 계산한 지점일 가능성이 높다.
+결측 0%, 계산 비용 0(`touched_at − collected_at`, 이미 DB 에 있다).
+부수 효과: 현재 tp_sl 종결의 43%(81/188)가 최악 구간이라 알림량도 함께 줄어든다.
+
+| 항목 | 내용 |
+|------|------|
+| **구현** | `grading.score_breakdown` 에 `delay` 키. `touch_delay_minutes < 30` 이면 -6, 그 외 0 |
+| **배선** | `price_check.run_once` 가 클러스터 **전 멤버**에 `touch_delay_minutes = (now − collected_at)/60` 을 심는다. 위치는 `_rep`(대표 선정)·전 멤버 재채점 **앞** — 작성자 실적 주입과 같은 이유(둘 다 `regrade_current` 를 탄다). `regrade_current` 는 명시 인자 우선, 없으면 레벨 dict 키를 본다 |
+| **터치 전용** | 수집 시점엔 지연이 정의되지 않으므로 `None` → 0점. 예고(preview) 경로도 아직 닿지 않았으므로 `None` |
+| **스냅샷** | `touch_score`/`touch_grade`(`db.record_touch_snapshot`)에 **감점 반영값**이 저장된다 — 캘리브레이션 축이 실제 발급 등급과 일치해야 하기 때문 |
+| **사다리 감점과의 관계** | 감점 폭 -6 은 사다리 감점(-3)의 2배. 근거 격차도 5배 이상(+22.8%p vs +4.1%p 재산정) |
+
+### Q3. 등급 경계 재보정 (표시 정상화)
+
+v5 이후 **S·A 발급 0건**(최고 62점)이라 라벨이 죽어 있었다.
+
+| | v5 | **v6** |
+|---|---|---|
+| S | ≥85 | **폐지**(신규 발급 중단, 읽기 호환 유지) |
+| A | ≥70 | **≥55** |
+| B | ≥55 | **≥47** |
+| C | ≥40 | ≥40 (불변) |
+| D | <40 | <40 (불변) |
+
+Q1 감점 반영 후 v5 이후 터치 245건 분포 시뮬레이션: **A 50 · B 63 · C 33 · D 99**,
+C 이상 통과 ≈**4.0건/일**(현행 4.36) — 알림량은 거의 그대로다.
+`alert_min_grade="C"`·`alert_sound_min_grade="C"` 는 **불변**(C 컷 점수가 40 그대로라
+실효 컷이 변하지 않는다).
+
+**S 읽기 호환**: `GRADE_ORDER` 에 'S' 를 그대로 남긴다. 과거 DB 행에 'S' 가 있고
+`meets_min_grade`·`analytics/calibration`·`analytics/distribution`·주간리포트
+히트맵·`show_status` 가 전부 이 순서표를 쓰기 때문 — 소급 재라벨 금지(D4)를
+지키는 한 **읽기 경로는 영원히 S 를 이해해야 한다**. 신규 발급만 중단된다.
+
+**산식 버전**: `grade_formula_ver` `v5` → **`v6`**. 과거 행 소급 재라벨 없음(D4) —
+active 행만 터치 재채점 시 `touch_grade_ver='v6'` 이 찍힌다.
+`meta.grade_v6_since` 에 배포 시점 기록(`grade_v3_since`/`grade_v5_since` 관례).
+
+### 회귀
+
+- `test_grading` **V6A~g**(지연 감점: 경계 30분·순수 감점·breakdown 키 격리·
+  regrade 2경로·롤백 스위치), **V6B~f**(새 경계·S 미발급·과거 S 읽기 호환·
+  C 실효 컷 불변·설정 외부화 되돌리기·손상 설정 폴백)
+- `test_price_logic` **DLY1~4**(터치 재채점에 지연 전달, 스냅샷 반영, 30분+ 무감점,
+  v6 도장), **T22**(50점의 라벨이 C→B 로 이동 — 경계 재보정이 표시 변경임을 고정)
+- `test_touch_recording` **V6S1~2**(스냅샷 `touch_score` 에 감점 반영)
+
+---
+
+## 결과 이모지 반응 (2026-09-22, Q4)
+
+Telegram Bot API `setMessageReaction` 으로 **이미 보낸 터치 본알림**에 사후 결과를
+붙인다. 스크롤을 거슬러 올라가면 어떤 신호가 맞았는지 한눈에 보이고,
+**새 알림은 0건**이다. 기존 봇 토큰·chat_id 그대로 — 추가 인증·새 채널 없음.
+
+### ⚠️ 허용 이모지 제약
+
+**✅·❌ 는 Telegram 허용 목록(`ReactionTypeEmoji`)에 없다**(CTO 공식 문서 확인).
+허용 목록 안에서 의미가 통하는 4종을 골랐다:
+
+| 결과 키 | 이모지 | 언제 |
+|---|---|---|
+| `hit` | 🏆 | 최종 목표 완주 (hit 종결) |
+| `tp_partial` | 👍 | 첫/중간 목표 도달, 사다리 진행 중 |
+| `timeboxed_win` | 👌 | 이익 상태로 판정창 만료 |
+| `fail` | 👎 | miss · timeboxed_loss |
+
+봇은 메시지당 반응 **1개**라 새 반응이 이전 것을 교체한다(👍 → 🏆).
+
+### 우선순위 — 좋은 결과가 나쁜 결과에 덮이지 않는다
+
+```
+🏆 hit  >  👍 tp_partial  >  👌 timeboxed_win  >  👎 fail
+```
+(`monitor/price_check._REACTION_PRIORITY`)
+
+클러스터 형제는 **같은 `touch_message_id`** 를 공유하는데(터치 본알림 1건),
+형제마다 판정 시점·결과가 다르다. 순서를 정하지 않으면 최종 완주(🏆) 뒤에
+형제의 손절(👎)이 덮어쓴다. 이미 단 반응은 `levels.touch_reaction` 에 기록하고
+(같은 message_id 를 가리키는 **전 레벨**에 동일 값 — 반응은 레벨이 아니라
+**메시지**의 속성), 같거나 더 강한 반응이 있으면 새로 달지 않는다.
+
+### 구현
+
+| 항목 | 내용 |
+|------|------|
+| **컬럼** | `levels.touch_message_id INTEGER` (터치 본알림 message_id, 클러스터 전 멤버 동일값·최초 기록 우선 — `preview_message_id` 전례), `levels.touch_reaction TEXT` (이미 단 반응의 결과 키) |
+| **발송부** | `notify/telegram.set_reaction(message_id, emoji) -> bool`. `is_big=False`, **재시도 없음**, 예외·비200·설정 미비 전부 `False` 로 삼킴 |
+| **호출부** | `price_check._react(conn, lv, key, cfg_get)` — 중간 TP 적중 경로 + `resolve_outcome` 직후 3곳(hit/miss/timeboxed) |
+| **무해 원칙** | **반응 실패가 판정·종결·회차를 막으면 절대 안 된다.** `_react` 는 통째로 try/except, 실패 시 `logger.warning` 후 `False` |
+| **TP 스위치 무관** | `tp_alert_send_enabled=False`(현 운영값)에서도 동작한다 — 반응은 '발송'이 아니라 이미 보낸 메시지의 속성이다 |
+| **과거 레벨** | `touch_message_id` 가 없으면(억제 터치·발송 실패·기능 배포 이전) 조용히 건너뜀 |
+
+### 회귀
+
+`test_price_logic` **RX1~RX11** — msgid 저장, 중간 TP 🔥(새 메시지 0건·TP 스위치
+OFF 무관), 최종 🏆 교체, 우선순위 no-op, 실패 무해, 예외 삼킴, 스위치 2종,
+과거 레벨 스킵, 이모지 매핑 정본(✅/❌ 미사용).
+
+---
+
+## 설정 요약 — 2026-09-22 배포분
+
+| 키 | 기본값 | 의미 |
+|---|---|---|
+| `grade_formula_ver` | `"v6"` | 산식 버전 도장(`levels.grade_ver`·`touch_grade_ver`) |
+| `grade_thresholds` | `[["A",55],["B",47],["C",40]]` | 등급 경계. S 없음 = 신규 발급 중단 |
+| `grade_touch_delay_enabled` | `True` | 수집→터치 지연 감점 롤백 스위치 |
+| `grade_touch_delay_min_minutes` | `30` | 이 분 **미만**이면 감점 |
+| `grade_touch_delay_penalty` | `-6` | 감점 폭 |
+| `result_reaction_enabled` | `True` | 결과 이모지 반응 전체 스위치 |
+| `result_reaction_fail_enabled` | `True` | `False` 면 👎 만 생략(🏆/👍/👌 는 유지) |
+| `result_reaction_emoji` | `{hit:🏆, tp_partial:👍, timeboxed_win:👌, fail:👎}` | 결과 키 → 이모지 |
+
+### 되돌리기 카드
+
+| 증상 | 조치 |
+|---|---|
+| 알림량이 예상보다 크게 줄었다 | `grade_touch_delay_enabled` → `False` (지연 감점 0 고정, 경계·반응은 그대로) |
+| 감점은 두되 폭만 줄이고 싶다 | `grade_touch_delay_penalty` → `-3` (사다리 감점과 동급) |
+| 컷 기준 시간을 바꾸고 싶다 | `grade_touch_delay_min_minutes` 조정 (근거표는 30분/3h/24h 경계) |
+| 등급 라벨을 v5 로 되돌리고 싶다 | `grade_thresholds` → `[["S",85],["A",70],["B",55],["C",40]]`. 코드 변경 불요, S 발급도 즉시 재개 |
+| 손절 표시(👎)가 거슬린다 | `result_reaction_fail_enabled` → `False` |
+| 반응 자체를 끄고 싶다 | `result_reaction_enabled` → `False` (이미 달린 반응은 남는다 — 텔레그램에서 수동 제거) |
+| MFE/MAE 누적을 되돌리고 싶다 | 되돌릴 이유 없음(명백한 버그 수리·API 0콜). 굳이 막으려면 `_judge_outcomes` 의 `update_mfe_mae_running` 호출만 제거 |
+
+**되돌릴 수 없는 것**: `meta.mfe_mae_fixed_since`·`meta.grade_v6_since` 기록,
+누적된 `touch_message_id`. 전부 기록 전용이라 무해하다.
+
+---
+
+## 테스트 시한폭탄 2건 수리 (2026-09-22, 부수 작업)
+
+v6 배포 중 **기존 테스트 2건이 코드와 무관하게 실패**하는 것을 발견해 함께 고쳤다.
+둘 다 "픽스처가 절대 시각에 묶여 있어 언젠가 반드시 터지는" 같은 유형이다.
+
+| 테스트 | 증상 | 원인 | 수리 |
+|---|---|---|---|
+| `test_price_logic` **T29g** | "보존기간 이내 최근 데이터는 유지" 실패 | 픽스처 날짜가 `"2026-07-20"` 로 **하드코딩**돼 있는데 `prune_daily_stats(keep_days=60)` 컷오프가 2026-07-24 로 올라옴 | T29 블록 전체를 **실행 시점 상대 날짜**(D-2/D-3/D-4)로 전환. 검증 의도(누적·KST 경계·보존기간)는 그대로 |
+| `test_resilience` **수리9-R\*** | KST 0~8시에 돌리면 10분+ 지연 → 타임아웃 | 순환 검증 블록이 `tv_fetch_sleep_*`(주간)만 0 으로 만들고 **`tv_night_sleep_*`(야간)은 그대로** 뒀다. `run_collect.main` 은 KST 0~8시에 야간 값을 쓰므로 심볼당 12~18초를 실제로 잠 | 같은 자리에서 `tv_night_sleep_sec`/`tv_night_sleep_max_sec` 도 0 으로 |
+
+교훈: 테스트 픽스처에 **절대 날짜·시각 분기**를 남기면 코드가 멀쩡해도 언젠가
+빨간불이 된다. 상대 시각으로 쓰거나, 시각 분기를 타는 설정은 전부 중립화할 것.

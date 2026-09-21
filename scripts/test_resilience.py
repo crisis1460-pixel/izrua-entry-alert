@@ -831,6 +831,13 @@ check("수리7: ::error:: 뒤 exit 1 로 잡을 실제로 실패시킨다(중간
 settings.SETTINGS["db_path"] = TEST_DB_RC
 settings.SETTINGS["tv_fetch_sleep_sec"] = 0.0   # 순환 검증에 페이싱 대기는 불필요
 settings.SETTINGS["tv_fetch_sleep_max_sec"] = 0.0  # 지터 상한도 0 (2026-08-02)
+# 2026-09-22 수리: 야간 분기도 0 으로 — run_collect.main 은 KST 0~8시엔
+# tv_night_sleep_* 를 쓰는데 여기서 주간 값만 0 으로 만들어 두고 있었다.
+# 그래서 **KST 0~8시에 이 파일을 돌리면** 심볼당 12~18초를 실제로 자고,
+# _run_main 이 여러 번 불리는 이 절 전체가 10분 넘게 늘어져 CI/로컬 타임아웃에
+# 걸렸다(2026-09-22 07:46 KST 재현). 검증 대상은 순환 offset 이지 페이싱이 아니다.
+settings.SETTINGS["tv_night_sleep_sec"] = 0.0
+settings.SETTINGS["tv_night_sleep_max_sec"] = 0.0
 db.init_db(TEST_DB_RC)
 
 _ROT_UNIVERSE = [

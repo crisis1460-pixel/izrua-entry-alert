@@ -57,6 +57,11 @@ def default_db_path() -> Path:
 
 
 def load_rows(conn) -> list:
+    # ⚠️ 2026-09-22 P1: 이 스크립트는 mfe_pct/mae_pct/touch_mfe_atr_ratio 를 쓰지
+    # 않는다(승률·ret_* 축만). 나중에 MFE/MAE 를 들여올 땐 반드시
+    # meta.mfe_mae_fixed_since **이후 터치분으로 한정**해야 한다 — 그 이전 값은
+    # "종결 회차의 몇 분"만 잰 무효값이다. 구현 예: analyze_touch_quality.py
+    # load_mfe_mae_fixed_since / load_rows.
     ph = ",".join("?" * len(CLOSED_OUTCOMES))
     try:
         rows = conn.execute(

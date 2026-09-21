@@ -456,11 +456,11 @@ def _clip_clause(s: str, max_chars: int) -> str:
     return cut.rstrip() + "…"
 
 
-def _catalyst_sentence(body: str, max_chars: int) -> str:
-    """본문에서 '살 이유'에 가장 가까운 문장 1개. 근거가 없으면 "".
+def _catalyst_best(body: str) -> tuple:
+    """(최고 점수 문장, 점수). _catalyst_sentence·_catalyst_score 공용 루프
+    (2026-09-22 P5 — 뉴스 랭킹에 점수만 필요한 호출부가 생겨 분리).
 
-    동점이면 **앞선 문장**이 이긴다(원문의 두괄식 의도를 존중). 뽑은 문장이
-    길면 호출부가 자르되, 자르기 전에 문장 자체가 핵심이라는 점은 지켜진다."""
+    동점이면 **앞선 문장**이 이긴다(원문의 두괄식 의도를 존중)."""
     best, best_score = "", 0
     for raw in _SENT_SPLIT_RX.split(body):
         s = raw.strip()
@@ -469,6 +469,25 @@ def _catalyst_sentence(body: str, max_chars: int) -> str:
         score = sum(pts for pts, rx in _CATALYST_PATTERNS if rx.search(s))
         if score > best_score:
             best, best_score = s, score
+    return best, best_score
+
+
+def _catalyst_score(body: str) -> int:
+    """본문 전체에서 촉매 패턴에 걸리는 **최고 문장 점수**(2026-09-22 P5).
+
+    표시용 _catalyst_sentence 는 2점 미만이면 ""를 돌려주지만(차트 신호 단독
+    불채택), 뉴스 랭킹은 1점짜리 차이도 순서에 반영해야 하므로 문턱 없는
+    원점수가 따로 필요하다. 같은 루프(_catalyst_best)를 재사용해 두 곳의
+    '가장 중요한 문장이 무엇인가' 판단이 갈리지 않게 한다."""
+    return _catalyst_best(body)[1]
+
+
+def _catalyst_sentence(body: str, max_chars: int) -> str:
+    """본문에서 '살 이유'에 가장 가까운 문장 1개. 근거가 없으면 "".
+
+    뽑은 문장이 길면 호출부가 자르되, 자르기 전에 문장 자체가 핵심이라는
+    점은 지켜진다."""
+    best, best_score = _catalyst_best(body)
     return best if best_score >= 2 else ""  # 차트 신호 1점짜리 단독은 채택 안 함
 
 
@@ -537,11 +556,27 @@ def _is_queued_noise(symbol: str, summary: str) -> bool:
     return False
 
 
+def _news_importance(text: str) -> int:
+    """뉴스 1건의 중요도 점수(2026-09-22 P5 — 도착순 대신 중요도순 정렬).
+
+    ① _catalyst_score — 본문 전체(장식 제거본)에서 가장 강한 문장 1개의 점수
+       (외부 사건 3 > 예정 이벤트 2 > 차트 신호 1).
+    ② _scenario_line 이 성립하면(황소/베어 분기 가격) +1 — 매매 판단에 바로
+       쓸 수 있는 숫자라 촉매 없는 글보다는 위에 둘 가치가 있다.
+    시나리오 판정은 원문(text) 기준 — _first_sentence 가 그 문장을 뽑을 때와
+    같은 입력을 써야 "이 글이 왜 분기선을 얻었는가"가 어긋나지 않는다."""
+    score = _catalyst_score(_news_body(text))
+    if _scenario_line(text):
+        score += 1
+    return score
+
+
 def _news_lines(conn, consumed_ids: list) -> list:
-    """"📰 주요 뉴스" 블록 (2026-09-13 A안). 없으면 빈 리스트(블록 생략).
+    """"📰 주요 뉴스" 블록 (2026-09-13 A안, 2026-09-22 중요도순 정렬로 리팩터).
+    없으면 빈 리스트(블록 생략).
 
     news_alert_send_enabled=False 로 실시간 발송을 끈 뉴스를 news_digest_queue
-    에서 최대 5건 꺼내 요약 1~2줄로 전달한다. 원문 링크는 생략(브리핑 길이 제한).
+    에서 꺼내 요약 1~2줄로 전달한다. 원문 링크는 생략(브리핑 길이 제한).
     소비 처리(consumed=1)는 **발송 성공 후** maybe_send_brief 가 한다 — 여기서
     바로 찍으면 발송 실패 시 그날 뉴스가 통째로 증발한다. 그래서 id 만 모아
     호출부에 넘긴다.
@@ -549,39 +584,73 @@ def _news_lines(conn, consumed_ids: list) -> list:
     2026-09-14 수리 — 날짜 인자를 없앴다. 종전엔 `day_kst='어제'` 로 걸러서 오늘
     새벽에 쌓인 뉴스가 당일 브리핑에서 빠지고 다음 날에야 나갔다(실측: 배포
     다음 날 브리핑의 뉴스 0건, 큐에는 5건이 '오늘' 날짜로 대기). consumed 플래그가
-    이미 중복을 막으므로 "아직 안 보여준 것을 오래된 순으로"면 충분하다."""
-    # 큐를 상한보다 넉넉히 꺼낸다 — 아래 2차 필터에서 걸러지는 만큼을 채우기 위해.
+    이미 중복을 막으므로 "아직 안 보여준 것을 오래된 순으로"면 충분하다.
+
+    2026-09-22 수리 — 뉴스가 00~04시 수집 회차에 몰려 들어와 쿼터(5건/일)를
+    **도착순**으로 채웠다("먼저 온 5건" ≠ "중요한 5건", 실측). 큐에서 넉넉히
+    꺼낸 후보(_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT) 전체를 _news_importance 로
+    매겨 상위 5건만 싣는다. 같은 코인이 여럿이면 점수 최고 1건만(실측 XRP·BTC
+    가 같은 CLARITY 법안 뉴스로 중복 등장). 동점이면 채널 다양성 → 최신순.
+    소비 계약도 함께 바뀐다 — **판정한 후보는 전부** consumed_ids 에 넣는다
+    (실리든 안 실리든). 꺼내지 않은 잔여분만 다음 날 후보로 남는다."""
+    # 큐를 상한보다 넉넉히 꺼낸다 — 순위를 매기려면 노이즈로 걸러질 만큼과
+    # 컷에서 밀릴 저점수 후보까지 모두 봐야 한다.
     rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT)
     if not rows:
         return []
 
-    picked = []
+    candidates = []  # [(row, summary, score), ...]
     for r in rows:
-        # 걸러지는 항목도 **소비 처리는 한다** — 안 그러면 큐에 영원히 남아
-        # 매일 아침 같은 노이즈를 다시 판정하고, 뒤에 쌓인 정상 뉴스를 계속
-        # 밀어낸다(get_news_digest 는 오래된 순이라 머리에서 막히면 그 뒤가 굶는다).
+        # 꺼낸 이상 **전부** 소비 처리한다 — 안 그러면 밀려난 저점수 뉴스가
+        # 큐 머리에 남아 다음 날 후보 창을 막는다(get_news_digest 는 오래된
+        # 순이라 머리에서 막히면 그 뒤가 계속 굶는다).
         consumed_ids.append(r["id"])
         if _is_queued_noise(r.get("symbol") or "", r.get("summary") or ""):
             logger.info("[brief] 큐 노이즈 제외: %s (%s)",
                         r.get("symbol"), (r.get("summary") or "")[:40])
             continue
-        summ = _first_sentence(r.get("summary") or "")
+        summary = r.get("summary") or ""
+        summ = _first_sentence(summary)
         if not summ:
             continue                    # 정제 후 남는 게 없으면 실을 가치도 없다
-        picked.append((r, summ))
-        if len(picked) >= _NEWS_BLOCK_MAX:
-            break
+        candidates.append((r, summ, _news_importance(summary)))
+
+    if not candidates:
+        return []
+
+    # 같은 코인은 점수 최고 1건만 (실측 XRP·BTC 가 같은 CLARITY 법안 뉴스로 중복).
+    best_by_symbol: dict = {}
+    for c in candidates:
+        sym = str(c[0].get("symbol") or "").upper()
+        cur = best_by_symbol.get(sym)
+        if cur is None or c[2] > cur[2]:
+            best_by_symbol[sym] = c
+    deduped = list(best_by_symbol.values())
+
+    # 점수 내림차순 → 동점이면 최신순(1차 정렬) → 선택 중 **이미 뽑힌 채널과
+    # 다른 채널 우선**(그리디, 2026-09-22). 채널 다양성은 "지금까지 고른 것과
+    # 겹치는가"라는, 선택이 진행되며 바뀌는 조건이라 정렬 키 하나로는 못 담는다.
+    pool = sorted(deduped, key=lambda c: (-c[2], -(c[0].get("created_at") or 0)))
+    picked, used_channels = [], set()
+    while pool and len(picked) < _NEWS_BLOCK_MAX:
+        top_score = pool[0][2]
+        tier = [c for c in pool if c[2] == top_score]
+        novel = [c for c in tier if (c[0].get("channel") or "") not in used_channels]
+        chosen = (novel or tier)[0]
+        picked.append(chosen)
+        used_channels.add(chosen[0].get("channel") or "")
+        pool.remove(chosen)
 
     if not picked:
         return []
     # "외 N건" 은 **아직 안 본 잔여분** 기준. 위에서 소비한 건 이미 처리된 것이라
-    # 세면 안 된다(노이즈까지 '남았다'고 표시되면 숫자가 거짓이 된다).
+    # 세면 안 된다(노이즈·컷 탈락까지 '남았다'고 표시되면 숫자가 거짓이 된다).
     remain = max(0, db.count_news_digest(conn) - len(consumed_ids))
     head = "📰 <b>주요 뉴스</b>"
     if remain:
         head += f" (외 {remain}건)"
     lines = [head]
-    for r, summ in picked:
+    for r, summ, _score in picked:
         sym = html.escape(str(r.get("symbol") or "?"))
         ch = html.escape(str(r.get("channel") or ""))
         ch_part = f" · @{ch}" if ch else ""

@@ -60,26 +60,59 @@ def default_db_path() -> Path:
     return p if p.is_absolute() else ROOT / p
 
 
+def load_mfe_mae_fixed_since(conn):
+    """MFE/MAE 누적 수리(2026-09-22 P1) 배포 시각(epoch). meta 없으면 None.
+
+    이 시각 **이전**에 터치된 행의 mfe_pct/mae_pct 는 무효다 — 수리 전에는
+    종결 시 1회만 기록했는데 스캔 캔들이 직전 회차 이후 몇 분뿐이라
+    "종결 회차의 몇 분"만 잰 값이었다(승리 건 98.3% 가 mae=0, 패배 건 97.5% 가
+    mfe=0). 과거는 소급 불가(캔들 재조회 비용)라 분석에서 **잘라낸다**."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='mfe_mae_fixed_since'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    try:
+        return float(row["value"]) if row and row["value"] else None
+    except (TypeError, ValueError):
+        return None
+
+
 def load_rows(conn) -> list:
     """터치 품질이 기록된 종결 표본만 —
-    [{"closed_below", "pen", "outcome", "ret_24h", "mfe_pct", "mae_pct"}, ...].
+    [{"closed_below", "pen", "outcome", "ret_24h", "mfe_pct", "mae_pct",
+      "touched_at", "mfe_valid"}, ...].
 
     touch_closed_below 는 2026-08-15 이후 기록 시작이라 NULL(구세대·현재가 단독
     감지 터치)은 표본이 아니다. 컬럼 자체가 없는 구세대 DB 는 OperationalError
-    → 호출부에서 표본 0건으로 접는다."""
+    → 호출부에서 표본 0건으로 접는다.
+
+    2026-09-22 P1: meta.mfe_mae_fixed_since 이전 터치분의 MFE/MAE 는 계산 버그로
+    무효라 **None 으로 비운다**(승률·관통 통계는 그대로 쓴다 — 그쪽은 무관).
+    mfe_valid 플래그로 유효 표본 수를 세어 리포트에 경고로 표기한다."""
     ph = ",".join("?" * len(CLOSED_OUTCOMES))
     try:
         rows = conn.execute(
             f"""SELECT touch_closed_below AS closed_below,
                        touch_penetration_pct AS pen,
-                       outcome, ret_24h, mfe_pct, mae_pct
+                       outcome, ret_24h, mfe_pct, mae_pct, touched_at
                 FROM levels
                 WHERE outcome IN ({ph}) AND touched_at IS NOT NULL
                   AND touch_closed_below IS NOT NULL""",
             CLOSED_OUTCOMES).fetchall()
     except sqlite3.OperationalError:
         return []
-    return [dict(r) for r in rows]
+    fixed_since = load_mfe_mae_fixed_since(conn)
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["mfe_valid"] = (fixed_since is not None
+                          and (d.get("touched_at") or 0) >= fixed_since)
+        if not d["mfe_valid"]:
+            d["mfe_pct"] = None   # 수리 이전 터치 — 무효값을 통계에서 제외
+            d["mae_pct"] = None
+        out.append(d)
+    return out
 
 
 def penetration_bucket(pen):
@@ -140,6 +173,14 @@ def render_report(rows: list) -> str:
     """전체 리포트 텍스트. rows = load_rows 결과."""
     lines = [f"종결 + 터치 품질 기록 표본: {len(rows)}건 "
              f"(touch_closed_below 기록 시작 2026-08-15 이후 터치분)"]
+    # MFE/MAE 유효 표본 경고 (2026-09-22 P1) — 수리 이전 터치분은 이미 None 으로
+    # 비워져 중앙값 계산에서 빠져 있다. 몇 건이 남았는지 명시해야 "MFE -" 를
+    # '표본 0' 이 아니라 '무효 구간'으로 읽을 수 있다.
+    _mfe_n = sum(1 for r in rows if r.get("mfe_valid"))
+    lines.append(
+        f"⚠️ MFE/MAE 유효 표본: {_mfe_n}건 — 2026-09-22 누적 수리(meta."
+        f"mfe_mae_fixed_since) 이전 터치 {len(rows) - _mfe_n}건은 "
+        f"'종결 회차의 몇 분'만 잰 무효값이라 통계에서 제외됨(소급 불가)")
 
     groups = split_groups(rows)
     wick = group_stats(groups["wick"])

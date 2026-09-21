@@ -47,6 +47,12 @@ settings.SETTINGS["tp_alert_send_enabled"] = True
 # 0 으로 덮으면 이 프로세스 안에서만 무효화된다(운영 코드 불변).
 from collector import grading as _grading_neutralize  # noqa: E402
 _grading_neutralize.LADDER_PENALTY = 0
+# 2026-09-22 v6 지연 감점 중립화 — 사다리 감점과 **똑같은 이유**다. 이 파일의
+# T1~T35 픽스처는 collected_at=now-600(10분 전)이라 전건이 <30분 구간에 걸려
+# 터치 재채점마다 -6 이 붙고, 경계(40점) 근처 손계산이 연쇄로 어긋난다(실측:
+# T22·T26d/e·T27b/e·T28c·T29g). 감점 자체의 검증은 test_grading.py V6A 와
+# 아래 DLY* 전용 블록이 전담한다 — 여기선 파이프라인 역학만 본다.
+settings.SETTINGS["grade_touch_delay_enabled"] = False
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 # 발송 원장(2026-07-28)은 DB 밖 파일이라 DB 를 지워도 남는다 — 안 지우면 직전
@@ -831,8 +837,11 @@ check("T22 DB 원본 등급/점수는 보존(불변) - 필터용 재계산은 in
       row22["grade"] == "D" and abs(row22["score"] - 13) < 1e-9)
 # regrade_current 단위 계산 검증: entry=20, current=20.12 -> diff 0.6% (<2%) -> +20점
 g22, s22score, _ = _grading.regrade_current(lv22, fake["price"] / USDT_KRW)
-# v4 손계산: 팔로워100(+3) + 근접(+20) + TP+30%(+4) + 완결성 entry/TP/SL(+23) = 50 → C
-check("T22 regrade_current 함수 자체 계산 정합", g22 == "C" and abs(s22score - 50) < 1e-9)
+# 손계산: 팔로워100(+3) + 근접(+20) + TP+30%(+4) + 완결성 entry/TP/SL(+23) = 50.
+# 점수는 v4~v6 불변이고 **라벨만** 이동했다 — v6 경계(A55/B47/C40)에서 50 은 B
+# (종전 v5 경계에서는 C). 경계 재보정이 "표시 정상화"라는 걸 그대로 보여주는 자리.
+check("T22 regrade_current 함수 자체 계산 정합(50점, v6 경계에서 B)",
+      g22 == "B" and abs(s22score - 50) < 1e-9)
 
 # ── 체인(카드3): 이 시점까지 T8/T9/T10/T11/T13/T15/T19~T21 등 run_once/
 #    _judge_outcomes 실경로로 쌓인 실제 판정 전체가 하나의 유효한 해시체인을
@@ -1032,49 +1041,61 @@ from datetime import datetime as _dt29, timezone as _tz29, timedelta as _td29  #
 _KST29 = _tz29(_td29(hours=9))
 
 
-def _kst_ts(y, m, d, hh=12):
-    return _dt29(y, m, d, hh, 0, tzinfo=_KST29).timestamp()
+# 2026-09-22 수리: 종전엔 날짜가 "2026-07-20" 등으로 **하드코딩**돼 있어, 실행
+# 시점이 그 날로부터 60일(prune keep_days)을 넘기는 순간 T29g("보존기간 이내
+# 최근 데이터는 유지")가 영구 실패하는 시한폭탄이었다 — 실제로 2026-09-22 에
+# 터졌다(cutoff 2026-07-24 > 픽스처 2026-07-20). 검증 의도(누적·KST 경계·
+# 보존기간)는 그대로 두고 날짜만 **실행 시점 상대**로 바꾼다.
+_D0_29 = _dt29.fromtimestamp(now, _KST29).date()
+_DAY_A = _D0_29 - _td29(days=2)    # 종전 2026-07-20 자리
+_DAY_B = _D0_29 - _td29(days=3)    # 종전 2026-07-19 자리
+_DAY_C = _D0_29 - _td29(days=4)    # 종전 2026-07-18 자리 (전부 0 델타 검증용)
+_SA, _SB, _SC = (d.isoformat() for d in (_DAY_A, _DAY_B, _DAY_C))
+
+
+def _kst_ts(d, hh=12):
+    return _dt29(d.year, d.month, d.day, hh, 0, tzinfo=_KST29).timestamp()
 
 
 with db.connect(TEST_DB29) as conn:
-    db.bump_daily_stats(conn, "2026-07-20", touches_total=3, suppressed_grade=1,
+    db.bump_daily_stats(conn, _SA, touches_total=3, suppressed_grade=1,
                         suppressed_tp_gate=4)
-    db.bump_daily_stats(conn, "2026-07-20", previews_total=2, suppressed_grade=1)  # 누적 확인
-    db.bump_daily_stats(conn, "2026-07-19", touches_total=1)
+    db.bump_daily_stats(conn, _SA, previews_total=2, suppressed_grade=1)  # 누적 확인
+    db.bump_daily_stats(conn, _SB, touches_total=1)
     rows29 = db.get_daily_stats(conn, days=60)
-r20 = next(r for r in rows29 if r["day_kst"] == "2026-07-20")
+r20 = next(r for r in rows29 if r["day_kst"] == _SA)
 check("T29 관찰DB - 같은 날 재호출은 누적(교체 아님)", r20["touches_total"] == 3
       and r20["suppressed_grade"] == 2 and r20["previews_total"] == 2)
 
 with db.connect(TEST_DB29) as conn:
-    db.bump_daily_stats(conn, "2026-07-18")  # 델타 전부 0
+    db.bump_daily_stats(conn, _SC)  # 델타 전부 0
     rows29b = db.get_daily_stats(conn, days=60)
 check("T29b 전부 0인 델타는 행을 만들지 않음(쓰기 생략)",
-      not any(r["day_kst"] == "2026-07-18" for r in rows29b))
+      not any(r["day_kst"] == _SC for r in rows29b))
 
 with db.connect(TEST_DB29) as conn:
     conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
                  "collected_at) VALUES ('c1','X','KRW-X','long','watching', ?)",
-                 (_kst_ts(2026, 7, 20),))
+                 (_kst_ts(_DAY_A),))
     conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
                  "collected_at) VALUES ('c2','X','KRW-X','long','watching', ?)",
-                 (_kst_ts(2026, 7, 20, 23),))
+                 (_kst_ts(_DAY_A, 23),))
     conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
                  "collected_at) VALUES ('c3','X','KRW-X','long','watching', ?)",
-                 (_kst_ts(2026, 7, 19),))
-    db.record_alert(conn, "X", "touch", [1], "2026-07-20", now=_kst_ts(2026, 7, 20))
-    db.record_alert(conn, "X", "preview", [1], "2026-07-20", now=_kst_ts(2026, 7, 20))
-    db.record_alert(conn, "X", "touch", [1], "2026-07-19", now=_kst_ts(2026, 7, 19))
+                 (_kst_ts(_DAY_B),))
+    db.record_alert(conn, "X", "touch", [1], _SA, now=_kst_ts(_DAY_A))
+    db.record_alert(conn, "X", "preview", [1], _SA, now=_kst_ts(_DAY_A))
+    db.record_alert(conn, "X", "touch", [1], _SB, now=_kst_ts(_DAY_B))
     collected29 = db.get_collected_counts_by_day(conn, days=60)
     sent29 = db.get_alerts_sent_by_day(conn, days=60)
 check("T29c 일자별 신규수집 건수(KST 경계, 원본 재사용)",
-      collected29.get("2026-07-20") == 2 and collected29.get("2026-07-19") == 1)
+      collected29.get(_SA) == 2 and collected29.get(_SB) == 1)
 check("T29d 일자별 발송 건수(alerts_log 재사용, 중복저장 없음)",
-      sent29.get("2026-07-20") == 2 and sent29.get("2026-07-19") == 1)
+      sent29.get(_SA) == 2 and sent29.get(_SB) == 1)
 
 with db.connect(TEST_DB29) as conn:
     report29 = db.get_observation_report(conn, days=60)
-rep20 = next(r for r in report29 if r["day_kst"] == "2026-07-20")
+rep20 = next(r for r in report29 if r["day_kst"] == _SA)
 check("T29e 통합 조회함수 - 수집/발송/집계 필드 결합 정합",
       rep20["collected"] == 2 and rep20["alerts_sent"] == 2
       and rep20["touches_total"] == 3 and rep20["suppressed_grade"] == 2)
@@ -1087,7 +1108,7 @@ with db.connect(TEST_DB29) as conn:
     removed29 = db.prune_daily_stats(conn, now=time.time(), keep_days=60)
     remaining29 = {r["day_kst"] for r in db.get_daily_stats(conn, days=999)}
 check("T29f 보존기간(60일) 초과분 삭제", removed29 >= 1 and "2020-01-01" not in remaining29)
-check("T29g 보존기간 이내 최근 데이터는 유지", "2026-07-20" in remaining29)
+check("T29g 보존기간 이내 최근 데이터는 유지", _SA in remaining29)
 os.remove(TEST_DB29)
 
 # T29h: 구세대 DB 마이그레이션 — daily_stats 테이블이 이미 있는 DB에는
@@ -3975,6 +3996,365 @@ if os.path.exists(_TPO_DB):
     os.remove(_TPO_DB)
 if os.path.exists(_tpo_ledger):
     os.remove(_tpo_ledger)
+
+# ══════════════════════════════════════════════════════════════════════
+# MFE*: MFE/MAE 다회차 누적 (2026-09-22 P1 수리)
+# ══════════════════════════════════════════════════════════════════════
+# 버그: _running_mfe/_running_mae 가 매 회차 0.0 으로 초기화되는데 스캔 캔들은
+# 직전 회차 이후 ≈4~6분뿐이고, record_mfe_mae 는 종결 시 1회만 불렸다 →
+# "종결이 일어난 그 회차의 몇 분"만 기록(실측: 승리 건 98.3% mae=0, 패배 건
+# 97.5% mfe=0 — research_2026-09-17_db_analysis.md §1-3).
+# 회귀 시나리오(기획서 지정): 회차1 하락 → 회차2 상승 → TP 종결.
+# 수리 전이라면 mae=0 이 나온다. 수리 후엔 회차1 의 하락값이 살아 있어야 한다.
+_MFE_DB = "cache/_test_mfe.db"
+if os.path.exists(_MFE_DB):
+    os.remove(_MFE_DB)
+_mfe_ledger = _alert_ledger.ledger_path(_MFE_DB)
+if os.path.exists(_mfe_ledger):
+    os.remove(_mfe_ledger)
+db.init_db(_MFE_DB)
+_mfe_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _MFE_DB
+_mfe_now = time.time()
+
+with db.connect(_MFE_DB) as conn:
+    _mfe_lv = dict(coin_symbol="MFEC", ticker="KRW-MFEC", direction="long",
+                   entry_usd=100.0, sl_usd=94.0, tp_usd=108.0, rr=1.3,
+                   grade="B", score=60, author="MFE_auth",
+                   author_followers=50000, author_hit_rate=None,
+                   author_hit_count=None, author_whitelisted=False,
+                   mcap_rank=50, mcap_tier_icon="🥇",
+                   post_url="https://tv.com/mfe", post_age_minutes=10,
+                   collected_at=_mfe_now - 3600)
+    _mfe_lv["signal_key"] = db.make_signal_key("MFEC", 100.0, "MFE_auth", "mfe")
+    db.upsert_level(conn, _mfe_lv)
+    _mfe_id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (_mfe_lv["signal_key"],)).fetchone()["id"]
+
+# 터치 — 기준가(base_eff) = 자기 진입가 KRW (지정가 체결 모델)
+fake["price"] = 100.0 * USDT_KRW * 1.001
+fake["low"] = 99.0 * USDT_KRW
+fake["candles"] = fake["high"] = None
+price_check.run_once(_mfe_now)
+
+# 회차1: 하락만 (저가 96 → MAE -4%), TP·SL 미도달 → 미종결
+fake["price"] = 96.5 * USDT_KRW
+fake["low"] = fake["high"] = None
+fake["candles"] = [(_mfe_now + 1, _mfe_now + 200,
+                    100.5 * USDT_KRW, 96.0 * USDT_KRW)]
+price_check.run_once(_mfe_now + 240)
+with db.connect(_MFE_DB) as conn:
+    _mfe_r1 = conn.execute(
+        "SELECT outcome, mfe_pct, mae_pct FROM levels WHERE id=?",
+        (_mfe_id,)).fetchone()
+check("MFE1 회차1(하락) — 미종결 상태에서도 MAE 가 DB 에 누적된다(-4%)",
+      _mfe_r1["outcome"] is None
+      and abs(_mfe_r1["mae_pct"] - (-4.0)) < 0.05
+      and abs(_mfe_r1["mfe_pct"] - 0.5) < 0.05)
+
+# 회차2: 상승만 (고가 104 → MFE +4%), 아직 TP 미도달 → 단조 갱신만
+fake["price"] = 103.5 * USDT_KRW
+fake["candles"] = [(_mfe_now + 241, _mfe_now + 400,
+                    104.0 * USDT_KRW, 103.0 * USDT_KRW)]
+price_check.run_once(_mfe_now + 440)
+with db.connect(_MFE_DB) as conn:
+    _mfe_r2 = conn.execute(
+        "SELECT outcome, mfe_pct, mae_pct FROM levels WHERE id=?",
+        (_mfe_id,)).fetchone()
+check("MFE2 회차2(상승) — MFE 는 갱신(+4%)되고 회차1 의 MAE 는 **보존**된다",
+      _mfe_r2["outcome"] is None
+      and abs(_mfe_r2["mfe_pct"] - 4.0) < 0.05
+      and abs(_mfe_r2["mae_pct"] - (-4.0)) < 0.05)
+
+# 회차3: TP(108) 도달 → 종결. 확정값은 누적값과 이번 회차 값의 극값.
+fake["price"] = 108.5 * USDT_KRW
+fake["candles"] = [(_mfe_now + 441, _mfe_now + 600,
+                    108.5 * USDT_KRW, 107.0 * USDT_KRW)]
+price_check.run_once(_mfe_now + 640)
+with db.connect(_MFE_DB) as conn:
+    _mfe_r3 = conn.execute(
+        "SELECT outcome, mfe_pct, mae_pct FROM levels WHERE id=?",
+        (_mfe_id,)).fetchone()
+check("MFE3 TP 종결 — 확정 MFE 는 이번 회차(+8.5%), MAE 는 **회차1 값(-4%)이 남는다** "
+      "(수리 전이라면 mae=0 이 나왔다 — 이 버그의 회귀 방어선)",
+      _mfe_r3["outcome"] == "hit"
+      and abs(_mfe_r3["mfe_pct"] - 8.5) < 0.05
+      and abs(_mfe_r3["mae_pct"] - (-4.0)) < 0.05
+      and _mfe_r3["mae_pct"] != 0)
+
+# MFE4~6: db 계층 단위 검증 — 단조 병합 · 종결 행 보호 · ratio 는 확정 MFE 기준
+with db.connect(_MFE_DB) as conn:
+    conn.execute("UPDATE levels SET mfe_pct=NULL, mae_pct=NULL, outcome=NULL, "
+                 "touch_mfe_atr_ratio=NULL, touch_atr_pct=5.0 WHERE id=?", (_mfe_id,))
+    db.update_mfe_mae_running(conn, _mfe_id, 9.0, -2.0)
+    db.update_mfe_mae_running(conn, _mfe_id, 3.0, -0.5)   # 덜 극단 — 무시돼야 한다
+    _mfe_u = conn.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=?",
+                          (_mfe_id,)).fetchone()
+check("MFE4 단조 갱신 — 더 큰 MFE / 더 작은 MAE 일 때만 반영(덜 극단값은 무시)",
+      abs(_mfe_u["mfe_pct"] - 9.0) < 1e-9 and abs(_mfe_u["mae_pct"] - (-2.0)) < 1e-9)
+with db.connect(_MFE_DB) as conn:
+    db.record_mfe_mae(conn, _mfe_id, 1.0, -0.5)   # 종결 시 확정(이번 회차 값은 덜 극단)
+    _mfe_f = conn.execute(
+        "SELECT mfe_pct, mae_pct, touch_mfe_atr_ratio FROM levels WHERE id=?",
+        (_mfe_id,)).fetchone()
+check("MFE5 확정값 = 누적값과 종결 회차 값의 극값 (9.0 / -2.0)",
+      abs(_mfe_f["mfe_pct"] - 9.0) < 1e-9 and abs(_mfe_f["mae_pct"] - (-2.0)) < 1e-9)
+check("MFE6 touch_mfe_atr_ratio 는 **확정 MFE** 기준 (9.0/5.0=1.8, 인자값 1.0 아님)",
+      abs(_mfe_f["touch_mfe_atr_ratio"] - 1.8) < 1e-9)
+with db.connect(_MFE_DB) as conn:
+    conn.execute("UPDATE levels SET outcome='hit' WHERE id=?", (_mfe_id,))
+    db.update_mfe_mae_running(conn, _mfe_id, 99.0, -99.0)
+    _mfe_lock = conn.execute("SELECT mfe_pct, mae_pct FROM levels WHERE id=?",
+                             (_mfe_id,)).fetchone()
+check("MFE7 종결 행은 누적 갱신 대상 아님 — 판정 후 가격이 스냅샷을 오염시키지 않는다",
+      abs(_mfe_lock["mfe_pct"] - 9.0) < 1e-9
+      and abs(_mfe_lock["mae_pct"] - (-2.0)) < 1e-9)
+# meta 표식 — 분석 스크립트가 유효 표본을 자르는 기준점
+with db.connect(_MFE_DB) as conn:
+    _mfe_since = db.get_mfe_mae_fixed_since(conn)
+check("MFE8 meta.mfe_mae_fixed_since 기록 — 이 시각 이후 터치분만 유효 표본",
+      _mfe_since is not None and _mfe_since > 0)
+
+settings.SETTINGS["db_path"] = _mfe_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+for _p in (_MFE_DB, _mfe_ledger):
+    if os.path.exists(_p):
+        os.remove(_p)
+
+# ══════════════════════════════════════════════════════════════════════
+# DLY*: 수집→터치 지연 감점 배선 (2026-09-22 v6 Q1)
+# ══════════════════════════════════════════════════════════════════════
+# 이 파일 상단에서 스위치를 OFF 로 중립화해 뒀다(T1~T35 손계산 보호).
+# 여기서만 켜서 "터치 재채점 시점에 now−collected_at 이 실제로 전달되는가" 와
+# "스냅샷(touch_score)에도 감점이 반영되는가" 를 본다. 같은 픽스처를 스위치
+# ON/OFF 로 두 번 돌려 **차이가 정확히 감점 폭**인지 비교한다 — 다른 요소
+# (F3/DEX/소셜 등)의 개입에 영향받지 않는 비교 방식.
+_dly_prev_db = settings.SETTINGS["db_path"]
+
+
+def _dly_touch_score(delay_sec, enabled, tag):
+    """지연 delay_sec 인 레벨을 한 번 터치시키고 저장된 touch_score 를 돌려준다."""
+    path = f"cache/_test_dly_{tag}.db"
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    db.init_db(path)
+    settings.SETTINGS["db_path"] = path
+    settings.SETTINGS["grade_touch_delay_enabled"] = enabled
+    t0 = time.time()
+    with db.connect(path) as conn:
+        lv = dict(coin_symbol="DLYC", ticker="KRW-DLYC", direction="long",
+                  entry_usd=100.0, sl_usd=94.0, tp_usd=110.0, rr=1.6,
+                  grade="B", score=60, author="DLY_auth",
+                  author_followers=50000, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇",
+                  post_url="https://tv.com/dly", post_age_minutes=10,
+                  collected_at=t0 - delay_sec)
+        lv["signal_key"] = db.make_signal_key("DLYC", 100.0, "DLY_auth", "dly")
+        db.upsert_level(conn, lv)
+    fake["price"] = 100.0 * USDT_KRW * 1.001
+    fake["low"] = 99.0 * USDT_KRW
+    fake["candles"] = fake["high"] = None
+    price_check.run_once(t0)
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT touch_score, touch_grade, touch_grade_ver, status FROM levels "
+            "WHERE signal_key=?", (lv["signal_key"],)).fetchone()
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    return row
+
+
+_dly_on = _dly_touch_score(300, True, "on")        # 5분 지연 — 감점 구간
+_dly_off = _dly_touch_score(300, False, "off")     # 같은 픽스처, 스위치 OFF
+_dly_late = _dly_touch_score(7200, True, "late")   # 2시간 지연 — 감점 없음
+settings.SETTINGS["grade_touch_delay_enabled"] = False   # 파일 기본(중립화) 복구
+settings.SETTINGS["db_path"] = _dly_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+
+check("DLY1 터치 재채점에 지연이 실린다 — 5분 지연 건의 touch_score 가 정확히 -6",
+      _dly_on["status"] == "touched"
+      and _dly_on["touch_score"] == _dly_off["touch_score"] - 6)
+check("DLY2 스냅샷(touch_score/touch_grade)에 감점 반영값이 저장된다(캘리브레이션 축)",
+      _dly_on["touch_score"] is not None and _dly_on["touch_grade"] is not None)
+check("DLY3 30분 이상 지연은 감점 없음 — 스위치 OFF 와 동일 점수",
+      _dly_late["touch_score"] == _dly_off["touch_score"])
+check("DLY4 터치 재채점 산식 버전 도장 v6 (Fix5 클러스터 공통 kwarg)",
+      _dly_on["touch_grade_ver"] == "v6")
+
+# ══════════════════════════════════════════════════════════════════════
+# RX*: 결과 이모지 반응 (2026-09-22 Q4)
+# ══════════════════════════════════════════════════════════════════════
+# 핵심 계약: ① 새 메시지 0건 ② tp_alert_send_enabled=False 와 무관하게 동작
+# ③ 우선순위 🏆 > 🔥 > 👌 > 💔 (클러스터 형제가 같은 message_id 를 공유)
+# ④ 실패는 무해 ⑤ message_id 없는 과거 레벨은 조용히 스킵.
+_RX_DB = "cache/_test_reaction.db"
+_rx_ledger = _alert_ledger.ledger_path(_RX_DB)
+for _p in (_RX_DB, _rx_ledger):
+    if os.path.exists(_p):
+        os.remove(_p)
+db.init_db(_RX_DB)
+_rx_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _RX_DB
+_rx_now = time.time()
+
+_rx_calls = []           # [(message_id, emoji), ...]
+_rx_result = {"ok": True}
+_prev_set_reaction = telegram.set_reaction
+telegram.set_reaction = lambda mid, emoji: (_rx_calls.append((mid, emoji))
+                                            or _rx_result["ok"])
+_RX_MID = 4242
+_prev_send_rx = telegram.send
+
+
+def _rx_send(text, urgency="high", reply_to_message_id=None):
+    sent_messages.append(text)
+    return _RX_MID
+
+
+telegram.send = _rx_send
+# 반응은 '발송'이 아니다 — TP 발송 스위치 OFF(운영 기본값)에서도 동작해야 한다.
+settings.SETTINGS["tp_alert_send_enabled"] = False
+
+with db.connect(_RX_DB) as conn:
+    _rx_lv = dict(coin_symbol="RXC", ticker="KRW-RXC", direction="long",
+                  entry_usd=100.0, sl_usd=94.0, tp_usd=108.0, rr=1.3,
+                  grade="B", score=60, author="RX_auth",
+                  author_followers=50000, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇",
+                  post_url="https://tv.com/rx", post_age_minutes=10,
+                  collected_at=_rx_now - 3600,
+                  tps_usd=_json.dumps([108.0, 120.0]))
+    _rx_lv["signal_key"] = db.make_signal_key("RXC", 100.0, "RX_auth", "rx")
+    db.upsert_level(conn, _rx_lv)
+    _rx_id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                          (_rx_lv["signal_key"],)).fetchone()["id"]
+
+fake["price"] = 100.0 * USDT_KRW * 1.001
+fake["low"] = 99.0 * USDT_KRW
+fake["candles"] = fake["high"] = None
+price_check.run_once(_rx_now)
+with db.connect(_RX_DB) as conn:
+    _rx_row0 = conn.execute(
+        "SELECT touch_message_id, touch_reaction FROM levels WHERE id=?",
+        (_rx_id,)).fetchone()
+check("RX1 터치 본알림 발송 성공 시 touch_message_id 저장(반응 없음 — 아직 판정 전)",
+      _rx_row0["touch_message_id"] == _RX_MID
+      and _rx_row0["touch_reaction"] is None and not _rx_calls)
+
+# 중간 TP(TP1=108) 도달 → 👍 (사다리 진행 중, 아직 종결 아님)
+fake["price"] = 109.0 * USDT_KRW
+fake["low"] = fake["high"] = None
+fake["candles"] = [(_rx_now + 1, _rx_now + 200,
+                    109.0 * USDT_KRW, 100.0 * USDT_KRW)]
+_rx_msgs_before = len(sent_messages)
+price_check.run_once(_rx_now + 240)
+with db.connect(_RX_DB) as conn:
+    _rx_row1 = conn.execute(
+        "SELECT outcome, touch_reaction FROM levels WHERE id=?", (_rx_id,)).fetchone()
+check("RX2 중간 TP 적중 → 👍 반응 1건, 새 메시지 0건 (TP 발송 스위치 OFF 무관)",
+      _rx_calls == [(_RX_MID, "👍")]
+      and len(sent_messages) == _rx_msgs_before
+      and _rx_row1["touch_reaction"] == "tp_partial"
+      and _rx_row1["outcome"] is None)
+
+# 최종 TP(120) 도달 → 🏆 로 교체(우선순위 최상위)
+fake["price"] = 121.0 * USDT_KRW
+fake["candles"] = [(_rx_now + 241, _rx_now + 400,
+                    121.0 * USDT_KRW, 118.0 * USDT_KRW)]
+price_check.run_once(_rx_now + 440)
+with db.connect(_RX_DB) as conn:
+    _rx_row2 = conn.execute(
+        "SELECT outcome, touch_reaction FROM levels WHERE id=?", (_rx_id,)).fetchone()
+check("RX3 최종 목표 완주 → 🏆 로 교체 (hit 종결)",
+      _rx_calls[-1] == (_RX_MID, "🏆") and len(_rx_calls) == 2
+      and _rx_row2["outcome"] == "hit" and _rx_row2["touch_reaction"] == "hit")
+
+# 우선순위: 이미 🏆 가 달린 메시지에 형제의 나쁜 결과가 덮이면 안 된다
+with db.connect(_RX_DB) as conn:
+    _rx_before = len(_rx_calls)
+    _rx_lv_obj = dict(id=_rx_id, coin_symbol="RXC")
+    _rx_p1 = price_check._react(conn, _rx_lv_obj, "fail", settings.get)
+    _rx_p2 = price_check._react(conn, _rx_lv_obj, "tp_partial", settings.get)
+    _rx_p3 = price_check._react(conn, _rx_lv_obj, "timeboxed_win", settings.get)
+    _rx_p4 = price_check._react(conn, _rx_lv_obj, "hit", settings.get)   # 동급 — no-op
+check("RX4 우선순위 🏆 > 👍 > 👌 > 👎 — 더 나쁜(또는 동급) 결과는 덮어쓰지 않는다",
+      not any((_rx_p1, _rx_p2, _rx_p3, _rx_p4)) and len(_rx_calls) == _rx_before)
+check("RX5 _REACTION_PRIORITY 정본 순서",
+      price_check._REACTION_PRIORITY
+      == ("hit", "tp_partial", "timeboxed_win", "fail"))
+
+# 반응 실패는 무해 — 판정·종결은 그대로여야 하고 DB 에 반응이 기록되면 안 된다
+with db.connect(_RX_DB) as conn:
+    conn.execute("UPDATE levels SET touch_reaction=NULL WHERE id=?", (_rx_id,))
+    conn.commit()
+    _rx_result["ok"] = False
+    _rx_before = len(_rx_calls)
+    _rx_fail_ret = price_check._react(conn, _rx_lv_obj, "hit", settings.get)
+    _rx_fail_row = conn.execute("SELECT touch_reaction FROM levels WHERE id=?",
+                                (_rx_id,)).fetchone()
+    _rx_result["ok"] = True
+check("RX6 반응 API 실패는 무해 — False 반환, DB 미기록, 예외 전파 없음",
+      _rx_fail_ret is False and _rx_fail_row["touch_reaction"] is None
+      and len(_rx_calls) == _rx_before + 1)
+
+# 예외를 던져도 판정 경로가 죽으면 안 된다
+def _rx_boom(mid, emoji):
+    raise RuntimeError("반응 API 폭발")
+
+
+telegram.set_reaction = _rx_boom
+with db.connect(_RX_DB) as conn:
+    _rx_boom_ret = price_check._react(conn, _rx_lv_obj, "hit", settings.get)
+telegram.set_reaction = lambda mid, emoji: (_rx_calls.append((mid, emoji))
+                                            or _rx_result["ok"])
+check("RX7 반응 함수가 예외를 던져도 삼킨다(판정·회차 생존)", _rx_boom_ret is False)
+
+# 롤백 스위치 2종
+with db.connect(_RX_DB) as conn:
+    _rx_before = len(_rx_calls)
+    settings.SETTINGS["result_reaction_enabled"] = False
+    _rx_off = price_check._react(conn, _rx_lv_obj, "hit", settings.get)
+    _rx_after_off = len(_rx_calls)   # RX8 판정 시점 고정 (아래 RX9 호출 전)
+    settings.SETTINGS["result_reaction_enabled"] = True
+    settings.SETTINGS["result_reaction_fail_enabled"] = False
+    _rx_fail_off = price_check._react(conn, _rx_lv_obj, "fail", settings.get)
+    _rx_win_on = price_check._react(conn, _rx_lv_obj, "timeboxed_win", settings.get)
+    settings.SETTINGS["result_reaction_fail_enabled"] = True
+check("RX8 스위치 OFF — result_reaction_enabled=False 면 호출 0",
+      _rx_off is False and _rx_after_off == _rx_before)
+check("RX9 실패 표시만 분리 차단 — 👎 는 생략되고 👌 는 그대로 달린다",
+      _rx_fail_off is False and _rx_win_on is True
+      and _rx_calls[-1] == (_RX_MID, "👌"))
+
+# message_id 없는 과거 레벨은 조용히 스킵
+with db.connect(_RX_DB) as conn:
+    conn.execute("UPDATE levels SET touch_message_id=NULL, touch_reaction=NULL "
+                 "WHERE id=?", (_rx_id,))
+    conn.commit()
+    _rx_before = len(_rx_calls)
+    _rx_legacy = price_check._react(conn, _rx_lv_obj, "hit", settings.get)
+check("RX10 touch_message_id 없는 과거 레벨은 조용히 스킵(호출 0)",
+      _rx_legacy is False and len(_rx_calls) == _rx_before)
+
+# 이모지 매핑 정본 — ✅/❌ 는 Telegram 허용 목록에 없어 쓸 수 없다
+_rx_map = settings.get("result_reaction_emoji")
+check("RX11 이모지 매핑 정본 (허용 목록 준수 — ✅/❌ 미사용)",
+      _rx_map == {"hit": "🏆", "tp_partial": "👍",
+                  "timeboxed_win": "👌", "fail": "👎"}
+      and "✅" not in _rx_map.values() and "❌" not in _rx_map.values())
+
+telegram.set_reaction = _prev_set_reaction
+telegram.send = _prev_send_rx
+settings.SETTINGS["tp_alert_send_enabled"] = True   # 파일 기본(회귀 전제) 복구
+settings.SETTINGS["db_path"] = _rx_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+for _p in (_RX_DB, _rx_ledger):
+    if os.path.exists(_p):
+        os.remove(_p)
 
 print()
 print("── 본알림 실제 렌더링 ──")

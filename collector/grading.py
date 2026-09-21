@@ -52,6 +52,25 @@ v3 그대로** 두고 상단(5천+)만 끌어올렸다 — 소형 작성자의 �
   묶었고 '단일 목표'와 '사다리 미상' 모두 31.7% 쪽) 이면 -3 (ladder_penalty).
   2단 이상은 0 — 가점이 아니라 순수 감점(조이기)이며 그 외 v4 배점·임계 전부 불변.
   settings.grade_formula_ver 'v4' → 'v5' 태그 승격, 과거 행 소급 재라벨 없음.
+2026-09-22 개정(v6 — 수집→터치 지연 감점 + 등급 경계 재보정, 사용자 결정 Q1·Q3):
+  근거: izrua_company/research_2026-09-17_db_analysis.md + plan_2026-09-17_고도화_기획안.md.
+  ① **수집→터치 지연 감점(Q1)**: judgment_mode 층화(tp_sl 한정, n=188)에서 유일하게
+    살아남은 신호. 지연 <30분 승률 25.9%(n=81, Wilson LB80 20.2%) vs 24h+ 48.7%
+    (n=39, LB80 38.7%) — 격차 +22.8%p, 단조 증가, LB80 구간 비겹침. 의미는
+    "글이 올라오자마자 닿는 진입가는 이미 지나간 자리". `touch_delay_minutes`
+    (=(touched_at−collected_at)/60)가 settings.grade_touch_delay_min_minutes(30)
+    미만이면 settings.grade_touch_delay_penalty(-6). **수집 시점에는 값이 없어
+    (None) 0** — 터치 재채점(regrade_current / price_check 의 rep 재채점)에서만
+    실린다. 롤백 스위치 settings.grade_touch_delay_enabled.
+  ② **등급 경계 재보정(Q3)**: A≥55 / B≥47 / C≥40 / D<40 의 4단계, **S 등급 폐지**.
+    목적은 예측력이 아니라 **표시(라벨) 정상화**다 — 같은 판정축(tp_sl) 안에서
+    touch_score↔승패 점-이연 상관은 r=−0.028 로 사실상 0이고(전체 r=+0.226 은
+    judgment_mode 교란이 만든 착시), v5 이후 S·A 발급이 0건(최고 62점)이라
+    라벨이 죽어 있었다. 경계는 settings.grade_thresholds 로 분리했다.
+    C 컷은 40 그대로라 alert_min_grade='C' 의 **실효 컷은 불변**(알림량 유지).
+    GRADE_ORDER 에는 'S' 를 남긴다 — 과거 DB 행에 'S' 가 있어 **읽기 경로는 계속
+    S 를 이해해야** 하고, 신규 발급만 중단된다.
+  settings.grade_formula_ver 'v5' → 'v6' 태그 승격, 과거 행 소급 재라벨 없음(D4).
 """
 
 from typing import Optional, Tuple
@@ -61,7 +80,20 @@ from typing import Optional, Tuple
 # "프로젝트 모듈 import 0" 순수 모듈).
 from analytics.calibration import wilson_interval
 
+# 'S' 는 2026-09-22 v6 에서 **신규 발급 중단**됐지만 과거 DB 행에 남아 있으므로
+# 순서표에는 유지한다 — meets_min_grade·캘리브레이션·주간리포트 등 **읽기 경로가
+# 계속 S 를 이해해야** 한다(소급 재라벨 금지 D4 의 필연적 귀결).
 GRADE_ORDER = ["S", "A", "B", "C", "D"]
+
+# 등급 경계 기본값 (2026-09-22 v6 Q3) — (등급, 최소 점수) 내림차순. 첫 매칭 적용,
+# 어디에도 안 걸리면 'D'. settings.grade_thresholds 로 덮어쓸 수 있다(되돌리기는
+# 그 키를 [["S",85],["A",70],["B",55],["C",40]] 로 되돌리면 v5 경계 복원).
+GRADE_THRESHOLDS_DEFAULT = (("A", 55.0), ("B", 47.0), ("C", 40.0))
+
+# ── 수집→터치 지연 감점 (2026-09-22 v6 Q1) ───────────────────────────────
+# 기본값은 settings(grade_touch_delay_*)가 정본이고 아래는 설정 부재 시 폴백.
+TOUCH_DELAY_MIN_MINUTES_DEFAULT = 30
+TOUCH_DELAY_PENALTY_DEFAULT = -6
 
 # 목표거리(TP 거리) 단일 배점표 — (상한 %, 점수). 아래→위 순서로 첫 매칭 구간 적용.
 # 음수 구간(=감점)은 모든 글에 적용, 5%+ 구간은 보상(0 포함 — v3 부터 40%+ 는
@@ -127,15 +159,31 @@ def author_track_points(closed_n: Optional[int], closed_hits: Optional[int]) -> 
     return 0.0
 
 
+def _thresholds() -> tuple:
+    """등급 경계표 — settings.grade_thresholds 우선, 손상/부재 시 기본값 폴백.
+
+    설정 실수(빈 리스트·튜플 아님·숫자 아님)로 등급 산정이 크래시하면 회차 전체가
+    죽으므로, 검증 실패 시 조용히 기본값으로 떨어진다(프로젝트 fail-safe 관례)."""
+    try:
+        from config import settings
+        raw = settings.get("grade_thresholds")
+        if raw:
+            out = tuple((str(g), float(c)) for g, c in raw)
+            if out:
+                return out
+    except Exception:  # noqa: BLE001 - 설정 손상이 채점을 죽이면 안 된다
+        pass
+    return GRADE_THRESHOLDS_DEFAULT
+
+
 def grade_from_score(score: float) -> str:
-    if score >= 85:
-        return "S"
-    if score >= 70:
-        return "A"
-    if score >= 55:
-        return "B"
-    if score >= 40:
-        return "C"
+    """점수 → 등급. 2026-09-22 v6: A≥55 / B≥47 / C≥40 / D<40 (S 신규 발급 중단).
+
+    경계는 settings.grade_thresholds 로 외부화돼 있다 — 되돌리기는 설정 한 줄.
+    **경고**: 이 경계는 예측력 목적이 아니라 라벨 정상화 목적이다(모듈 헤더 v6 ②)."""
+    for grade, cut in _thresholds():
+        if score >= cut:
+            return grade
     return "D"
 
 
@@ -157,6 +205,35 @@ def tp_distance_points(direction: str, entry: Optional[float], target: Optional[
     for hi, pts in TP_DISTANCE_BANDS:
         if tp_pct < hi:
             return 0.0 if (pts > 0 and has_rr) else float(pts)
+    return 0.0
+
+
+def _touch_delay_points(touch_delay_minutes: Optional[float]) -> float:
+    """수집→터치 지연 감점 (2026-09-22 v6 Q1).
+
+    touch_delay_minutes = (touched_at − collected_at)/60. **수집 시점에는 값이
+    없으므로 None → 0** — 이 감점은 터치 재채점에서만 실린다(설계 그대로).
+    < grade_touch_delay_min_minutes(기본 30) 이면 grade_touch_delay_penalty
+    (기본 -6), 그 외 0. 순수 감점 — 이 요소로 등급이 오르는 경로는 없다.
+
+    롤백: settings.grade_touch_delay_enabled=False → 항상 0."""
+    if touch_delay_minutes is None:
+        return 0.0
+    try:
+        from config import settings
+        if not settings.get("grade_touch_delay_enabled"):
+            return 0.0
+        cutoff = settings.get("grade_touch_delay_min_minutes")
+        penalty = settings.get("grade_touch_delay_penalty")
+    except Exception:  # noqa: BLE001 - 설정 조회 실패가 채점을 죽이면 안 된다
+        cutoff, penalty = None, None
+    cutoff = TOUCH_DELAY_MIN_MINUTES_DEFAULT if cutoff is None else cutoff
+    penalty = TOUCH_DELAY_PENALTY_DEFAULT if penalty is None else penalty
+    try:
+        if float(touch_delay_minutes) < float(cutoff):
+            return float(penalty)
+    except (TypeError, ValueError):
+        return 0.0
     return 0.0
 
 
@@ -251,11 +328,16 @@ def score_breakdown(
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
+    touch_delay_minutes: Optional[float] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
     calculate_grade()가 내부적으로 사용하며, 수집 시 분해 저장에도 직접 호출된다.
-    키: follower, proximity, tp_dist, data, author, ladder, regime.  sum(values()) == 총점.
+    키: follower, proximity, tp_dist, data, author, ladder, regime, dex,
+    onchain_addr, social, delay.  sum(values()) == 총점.
+
+    touch_delay_minutes (2026-09-22 v6 Q1): (touched_at − collected_at)/60.
+    수집 시점엔 None(=0점), 터치 재채점에서만 값이 실린다.
 
     tp_ladder_count (2026-08-15 v5): levels.tp_ladder_count (extractor 가 센
     유효 TP 단계 수, 0 = 단일 목표/사다리 미상). None 도 0~1 과 같은 -3 —
@@ -330,6 +412,10 @@ def score_breakdown(
     # StockTwits 소셜 심리 (2026-08-17) — bullish_ratio 극단만 ±1
     bd["social"] = _social_sentiment_points(stwits_bullish_ratio)
 
+    # 수집→터치 지연 감점 (2026-09-22 v6 Q1) — 수집 시점엔 None 이라 0.
+    # 터치 재채점에서만 값이 실린다(모듈 헤더 v6 ①).
+    bd["delay"] = _touch_delay_points(touch_delay_minutes)
+
     return bd
 
 
@@ -349,6 +435,7 @@ def calculate_grade(
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
+    touch_delay_minutes: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
@@ -367,7 +454,8 @@ def calculate_grade(
                          dex_buy_ratio=dex_buy_ratio,
                          dex_liquidity_usd=dex_liquidity_usd,
                          active_addr_pctile=active_addr_pctile,
-                         stwits_bullish_ratio=stwits_bullish_ratio)
+                         stwits_bullish_ratio=stwits_bullish_ratio,
+                         touch_delay_minutes=touch_delay_minutes)
     score = float(sum(bd.values()))
 
     rr = None
@@ -388,6 +476,7 @@ def calculate_grade_with_breakdown(
     adx14=None, bb_width_pctile=None,
     dex_buy_ratio=None, dex_liquidity_usd=None,
     active_addr_pctile=None, stwits_bullish_ratio=None,
+    touch_delay_minutes=None,
 ) -> tuple:
     """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
@@ -397,7 +486,8 @@ def calculate_grade_with_breakdown(
                          dex_buy_ratio=dex_buy_ratio,
                          dex_liquidity_usd=dex_liquidity_usd,
                          active_addr_pctile=active_addr_pctile,
-                         stwits_bullish_ratio=stwits_bullish_ratio)
+                         stwits_bullish_ratio=stwits_bullish_ratio,
+                         touch_delay_minutes=touch_delay_minutes)
     score = float(sum(bd.values()))
     rr = None
     if entry and stop_loss and target:
@@ -426,6 +516,7 @@ def regrade_current(
     dex_liquidity_usd: Optional[float] = None,
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
+    touch_delay_minutes: Optional[float] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
 
@@ -443,7 +534,14 @@ def regrade_current(
 
     tp_ladder_count (2026-08-15 v5): 입력 행은 db.get_active_levels 의 SELECT *
     라 levels.tp_ladder_count (DEFAULT 0) 를 항상 실어 온다. 키 부재/NULL 은
-    0~1단과 동일하게 -3 (사다리 미상 = 같은 저성과 버킷, 모듈 헤더 v5 참조)."""
+    0~1단과 동일하게 -3 (사다리 미상 = 같은 저성과 버킷, 모듈 헤더 v5 참조).
+
+    touch_delay_minutes (2026-09-22 v6 Q1): 명시 인자가 우선이고, 없으면 레벨
+    dict 의 동명 키를 본다 — price_check 가 클러스터 전 멤버에 한 번 심어 두면
+    대표 선정(_rep)·전 멤버 재채점·rep 재채점(F3)이 전부 같은 값을 쓴다.
+    양쪽 다 없으면 None → 감점 0(수집 시점·예고 경로와 동일)."""
+    if touch_delay_minutes is None:
+        touch_delay_minutes = level.get("touch_delay_minutes")
     return calculate_grade(
         level.get("author_followers"),
         level.get("direction"),
@@ -460,4 +558,5 @@ def regrade_current(
         dex_liquidity_usd=dex_liquidity_usd,
         active_addr_pctile=active_addr_pctile,
         stwits_bullish_ratio=stwits_bullish_ratio,
+        touch_delay_minutes=touch_delay_minutes,
     )

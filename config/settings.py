@@ -168,6 +168,30 @@ SETTINGS = {
     "cluster_band_pct": 1.0,             # 같은 코인 내 이 % 이내 entry 는 한 클러스터로 병합
     "level_expiry_hours": 168,           # 미터치 레벨 만료 (7일)
 
+    # ── 결과 이모지 반응 (2026-09-22 Q4 사용자 결정) ────────────────────
+    # 이미 보낸 터치 본알림 메시지에 Telegram setMessageReaction 으로 사후 결과를
+    # 붙인다 — **새 메시지 0건**, 알림 양식 불변, 기존 봇 토큰 그대로(추가 인증 없음).
+    # 봇은 메시지당 반응 1개라 새 반응이 이전 것을 교체한다(👍 → 🏆).
+    # ⚠️ ✅·❌ 는 Telegram 허용 이모지 목록(ReactionTypeEmoji)에 없어 쓸 수 없다 —
+    # 허용 목록 안에서 의미가 통하는 4종을 골랐다.
+    # tp_alert_send_enabled=False(현 운영값)와 **무관하게 동작**한다 — 반응은 '발송'이
+    # 아니라 기존 메시지의 속성이다. 반응 실패는 전부 무해(판정·회차 불변).
+    "result_reaction_enabled": True,
+    # 실패(👎)만 따로 끄는 스위치 — 손절 표시가 거슬릴 수 있다는 사용자 취향 분리.
+    # False 면 👎 만 생략하고 🏆/👍/👌 는 그대로 달린다.
+    "result_reaction_fail_enabled": True,
+    # 결과 키 → 이모지. 우선순위는 monitor/price_check._REACTION_PRIORITY
+    # (hit 🏆 > tp_partial 👍 > timeboxed_win 👌 > fail 👎) — 클러스터 형제가 같은
+    # message_id 를 공유하므로 더 좋은 결과가 나쁜 결과에 덮이지 않게 한다.
+    "result_reaction_emoji": {
+        "hit": "🏆",             # 최종 목표 완주(hit 종결)
+        # 2026-09-22 사용자 선택: "오엑스(✅/❌)"를 원했으나 텔레그램 허용 목록에 없어
+        # 가장 가까운 👍/👎 로 확정. 여기 값만 바꾸면 코드 수정 없이 교체된다.
+        "tp_partial": "👍",      # 첫/중간 목표 도달, 사다리 진행 중
+        "timeboxed_win": "👌",   # 이익 상태로 기간 만료
+        "fail": "👎",            # miss · timeboxed_loss
+    },
+
     # ── 시장환경 필터 (2026-08-14 고도화) ─────────────────────────────
     # 데이터 수집만 — 알림 메시지 양식 불변. 실패 시 무시(fail-safe).
     "macro_dxy_enabled": True,           # DXY 달러인덱스 (Yahoo Finance, 무료)
@@ -238,11 +262,34 @@ SETTINGS = {
     # 0~1단 31.7% (+16.5%p, n=189, v4 표본에서도 재현) — 종결 189건 기준
     # 현재 채점 밖 신호 중 가장 두꺼운 판별력. 감점 폭 -3은 v4 SL 보너스(+3)와
     # 대칭 — 조이기 전용(경계 C=40 근처만 영향, 완화 없음).
-    "grade_formula_ver": "v5",
+    # v6 (2026-09-22, 사용자 결정 Q1·Q3): 수집→터치 지연 감점 -6 + 등급 경계
+    # 재보정(A≥55/B≥47/C≥40, S 폐지). 근거: research_2026-09-17_db_analysis.md.
+    "grade_formula_ver": "v6",
     # 작성자 실적 가점(안2) 롤백 스위치 — False 면 calculate_grade/regrade_current
     # 양쪽에서 실적 가점 0 고정(배점표 축소분(안1)은 유지 — 위험 없는 부분).
     # 배포 후 1주 알림량 ±10% 이탈 시 이 값만 False 로 되돌린다(§6-4).
     "grade_author_points_enabled": True,
+
+    # ── 등급 경계 (2026-09-22 v6 Q3 — 표시 정상화) ─────────────────────
+    # (등급, 최소 점수) 내림차순. 첫 매칭 적용, 어디에도 안 걸리면 'D'.
+    # **목적은 예측력이 아니라 라벨 정상화**다 — 같은 판정축(tp_sl) 안에서
+    # touch_score↔승패 상관 r=−0.028(사실상 0). v5 이후 S·A 발급 0건(최고 62점)
+    # 이던 죽은 라벨을 되살리는 변경이며, C 컷이 40 그대로라 alert_min_grade='C'
+    # 의 **실효 컷은 불변**(v5 이후 터치 245건 시뮬: A 50·B 63·C 33·D 99,
+    # C 이상 통과 ≈4.0건/일 vs 현행 4.36).
+    # 되돌리기: [["S", 85], ["A", 70], ["B", 55], ["C", 40]] (v5 경계 복원).
+    "grade_thresholds": [["A", 55], ["B", 47], ["C", 40]],
+
+    # ── 수집→터치 지연 감점 (2026-09-22 v6 Q1) ─────────────────────────
+    # 근거(tp_sl 층 한정, research_2026-09-17_db_analysis.md §1-2): 지연 <30분
+    # 승률 25.9%(n=81, Wilson LB80 20.2%) vs 24h+ 48.7%(n=39, LB80 38.7%) —
+    # judgment_mode 층화를 통과한 유일한 신호(격차 +22.8%p, 단조, LB80 비겹침).
+    # "글이 올라오자마자 닿는 진입가는 이미 지나간 자리".
+    # **터치 재채점에서만** 실린다(수집 시점엔 지연값이 없어 None → 0점).
+    # 롤백: grade_touch_delay_enabled=False 한 줄.
+    "grade_touch_delay_enabled": True,
+    "grade_touch_delay_min_minutes": 30,   # 이 분 미만이면 감점
+    "grade_touch_delay_penalty": -6,       # 사다리 감점(-3)의 2배 — 근거 격차도 5배+
 
     # 작성자 랭킹 (ACCURACY_DB_PLAN 2단계, 2026-07-26 카드 확정 — 표시·리포트용, 필터 미사용)
     "rank_half_life_days": 90,           # 최신성 가중 반감기 (w=0.5^(경과일/90))

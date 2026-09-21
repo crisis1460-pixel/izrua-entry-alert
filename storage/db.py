@@ -485,6 +485,18 @@ _EXTRA_COLUMNS = {
     # → touch 는 최상위 메시지로 발송(종전 동작). Telegram message_id 는 int64
     # 범위지만 SQLite INTEGER 가 자동 확장하므로 별도 크기 제약 없음.
     "preview_message_id": "INTEGER",
+    # 결과 이모지 반응 (2026-09-22 Q4) — 터치 **본알림** 발송 성공 시 텔레그램
+    # message_id 저장. preview_message_id 와 완전히 같은 관례(클러스터 전 멤버에
+    # 같은 값, 최초 기록 우선). 나중에 판정이 나면 이 메시지에 setMessageReaction
+    # 으로 🏆/🔥/👌/💔 를 붙인다 — 새 알림 0건. NULL 이면 (a) 억제 터치 (b) 발송
+    # 실패 (c) 이 기능 배포 이전의 과거 레벨 → 반응 없이 조용히 건너뜀.
+    "touch_message_id": "INTEGER",
+    # 그 메시지에 **이미 달아 둔** 반응의 결과 키("hit"|"tp_partial"|
+    # "timeboxed_win"|"fail"). 봇은 메시지당 반응 1개라 새 반응이 이전 것을
+    # 교체하므로, 더 좋은 결과가 나쁜 결과에 덮이지 않게 우선순위 비교에 쓴다.
+    # 같은 message_id 를 공유하는 클러스터 형제 전원에 동일 값이 찍힌다
+    # (반응은 레벨이 아니라 **메시지**의 속성).
+    "touch_reaction": "TEXT",
 }
 
 
@@ -561,6 +573,16 @@ def _migrate(conn) -> None:
     # grade_ver='v5' 행이 이 DB 에 언제부터 섞였는지 단일 조회점 — 표본 분리 기준.
     if get_meta(conn, "grade_v5_since") is None:
         set_meta(conn, "grade_v5_since", str(time.time()))
+    # grade_v6_since (2026-09-22 v6 — 지연 감점 + 경계 재보정): 동일 패턴.
+    if get_meta(conn, "grade_v6_since") is None:
+        set_meta(conn, "grade_v6_since", str(time.time()))
+    # mfe_mae_fixed_since (2026-09-22 P1) — MFE/MAE 누적 갱신 수리 배포 시점.
+    # 이 시각 **이전**에 터치된 행의 mfe_pct/mae_pct 는 "종결이 일어난 회차의
+    # 몇 분"만 잰 무효값이다(승리 건 98.3% 가 mae=0, 패배 건 97.5% 가 mfe=0).
+    # 과거는 소급 불가(캔들 재조회 비용)라 **분석 스크립트가 이 시각 이후 터치로
+    # 표본을 한정**한다 — scripts/analyze_touch_quality.py 참고.
+    if get_meta(conn, "mfe_mae_fixed_since") is None:
+        set_meta(conn, "mfe_mae_fixed_since", str(time.time()))
 
 
 def _maybe_audit_dump(conn, db_path: str) -> None:
@@ -812,6 +834,60 @@ def get_preview_message_id(conn, level_ids) -> Optional[int]:
         tuple(level_ids),
     ).fetchone()
     return int(row["preview_message_id"]) if row else None
+
+
+def set_touch_message_id(conn, level_ids, message_id: int) -> None:
+    """터치 본알림 발송 성공 시 각 레벨의 touch_message_id 저장 (Q4 결과 반응, 2026-09-22).
+
+    set_preview_message_id 와 완전히 같은 관례 — 클러스터 전 멤버에 같은 값,
+    최초 기록 우선(IS NULL 가드)으로 재발송·경합에도 첫 message_id 를 지킨다.
+    나중에 판정이 나면 이 message_id 에 이모지 반응을 붙인다."""
+    if not level_ids or not message_id or message_id <= 0:
+        return
+    ph = ",".join("?" * len(level_ids))
+    conn.execute(
+        f"UPDATE levels SET touch_message_id=? "
+        f"WHERE id IN ({ph}) AND touch_message_id IS NULL",
+        (int(message_id), *level_ids),
+    )
+
+
+def get_touch_message_id(conn, level_id: int) -> Optional[int]:
+    """그 레벨의 터치 본알림 message_id. 없으면 None(억제·발송실패·구 행)."""
+    row = conn.execute(
+        "SELECT touch_message_id FROM levels WHERE id=?", (level_id,)).fetchone()
+    if not row or row["touch_message_id"] is None:
+        return None
+    mid = int(row["touch_message_id"])
+    return mid if mid > 0 else None
+
+
+def get_touch_reactions(conn, message_id: int) -> list:
+    """이 message_id 에 이미 달아 둔 반응 키 목록 (중복 제거, 없으면 []).
+
+    반응은 레벨이 아니라 **메시지**의 속성이라(클러스터 형제가 message_id 를
+    공유) 레벨 단위가 아닌 메시지 단위로 조회한다 — 형제 하나가 손절로 종결해도
+    이미 달린 🏆 를 💔 로 덮지 않게 하는 우선순위 비교의 입력."""
+    if not message_id:
+        return []
+    return [r["touch_reaction"] for r in conn.execute(
+        "SELECT DISTINCT touch_reaction FROM levels "
+        "WHERE touch_message_id=? AND touch_reaction IS NOT NULL",
+        (int(message_id),)).fetchall()]
+
+
+def set_touch_reaction(conn, message_id: int, reaction_key: str) -> None:
+    """그 메시지를 가리키는 **전 레벨**에 현재 반응 키를 기록 (Q4, 2026-09-22).
+
+    Telegram 봇은 메시지당 반응 1개라 새 반응이 이전 것을 교체한다 — DB 도 같은
+    의미론으로 덮어쓴다(IS NULL 가드 없음). 형제 전원에 같은 값을 찍어야 어느
+    형제가 다음 판정을 내든 동일한 우선순위 비교 결과가 나온다."""
+    if not message_id or not reaction_key:
+        return
+    conn.execute(
+        "UPDATE levels SET touch_reaction=? WHERE touch_message_id=?",
+        (str(reaction_key), int(message_id)),
+    )
 
 
 def mark_touched(conn, touches: list, now: Optional[float] = None,
@@ -1818,22 +1894,77 @@ def record_ret(conn, level_id: int, field: str, value: float) -> None:
     )
 
 
-def record_mfe_mae(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
-    """종결 시 MFE/MAE 1회 기록 (이미 있으면 보존)."""
+def update_mfe_mae_running(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
+    """미종결 터치 레벨의 MFE/MAE 누적 단조 갱신 (2026-09-22 P1 수리).
+
+    ## 왜 필요한가 (버그 내용)
+    종전엔 `record_mfe_mae` 가 **종결 시 1회만** 기록했는데, 판정 루프가 스캔하는
+    캔들은 `upbit.fetch_range_since(ticker, since_min, …)` 즉 **직전 회차 이후
+    ≈4~6분**뿐이다. 결국 "종결이 일어난 그 회차의 몇 분"만 남아, TP 종결이면
+    그 몇 분간 상승만 있어 mae=0, SL/타임박스면 하락만 있어 mfe=0 이 됐다
+    (실측: 승리 건 118/120 = 98.3% 가 mae=0, 패배 건 118/121 = 97.5% 가 mfe=0 —
+    research_2026-09-17_db_analysis.md §1-3).
+
+    수리: **매 회차** 그 회차 캔들의 극값을 DB 에 이어 붙인다. 더 큰 MFE /
+    더 작은 MAE 일 때만 갱신되므로(MAX/MIN 단조) 터치 이후 전 구간이 자연히
+    누적된다. 추가 API 콜 0 — 판정 루프가 이미 읽는 캔들을 재사용할 뿐이다.
+
+    미종결(outcome IS NULL) 행만 갱신한다 — 종결 후의 가격 움직임이 판정 스냅샷을
+    오염시키면 안 된다(안티게이밍 불변 스냅샷 원칙).
+
+    과거 행은 소급하지 않는다. 유효 표본의 시작점은 meta.mfe_mae_fixed_since."""
     conn.execute(
-        "UPDATE levels SET mfe_pct=?, mae_pct=? WHERE id=? AND mfe_pct IS NULL",
-        (mfe_pct, mae_pct, level_id),
+        "UPDATE levels SET "
+        "  mfe_pct = MAX(COALESCE(mfe_pct, 0.0), ?), "
+        "  mae_pct = MIN(COALESCE(mae_pct, 0.0), ?) "
+        "WHERE id=? AND outcome IS NULL",
+        (float(mfe_pct), float(mae_pct), level_id),
+    )
+
+
+def record_mfe_mae(conn, level_id: int, mfe_pct: float, mae_pct: float) -> None:
+    """종결 시 MFE/MAE 확정 — **누적값과 이번 회차 값의 극값**으로 마감.
+
+    2026-09-22 P1 수리 전에는 `WHERE mfe_pct IS NULL` 가드로 "최초 1회만" 기록
+    했는데, 이제 `update_mfe_mae_running` 이 미종결 구간 내내 값을 채워 두므로
+    그 가드는 확정값을 영원히 막는다. 대신 단조 병합(MAX/MIN)으로 바꿨다 —
+    누적분이 없으면(신규·구세대 NULL) COALESCE 가 이번 값만 남기므로 종전 동작과
+    같고, 누적분이 있으면 더 극단인 쪽이 살아남는다. 재호출에도 값이 안 뒤집히는
+    멱등 연산이라 "재기록 방지" 목적도 그대로 충족된다.
+
+    touch_mfe_atr_ratio(F1)는 **확정 MFE**(= 병합 후 DB 값) 기준으로 계산한다 —
+    인자로 받은 그 회차 MFE 가 아니다."""
+    conn.execute(
+        "UPDATE levels SET "
+        "  mfe_pct = MAX(COALESCE(mfe_pct, 0.0), ?), "
+        "  mae_pct = MIN(COALESCE(mae_pct, 0.0), ?) "
+        "WHERE id=?",
+        (float(mfe_pct), float(mae_pct), level_id),
     )
     row = conn.execute(
-        "SELECT touch_atr_pct FROM levels WHERE id=?", (level_id,)
+        "SELECT touch_atr_pct, mfe_pct FROM levels WHERE id=?", (level_id,)
     ).fetchone()
     if row and row["touch_atr_pct"] and row["touch_atr_pct"] > 0.01:
-        ratio = mfe_pct / row["touch_atr_pct"]
+        final_mfe = row["mfe_pct"] if row["mfe_pct"] is not None else mfe_pct
+        ratio = final_mfe / row["touch_atr_pct"]
         conn.execute(
             "UPDATE levels SET touch_mfe_atr_ratio=? "
             "WHERE id=? AND touch_mfe_atr_ratio IS NULL",
             (ratio, level_id),
         )
+
+
+def get_mfe_mae_fixed_since(conn) -> Optional[float]:
+    """MFE/MAE 누적 수리 배포 시각(epoch) — 이 시각 **이후 터치분**만 유효 표본.
+
+    이전 터치의 mfe_pct/mae_pct 는 "종결 회차의 몇 분"만 잰 무효값이다
+    (update_mfe_mae_running 문서 참고). 분석 스크립트가 이 값으로 표본을 자른다.
+    meta 가 없는(구세대) DB 는 None → 호출부가 '전 구간 무효 가능성' 경고."""
+    try:
+        raw = get_meta(conn, "mfe_mae_fixed_since")
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
 
 
 def get_supply_1h_pending(conn, now: float, limit: int = 5) -> list:

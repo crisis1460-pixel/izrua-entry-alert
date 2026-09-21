@@ -169,6 +169,25 @@ check("R2 억제 터치에도 touch_grade/touch_score 기록 (전 클러스터 �
 check("R3 섀도 터치(하단 미도달)도 상태 전이 + 스냅샷 기록",
       a2["status"] == "touched" and a2["touched_at"] is None
       and a2["touch_grade"] is not None)
+# ── V6S: 스냅샷에 수집→터치 지연 감점이 반영된다 (2026-09-22 v6 Q1) ────────
+# 왜 중요한가: touch_score/touch_grade 는 **캘리브레이션 축**이다. 실제 발급
+# 등급에는 감점이 실렸는데 스냅샷에만 안 실리면, 나중에 "등급별 적중률" 을 낼 때
+# 존재하지 않는 등급 분포를 분석하게 된다.
+# 이 파일의 픽스처는 collected_at = now-600 (RUN_T=now+60 기준 11분 전)이라
+# 전부 <30분 감점 구간이다.
+from collector import grading as _g6   # noqa: E402
+_V6_CUR_USD = PRICES["KRW-AAA"] / USDT_KRW
+_V6_DELAY = (RUN_T - (now - 600)) / 60.0        # = 11.0 분
+_, _v6_s_no, _ = _g6.regrade_current(dict(a1), _V6_CUR_USD, touch_delay_minutes=None)
+_, _v6_s_yes, _ = _g6.regrade_current(dict(a1), _V6_CUR_USD,
+                                      touch_delay_minutes=_V6_DELAY)
+check("V6S1 지연 감점이 실제로 -6 만큼 점수를 깎는다(11분 < 30분 컷)",
+      abs(_v6_s_no - _v6_s_yes - 6) < 1e-9)
+check("V6S2 저장된 touch_score 는 **감점 반영값** — 캘리브레이션 축 일치",
+      a1["touch_score"] == int(round(_v6_s_yes))
+      and a1["touch_score"] != int(round(_v6_s_no)))
+check("V6S3 터치 재채점 산식 버전 도장 v6", a1["touch_grade_ver"] == "v6")
+
 check("R4 touch_tp_usd — 각 레벨 자신의 TP 동결 (대표 TP 아님)",
       a1["touch_tp_usd"] == 11.5 and a2["touch_tp_usd"] == 11.0
       and b1["touch_tp_usd"] == 23.0)

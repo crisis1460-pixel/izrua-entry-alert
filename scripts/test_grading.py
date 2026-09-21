@@ -1,6 +1,7 @@
 # collector/grading 단위 테스트 — 2026-08-15 v5(TP 사다리 0~1단 감점 -3)
 # 회귀 방어. 기대값은 전부 손계산.
 #
+# 2026-09-22 v6: 지연 감점(V6A) + 경계 재보정 A55/B47/C40·S 폐지(V6B) 추가.
 # 배점 요약(v5): 팔로워(1~25: 100k+25/50k+22/10k+17/5k+12/1k+8/100+3/미만1)
 #            + 가격근접도(0~20)
 #            + 목표거리(-6 ~ +12, SL 유무 무관 전 신호 적용, 40%+ 무배점)
@@ -21,7 +22,9 @@ except Exception:
 
 from analytics.calibration import wilson_interval
 from collector.grading import (AUTHOR_TRACK_MAX, AUTHOR_TRACK_MIN_N, AUTHOR_TRACK_TIERS,
-                               AUTHOR_TRACK_Z, LADDER_MIN_STEPS, LADDER_PENALTY,
+                               AUTHOR_TRACK_Z, GRADE_ORDER, GRADE_THRESHOLDS_DEFAULT,
+                               LADDER_MIN_STEPS, LADDER_PENALTY,
+                               TOUCH_DELAY_MIN_MINUTES_DEFAULT, TOUCH_DELAY_PENALTY_DEFAULT,
                                TP_DISTANCE_BANDS, TP_REWARD_MAX,
                                author_track_points, calculate_grade, grade_from_score,
                                meets_min_grade, regrade_current, score_breakdown,
@@ -174,16 +177,18 @@ _g_max, _s_max, _rr_max = s(20.0, followers=200_000)   # 25 + 20 + 8 + 20 - 3(v5
 check("G5 SL 없는 최상급 팔로워 글 — 실적 없이도 A (v4 의도, v5 사다리 -3 후 70=A 경계)",
       eq(_s_max, 70) and _g_max == "A" and _rr_max is None)
 _g_mid, _s_mid, _ = s(10.0, followers=2_800)           # 8 + 20 + 12 + 20 - 3(v5) = 57
-check("G5b SL 없는 평범한 팔로워 + 스윗스팟 목표 → B (v5: 60→57)",
-      eq(_s_mid, 57) and _g_mid == "B")
+check("G5b SL 없는 평범한 팔로워 + 스윗스팟 목표 → v6 경계에서 A (57>=55, 점수 불변)",
+      eq(_s_mid, 57) and _g_mid == "A")
 _g_lo, _s_lo, _ = s(6.0, followers=500)                # 3 + 20 + 12 + 20 - 3(v5) = 52
-check("G5c SL 없는 소형 작성자 + 6% 목표 — v5: 사다리 미상 -3 로 B(55)→C(52) 강등",
-      eq(_s_lo, 52) and _g_lo == "C")
-check("G5d 실적 가점 없이는 SL 없는 글로 S(85) 못 간다 (콜드스타트 상한 77=A)",
-      25 + 20 + 20 + TP_REWARD_MAX < 85)
-check("G5e v4: SL 없는 글도 실적 만점이면 S 가능(92) — 실질 상한 95",
+check("G5c SL 없는 소형 작성자 + 6% 목표 — 점수 52 불변, v6 경계에서 B(47컷)",
+      eq(_s_lo, 52) and _g_lo == "B")
+# G5d/G5e: 배점표 상한 자체는 v6 에서도 불변(경계만 바뀌었다). v5 까지는 S(85)
+# 도달 가능 여부를 봤지만 v6 에서 S 는 폐지됐으므로, 같은 산술을 **상한 정본**
+# 으로 못 박는다 — 배점표를 건드리면 여기서 걸린다.
+check("G5d SL 없는 글의 콜드스타트 상한 = 77 (실적 가점 없이 도달 가능한 최고점)",
+      25 + 20 + 20 + TP_REWARD_MAX == 77)
+check("G5e 실질 상한 — SL 없음 92 / SL 있음 95 (v4~v6 불변)",
       25 + 20 + 20 + TP_REWARD_MAX + AUTHOR_TRACK_MAX == 92
-      and 25 + 20 + 20 + TP_REWARD_MAX + AUTHOR_TRACK_MAX >= 85
       and 25 + 20 + 23 + TP_REWARD_MAX + AUTHOR_TRACK_MAX == 95)
 
 # ── G6: 초근접 TP 글은 여전히 걸러진다 (감점 취지 유지) ──────────
@@ -231,9 +236,9 @@ check("G8c 가격근접도 구간 불변(-3% → +17, v5 -3 포함)",
 _lv = dict(author_followers=2_800, direction="long", entry_usd=100.0, sl_usd=None,
            tp_usd=110.0)
 # v5: _lv 에 tp_ladder_count 키 없음 = 사다리 미상 → -3 (37=D / 57=B)
-check("G9 재채점 - 가격이 멀면 근접도 0점(v5: 37=D), 근접 시 +20(v5: 57=B)",
+check("G9 재채점 - 가격이 멀면 근접도 0점(37=D), 근접 시 +20(57 → v6 경계에서 A)",
       eq(regrade_current(_lv, 200.0)[1], 37) and regrade_current(_lv, 200.0)[0] == "D"
-      and eq(regrade_current(_lv, 100.0)[1], 57) and regrade_current(_lv, 100.0)[0] == "B")
+      and eq(regrade_current(_lv, 100.0)[1], 57) and regrade_current(_lv, 100.0)[0] == "A")
 check("G9b 재채점 결과가 calculate_grade 와 동일",
       regrade_current(_lv, 100.0) == calculate_grade(2_800, "long", 100.0, None, 110.0, 100.0))
 # 실적 가점 포함 재채점 동등성 (v3): level dict 의 author_closed_n/hits 키가
@@ -246,8 +251,9 @@ check("G9c 재채점 동등성 — 실적 키 주입 시에도 calculate_grade(a
       and eq(regrade_current(_lv_at, 100.0)[1], 57 + 15))  # v5: 60→57 (사다리 -3)
 
 # ── G10: 등급 컷/필터 헬퍼 불변 ──────────────────────────────────
-check("G10 컷 경계", grade_from_score(85) == "S" and grade_from_score(84.9) == "A"
-      and grade_from_score(70) == "A" and grade_from_score(55) == "B"
+check("G10 컷 경계 (v6: A>=55 / B>=47 / C>=40 / D<40)",
+      grade_from_score(55) == "A" and grade_from_score(54.9) == "B"
+      and grade_from_score(47) == "B" and grade_from_score(46.9) == "C"
       and grade_from_score(40) == "C" and grade_from_score(39.9) == "D")
 check("G10b meets_min_grade", meets_min_grade("B", "C") and meets_min_grade("C", "C")
       and not meets_min_grade("D", "C"))
@@ -444,6 +450,94 @@ check("ST2 breakdown 'social' 키 격리 + regrade 전파",
       _bd_st["social"] == 1.0
       and eq(sum(_bd_st.values()), _base_r + 1)
       and eq(regrade_current(_lv_r, 100.0, stwits_bullish_ratio=0.80)[1], _base_r + 1))
+
+# ── V6A: 수집→터치 지연 감점 (2026-09-22 v6 Q1) ─────────────────────────
+# 근거(tp_sl 층 한정, research_2026-09-17_db_analysis.md §1-2): 지연 <30분 승률
+# 25.9%(n=81, LB80 20.2%) vs 24h+ 48.7%(n=39, LB80 38.7%). judgment_mode 층화를
+# 통과한 유일한 신호. **터치 재채점에서만** 실린다(수집 시점엔 None → 0).
+check("V6A 상수·설정 정본 — 컷 30분, 감점 -6(사다리 -3 의 2배), 스위치 ON",
+      settings.get("grade_touch_delay_min_minutes") == 30
+      and settings.get("grade_touch_delay_penalty") == -6
+      and settings.get("grade_touch_delay_enabled") is True
+      and TOUCH_DELAY_MIN_MINUTES_DEFAULT == 30 and TOUCH_DELAY_PENALTY_DEFAULT == -6)
+
+
+def _dly(minutes):
+    return calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                           tp_ladder_count=3, touch_delay_minutes=minutes)[1]
+
+
+check("V6A-b None(수집 시점) → 감점 0 — 이 감점은 터치에서만 실린다",
+      eq(_dly(None), _base_r))
+check("V6A-c <30분 → -6 / >=30분 → 0 (경계 30 은 감점 없음)",
+      eq(_dly(0), _base_r - 6) and eq(_dly(29.9), _base_r - 6)
+      and eq(_dly(30), _base_r) and eq(_dly(1440), _base_r))
+_bd_dly = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                          tp_ladder_count=3, touch_delay_minutes=5)
+_bd_dly0 = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                           tp_ladder_count=3, touch_delay_minutes=5000)
+check("V6A-d score_breakdown 'delay' 키 격리 + sum(values)==총점",
+      _bd_dly["delay"] == -6.0 and _bd_dly0["delay"] == 0.0
+      and eq(sum(_bd_dly.values()), _base_r - 6)
+      and {k: v for k, v in _bd_dly.items() if k != "delay"}
+      == {k: v for k, v in _bd_dly0.items() if k != "delay"})
+# regrade 경로 — 명시 인자 / 레벨 dict 키 양쪽 다 실려야 한다(price_check 는
+# 클러스터 전 멤버에 키를 심어 _rep·전 멤버 재채점·rep 재채점이 같은 값을 쓴다).
+check("V6A-e regrade — 명시 인자와 레벨 dict 키 양쪽 경로 동일, 미전달은 0",
+      eq(regrade_current(_lv_r, 100.0, touch_delay_minutes=5)[1], _base_r - 6)
+      and eq(regrade_current(dict(_lv_r, touch_delay_minutes=5), 100.0)[1],
+             _base_r - 6)
+      and eq(regrade_current(_lv_r, 100.0)[1], _base_r)
+      and regrade_current(dict(_lv_r, touch_delay_minutes=5), 100.0)
+      == calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                         tp_ladder_count=3, touch_delay_minutes=5))
+# 롤백 스위치
+settings.SETTINGS["grade_touch_delay_enabled"] = False
+try:
+    _dly_off = _dly(5)
+finally:
+    settings.SETTINGS["grade_touch_delay_enabled"] = True
+check("V6A-f 롤백 스위치 OFF — 지연 감점 0 고정, ON 복원 시 즉시 재적용",
+      eq(_dly_off, _base_r) and eq(_dly(5), _base_r - 6))
+check("V6A-g 순수 감점 — 어떤 지연값도 미전달(None)보다 점수를 올리지 못한다",
+      all(_dly(m) <= _dly(None) for m in (0, 10, 29.9, 30, 100, 10_000)))
+
+# ── V6B: 등급 경계 재보정 (2026-09-22 v6 Q3 — 표시 정상화) ────────────────
+# ⚠️ 목적은 예측력이 아니다: 같은 판정축(tp_sl) 안에서 touch_score↔승패 상관은
+# r=−0.028 로 사실상 0(전체 r=+0.226 은 judgment_mode 교란이 만든 착시).
+# v5 이후 S·A 발급 0건(최고 62점)이던 죽은 라벨을 되살리는 변경이다.
+check("V6B 산식 버전 태그 v6 + 경계 설정 정본 A55/B47/C40 (S 없음)",
+      settings.get("grade_formula_ver") == "v6"
+      and [list(x) for x in settings.get("grade_thresholds")]
+      == [["A", 55], ["B", 47], ["C", 40]]
+      and tuple(GRADE_THRESHOLDS_DEFAULT) == (("A", 55.0), ("B", 47.0), ("C", 40.0)))
+check("V6B-b S 신규 발급 중단 — 어떤 점수도 'S' 를 만들지 못한다(만점 95 포함)",
+      all(grade_from_score(x) != "S"
+          for x in (95, 92, 85, 84.9, 70, 55, 47, 40, 0, -20, 1e6)))
+check("V6B-c 과거 'S' 행 읽기 호환 — GRADE_ORDER 유지 + meets_min_grade 동작",
+      "S" in GRADE_ORDER and GRADE_ORDER.index("S") < GRADE_ORDER.index("A")
+      and meets_min_grade("S", "C") and meets_min_grade("S", "A")
+      and meets_min_grade("S", "S") and not meets_min_grade("A", "S"))
+check("V6B-d C 실효 컷 불변(40) — alert_min_grade='C' 통과 집합이 v5 와 동일",
+      all(meets_min_grade(grade_from_score(x), "C") for x in (40, 47, 55, 62, 95))
+      and not any(meets_min_grade(grade_from_score(x), "C")
+                  for x in (39.9, 30, 0)))
+# 경계는 설정으로 외부화 — v5 경계로 되돌리면 옛 라벨이 그대로 복원된다(되돌리기 카드)
+settings.SETTINGS["grade_thresholds"] = [["S", 85], ["A", 70], ["B", 55], ["C", 40]]
+try:
+    _v5_labels = [grade_from_score(x) for x in (85, 70, 55, 40, 39.9)]
+finally:
+    settings.SETTINGS["grade_thresholds"] = [["A", 55], ["B", 47], ["C", 40]]
+check("V6B-e 경계 외부화 — 설정 한 줄로 v5 경계(S85/A70/B55/C40) 복원",
+      _v5_labels == ["S", "A", "B", "C", "D"]
+      and [grade_from_score(x) for x in (55, 47, 40, 39.9)] == ["A", "B", "C", "D"])
+# 설정 손상 시 fail-safe — 채점이 크래시하면 회차 전체가 죽는다
+settings.SETTINGS["grade_thresholds"] = "망가진값"
+try:
+    _broken = grade_from_score(60)
+finally:
+    settings.SETTINGS["grade_thresholds"] = [["A", 55], ["B", 47], ["C", 40]]
+check("V6B-f 경계 설정 손상 시 크래시 없이 기본값 폴백", _broken == "A")
 
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")

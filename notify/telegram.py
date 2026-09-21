@@ -40,6 +40,8 @@ from config import settings
 logger = logging.getLogger("alert.telegram")
 
 _API = "https://api.telegram.org/bot{token}/sendMessage"
+# 결과 이모지 반응 (2026-09-22 Q4) — 기존 봇 토큰 그대로, 추가 인증 없음.
+_REACTION_API = "https://api.telegram.org/bot{token}/setMessageReaction"
 # 2026-08-08 사용자 결정: 그룹 채팅 전환 후 폭이 좁아져 20자 구분선이
 # 자동 줄바꿈되던 것을 축소. 실측 역산(스크린샷상 "    목표:  18,265원
 # (+15.6%)  1/2단" 까지 표시되고 "계" 만 다음 줄로 넘어감 — East Asian
@@ -316,6 +318,42 @@ def send(text: str, urgency: Literal["high", "low"] = "high",
         logger.error("[tg] 발송 실패 status=%s body=%s", resp.status_code,
                      _redact(resp.text[:200], token))
         return None
+
+
+def set_reaction(message_id: int, emoji: str) -> bool:
+    """이미 보낸 메시지에 이모지 반응 1개를 단다 (2026-09-22 Q4). 성공 True.
+
+    Telegram Bot API `setMessageReaction` — 기존 봇 토큰·chat_id 를 그대로 쓰고
+    추가 인증이 없다. 봇은 메시지당 반응 1개라 **새 반응이 이전 것을 교체**한다
+    (👍 → 🏆). is_big=False (큰 애니메이션 없이 조용히).
+
+    ⚠️ 이모지는 Telegram 이 정한 허용 목록(ReactionTypeEmoji)에서만 고를 수 있다 —
+    ✅·❌ 는 목록에 없다. 우리 매핑은 settings.result_reaction_emoji 참고.
+
+    **모든 실패는 False 로 삼킨다**(예외·비200·설정 미비 전부). 반응은 순수
+    장식이라 실패가 판정·회차·발송을 막으면 절대 안 된다. 재시도도 하지 않는다
+    (send 와 달리 다음 판정 이벤트에서 자연히 다시 시도된다)."""
+    try:
+        if not message_id or int(message_id) <= 0 or not emoji:
+            return False
+        token = settings.secret("TELEGRAM_BOT_TOKEN")
+        chat_id = settings.secret("TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
+            logger.warning("[tg] 토큰/chat_id 미설정 - 반응 생략")
+            return False
+        payload = {"chat_id": chat_id, "message_id": int(message_id),
+                   "reaction": [{"type": "emoji", "emoji": emoji}],
+                   "is_big": False}
+        resp = requests.post(_REACTION_API.format(token=token), json=payload,
+                             timeout=settings.get("http_timeout_sec"))
+        if resp.status_code == 200:
+            return True
+        logger.warning("[tg] 반응 실패 status=%s body=%s", resp.status_code,
+                       _redact(resp.text[:200], token))
+        return False
+    except Exception as e:  # noqa: BLE001 - 반응 실패는 무조건 무해해야 한다
+        logger.warning("[tg] 반응 실패(무시): %s", type(e).__name__)
+        return False
 
 
 def _split_send(text: str, urgency: str) -> Optional[int]:
