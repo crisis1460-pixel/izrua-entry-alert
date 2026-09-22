@@ -30,11 +30,12 @@ import logging
 import re
 import time
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import requests
 
-from analytics import calibration, clustering, ranking
+from analytics import calibration, ranking, weekly
 from config import settings
 
 logger = logging.getLogger("alert.telegram")
@@ -851,164 +852,271 @@ def _weekly_rank_line(rank: int, author: str, met: dict) -> tuple:
     return line, is_anti
 
 
-def _confluence_line(confluence: dict, author: str, min_clusters: int) -> str:
-    """'🤝 합의 참여 X/Y회(Z%)' — 표시 전용(정렬·E_LB 미반영). 클러스터 수가
-    min_clusters 미만이면 None(1회짜리 0% / 100% 는 정보가 아니라 잡음)."""
-    if not confluence:
-        return None
-    s = confluence.get(author)
-    if not s or s.get("total", 0) < min_clusters:
-        return None
-    cr = s.get("cr")
-    cr_txt = f"{cr * 100:.0f}%" if cr is not None else "-"
-    return (f"     🤝 합의 참여 {s['multi']}/{s['total']}회"
-            f"({cr_txt})")
-
-
-def _baseline_section(rows_by_author: dict, order: list, baseline: dict,
-                      raw_records: dict, min_n: int) -> list:
-    """🎲 초과 적중률 섹션. pooled 표본 미달이면 빈 목록(그 주 통째로 생략).
-
-    비교 대상은 '원시' 승률이다 — 베이스라인(ret_24h 양수 비율)이 가중 없는 단순
-    비율이라 축을 맞춘다. 랭킹의 수축·가중 승률(p_hat)과는 다른 숫자이며, 이 섹션은
-    랭킹과 무관한 별도 축이다."""
-    if not baseline or baseline.get("rate") is None:
-        return []
-    if baseline.get("n", 0) < min_n:
-        return []  # 표본 미달 — 기준선 자체가 흔들려 비교가 무의미
-    rate = baseline["rate"]
-    lines = [_SEP,
-             f"🎲 초과 적중률 (베이스라인: 터치 후 24h 보유 시 수익권 "
-             f"{rate * 100:.0f}%, n={baseline['n']})"]
-    shown = 0
-    for author in order:
-        rec = (raw_records or {}).get(author)
-        if rec is None:  # 호출부 미주입 — rows 에서 직접 센다(렌더러 단독 테스트 호환)
-            rows = rows_by_author.get(author) or []
-            rec = {
-                "wins": sum(1 for r in rows if r.get("outcome") in ranking.WIN_OUTCOMES),
-                "losses": sum(1 for r in rows if r.get("outcome") in ranking.LOSS_OUTCOMES),
-            }
-        ex = clustering.excess_hit_rate(rec["wins"], rec["losses"], rate)
-        if ex["excess"] is None:
-            continue
-        lines.append(f"  @{html.escape(author)}  원시승률 {ex['raw'] * 100:.0f}%"
-                     f" → 베이스라인 대비 {ex['excess'] * 100:+.0f}%p")
-        shown += 1
-    if not shown:
-        return []
-    lines.append("⚠️ 판정 기준이 서로 다릅니다(작성자=TP 도달 / 기준선=단순 수익 여부). "
-                 "하락장 구간에선 기준선이 낮아져 초과치가 과장돼 보입니다 — 방향 참고용.")
-    return lines
-
-
 def _pct(v) -> str:
     return f"{v * 100:.0f}%" if v is not None else "-"
 
 
-def _calibration_section(cal: dict, legacy: dict = None) -> list:
-    """🎚️ 등급 캘리브레이션 섹션 (기획 카드 #26). 미주입/표본 0 이면 빈 목록.
+# ── 주간 리포트 v2 (2026-09-22 R4) ───────────────────────────────────────
+#
+# "지표 나열형 → 의사결정형" 개편. 근거: plan_2026-09-22_최종버전_종합검토 §3 R4 /
+# research_2026-09-22_external_final_review §3(TradeZella 30분 주간 리뷰 6단계 —
+# 개요→베이스라인 대비→관찰 3개→조정 1개, freqtrade `/stats` exit-reason 집계).
+#
+# 수학은 전부 analytics/weekly.py(순수 함수, DB·프로젝트 모듈 import 0)가 맡고
+# 여기서는 문구만 만든다 — calibration/ranking 섹션과 같은 역할 분담이다.
+#
+# 제거된 섹션과 이유(2026-09-22):
+#   🎲 초과 적중률   — 판정 기준이 서로 다른 두 축의 뺄셈이라 매주 caveat 2줄이
+#                      따라붙었다. "기준선 대비"는 ②의 지난주 대비로 대체.
+#   📊 R-멀티플 분포 — 막대 그래프가 길이 예산의 15%를 먹는데, 의사결정에 쓰인
+#                      정보는 평균 R 한 줄뿐이었다(→ ② 로 승격).
+#   ⏱️ 보유기간 분포 — ⑤ 판정 사유별 집계의 '평균 보유시간' 칼럼이 상위 호환.
+#   🌡️ 등급×장세 히트맵 — BTC 레짐 below 표본이 8월 이후 0건 증가(db_final_review
+#                      §요약3). 표본 도달이 무기한이라 상시 침묵 섹션이었다.
+#   🤝 합의 참여     — 데이터가 가설을 기각(다작성자 33.3% vs 단독 38.2%).
+#   구 산식 병기     — grade_ver 최신 표본만 보기로 정리(⑦).
 
-    수학은 analytics.calibration 이 전부 담당하고 여기선 문구만 만든다.
-    **표기 전용** — 이 섹션은 배점(collector/grading.py)·알림 필터·엔트리 알림
-    양식 어디에도 되먹임되지 않는다. 문구에서도 그 점을 매번 명시한다(읽는 사람이
-    '봇이 알아서 등급을 고쳤겠거니' 오해하면 안 된다).
+_WEEKLY_KST = timezone(timedelta(hours=9))
 
-    legacy (2026-08-01 S10 D4): 구 산식(grade_ver 이전) 표본 결과 — 참고용 한 줄로만
-    병기한다. 신·구 등급은 의미가 달라 본표에 섞지 않는다. 미주입이면 종전과 동일.
-    """
-    lines = _calibration_main_lines(cal)
-    if legacy and (legacy.get("pooled") or {}).get("n"):
-        if not lines:
-            # 산식 버전은 settings 에서 읽는다 — 2026-08-03 v3→v4 승격에 하드코딩
-            # 잔재로 "v3" 로 잘못 뜨던 문구 수정(R1 감사).
-            from config import settings as _cfg
-            _ver = _cfg.get("grade_formula_ver") or "v?"
-            lines = [_SEP,
-                     f"🎚️ 등급 캘리브레이션 — 신 산식({_ver}) 종결 표본 아직 0건 (누적 대기)"]
-        parts = []
-        for g in legacy.get("order") or []:
-            b = (legacy.get("buckets") or {}).get(g) or {}
-            if b.get("n"):
-                parts.append(f"{g} {_pct(b['rate'])} ({b['hits']}/{b['n']})")
-        lines.append(f"  구 산식(참고, 종결 {legacy['pooled']['n']}건): "
-                     f"{' · '.join(parts)}")
-        lines.append("  (grade_ver 이전 표본 — 신 산식과 등급 의미가 달라 별도 집계)")
+# 각주 (plan §3 R5 / db_final_review §2-1) — 숫자는 실측 누적 종결률.
+_WEEKLY_FOOTNOTE = "ℹ️ 결과 확인 기준: 터치 후 7일 (168h 내 종결 57%)"
+
+
+def _kst_md(ts: float) -> str:
+    return datetime.fromtimestamp(float(ts), _WEEKLY_KST).strftime("%m-%d")
+
+
+def _metric_row(label: str, cur, prev, fmt, n=None, min_n: int = 10) -> str:
+    """'  라벨  값 (지난주값 → ▲)' 한 줄.
+
+    n 이 주어지고 min_n 미만이면 **화살표를 생략**하고 '(n=…, 참고)' 만 붙인다 —
+    소표본에서 화살표는 노이즈를 방향으로 착각하게 만든다(사용자 결정 관례:
+    표본 미달 지표는 판단 재료가 아니라 관찰 재료)."""
+    if cur is None:
+        return f"  {label}  -"
+    cur_txt = fmt(cur)
+    if n is not None and n < min_n:
+        return f"  {label}  {cur_txt} (n={n}, 참고)"
+    ar = weekly.arrow(cur, prev)
+    if ar is None:
+        return f"  {label}  {cur_txt} (지난주 없음)"
+    return f"  {label}  {cur_txt} ({fmt(prev)} → {ar})"
+
+
+def _overview_section(cur: dict, prev: dict, min_n: int) -> list:
+    """📌 이번 주 한눈에 — 지난주 대비. cur 미주입이면 섹션 생략(하위호환 경로)."""
+    if not cur:
+        return []
+    prev = prev or {}
+    lines = [_SEP, "📌 <b>이번 주 한눈에</b> — 지난주 대비"]
+    lines.append(_metric_row("알림 수", cur.get("alerts"), prev.get("alerts"),
+                             lambda v: f"{v:.0f}건"))
+    lines.append(_metric_row("종결 수", cur.get("closed"), prev.get("closed"),
+                             lambda v: f"{v:.0f}건"))
+    lines.append(_metric_row("승률  ", cur.get("win_rate"), prev.get("win_rate"),
+                             lambda v: f"{v * 100:.0f}%",
+                             n=cur.get("win_n"), min_n=min_n))
+    lines.append(_metric_row("PF    ", cur.get("pf"), prev.get("pf"),
+                             lambda v: f"{v:.2f}", n=cur.get("r_n"), min_n=min_n))
+    lines.append(_metric_row("평균 R", cur.get("avg_r"), prev.get("avg_r"),
+                             lambda v: f"{v:+.2f}", n=cur.get("r_n"), min_n=min_n))
+    lines.append(f"  (PF·평균 R 은 R 산출 가능 표본 {cur.get('r_n') or 0}건 기준)")
     return lines
 
 
-def _calibration_main_lines(cal: dict) -> list:
-    """캘리브레이션 본표 라인들 — _calibration_section 의 본체 (분리: legacy 병기 때문)."""
+def _observation_line(c: dict) -> str:
+    """관찰 후보(analytics.weekly.observations 의 dict) 1건 → 한 줄. n 을 반드시 병기."""
+    k = c.get("kind")
+    if k == "outcome_mix":
+        return (f"  · {c['label']} 비중 {c['cur'] * 100:.0f}% "
+                f"({c['delta_pp']:+.0f}%p, 이번주 n={c['n_cur']}/지난주 n={c['n_prev']})")
+    if k in ("delay", "volume_rank"):
+        return (f"  · {c['label_a']} 승률 {c['rate_a'] * 100:.0f}%(n={c['n_a']}) vs "
+                f"{c['label_b']} {c['rate_b'] * 100:.0f}%(n={c['n_b']}) "
+                f"— 격차 {c['gap']:.0f}%p")
+    if k == "authors":
+        return (f"  · 최고 @{html.escape(c['top'])} {c['top_rate'] * 100:.0f}%"
+                f"(n={c['top_n']}) / 최저 @{html.escape(c['low'])} "
+                f"{c['low_rate'] * 100:.0f}%(n={c['low_n']})")
+    if k == "hold_outlier":
+        return (f"  · {c['label']} 평균 보유 {c['hold_h']:.0f}h — 전체 평균 "
+                f"{c['overall_h']:.0f}h 대비 {c['dev_pct']:+.0f}% (n={c['n']})")
+    return f"  · {c}"
+
+
+def _observations_section(obs: list, pool_n, pool_days: int) -> list:
+    """🔎 관찰 3줄 — 규칙 기반 자동 생성. 후보가 없으면 '특이 관찰 없음(표본 n)'.
+
+    후보 선정·격차 계산은 analytics.weekly.observations 가 전담한다(양쪽 n≥10,
+    작성자 극단만 n≥5). 여기서는 고른 결과를 문장으로 옮길 뿐이다."""
+    lines = [_SEP, f"🔎 <b>관찰 3줄</b> (최근 {pool_days}일 누적, 데이터가 지지하는 것만)"]
+    if not obs:
+        lines.append(f"  · 특이 관찰 없음 (표본 n={pool_n if pool_n is not None else 0})")
+        return lines
+    lines.extend(_observation_line(c) for c in obs)
+    return lines
+
+
+def _milestones_section(milestones: list) -> list:
+    """⏳ 다음 판단 — 표본 도달 마일스톤. 진행률 + 최근 30일 속도 기반 예상일만.
+
+    **여기서 자동으로 바뀌는 것은 아무것도 없다** — 표본이 차면 사람이 조정을
+    결정하는 자리라는 뜻으로 읽혀야 한다(TradeZella '주당 조정 1개' 프레임)."""
+    if not milestones:
+        return []
+    lines = [_SEP, "⏳ <b>다음 판단</b> — 표본 도달 시 사람이 결정"]
+    for m in milestones:
+        if m.get("done"):
+            tail = "도달 ✅"
+        elif m.get("eta_days"):
+            tail = f"예상 {m['eta_days']}일"
+        else:
+            tail = "속도 산출 불가"
+        lines.append(f"  · {m.get('label', '?')}: {m.get('count', 0)}/"
+                     f"{m.get('target', 0)}건 ({tail})")
+    lines.append("  (종결 = 기준시각 이후 터치 + outcome 기록 · 예상일은 최근 30일 속도)")
+    return lines
+
+
+def _outcome_stats_section(stats: dict, pool_days: int) -> list:
+    """📋 판정 사유별 집계 (freqtrade `/stats` 형). 미주입/표본 0 이면 빈 목록."""
+    if not stats or not stats.get("total"):
+        return []
+    lines = [_SEP,
+             f"📋 <b>판정 사유별</b> (최근 {pool_days}일, 종결 {stats['total']}건)"]
+    for r in stats.get("rows") or []:
+        hold = f"{r['hold_h']:.0f}h" if r.get("hold_h") is not None else "-"
+        ret = f"{r['ret_pct']:+.1f}%" if r.get("ret_pct") is not None else "-"
+        lines.append(f"  {r['label']} {r['n']}건({r['share'] * 100:.0f}%) · "
+                     f"보유 {hold} · 실현 {ret}")
+    lines.append("  (실현% = 종결가÷터치가, |50%| 초과 제외 · 숏 부호 반전)")
+    return lines
+
+
+def _calibration_compact(cal: dict, ver: str = None) -> list:
+    """🎚️ 등급 캘리브레이션 — 수학은 종전(analytics.calibration) 그대로, 표시만
+    1줄/등급으로 압축한 판. 구 산식 병기는 제거했다(grade_ver 최신 표본만 본다).
+
+    **표기 전용** — 배점·알림 필터·알림 양식 어디에도 되먹임되지 않는다."""
     if not cal or not cal.get("buckets"):
         return []
     pooled = cal.get("pooled") or {}
     if not pooled.get("n"):
-        return []  # 종결 표본 0 — 섹션 통째로 생략(빈 표를 띄우느니 안 띄운다)
-
+        return []  # 종결 표본 0 — 빈 표를 띄우느니 섹션 통째 생략
     min_n = cal.get("min_n", calibration.DEFAULT_MIN_N)
-    z = cal.get("z", calibration.DEFAULT_Z)
-    ci_label = f"CI = {calibration.confidence_pct(z):.0f}% Wilson score 구간"
-    lines = [_SEP,
-             f"🎚️ 등급 캘리브레이션 (수집 시점 등급별 TP1 도달률, 종결 {pooled['n']}건)"]
-    for g in cal["order"]:
-        b = cal["buckets"].get(g) or {}
+    vtxt = f"{ver} 표본, " if ver else ""
+    lines = [_SEP, f"🎚️ <b>등급 캘리브레이션</b> ({vtxt}TP1 도달률, "
+                   f"종결 {pooled['n']}건)"]
+    for g in cal.get("order") or ():
+        b = (cal.get("buckets") or {}).get(g) or {}
         if not b.get("n"):
-            continue  # 그 등급의 종결 표본이 아직 없음 — 행 자체를 만들지 않는다
-        amb = f" · 판별불가 {b['ambiguous']}건" if b.get("ambiguous") else ""
+            continue
         # '<' 는 반드시 &lt; (parse_mode=HTML — 날 '<' 는 400 Can't parse entities)
-        note = "" if b.get("enough") else f" · ⚠️표본 부족(n&lt;{min_n:g}), 참고용"
+        note = "" if b.get("enough") else f" ⚠️n&lt;{min_n:g}"
         lines.append(f"  {g}  {_pct(b['rate'])} ({b['hits']}/{b['n']})  "
-                     f"CI {_pct(b['ci_low'])}~{_pct(b['ci_high'])}{amb}{note}")
-    lines.append(f"  ({ci_label}. 도달률 분자 = TP1 실제 도달 건만 — "
-                 f"판정창 만료 종결은 분모에만 들어갑니다)")
-
+                     f"CI {_pct(b['ci_low'])}~{_pct(b['ci_high'])}{note}")
     violations = cal.get("violations") or []
     if violations:
-        lines.append(f"⚠️ 단조성 위반 {len(violations)}건 — 하위 등급이 상위 등급보다 "
-                     f"실측이 높습니다")
-        for v in violations[:5]:
-            mark = ("CI 비겹침 — 강한 신호" if v["significant"]
-                    else "CI 겹침 — 약한 신호")
-            lines.append(f"  {v['lower']} {_pct(v['lower_rate'])} &gt; "
-                         f"{v['higher']} {_pct(v['higher_rate'])} ({mark})")
-        if len(violations) > 5:
-            lines.append(f"  · 외 {len(violations) - 5}쌍")
-        lines.append("→ 배점 재검토 '신호'로만 표기합니다. 등급 산식·알림 필터는 "
-                     "이 리포트로 바뀌지 않습니다(사람이 판단할 몫).")
+        v = violations[0]
+        mark = "CI 비겹침" if v["significant"] else "CI 겹침"
+        lines.append(f"  ⚠️ 단조성 위반 {len(violations)}건 "
+                     f"({v['lower']} {_pct(v['lower_rate'])} &gt; "
+                     f"{v['higher']} {_pct(v['higher_rate'])}, {mark}) — 표기 전용")
     elif cal.get("eligible", 0) < 2:
-        lines.append(f"ℹ️ 단조성 판정 보류 — 표본 n≥{min_n:g} 등급이 2개 미만입니다 "
-                     f"(계속 관찰 중)")
+        lines.append(f"  ℹ️ 단조성 판정 보류 (표본 n≥{min_n:g} 등급 2개 미만)")
     else:
-        lines.append("✅ 단조성 유지 — 하위 등급이 상위 등급을 앞지른 쌍 없음")
-
-    lines.append("ℹ️ E_LB(작성자 실력 축)와는 <b>다른 축</b>입니다 — 이 섹션은 "
-                 "'등급 산식이 실제 결과와 맞는가'만 봅니다.")
+        lines.append("  ✅ 단조성 유지 — 표기 전용(산식·필터 불변)")
     return lines
 
 
-def _r_distribution_section(dist: dict, by_grade: dict = None) -> list:
-    """📊 R-멀티플 분포 섹션 (2026-08-01 내부기능강화 리서치 영역3). 미주입/표본 0 이면 빈 목록.
+def _author_section(rows_by_author: dict, now: float, rank_kw: dict,
+                    min_neff: float, top_n: int, reverse_confirmed) -> list:
+    """🏆 작성자 랭킹 — 랭킹 수학(analytics.ranking)은 **그대로**, 표시만 상위 top_n.
 
-    수학은 analytics.distribution 이 전부 담당하고 여기선 문구만 만든다.
-    **표시 전용** — 등급 산식·알림 필터·엔트리 알림 양식 어디에도 영향 없음."""
-    if not dist or not dist.get("n"):
-        return []
-    lines = [_SEP, f"📊 R-멀티플 분포 (종결 {dist['n']}건, R 트랙 — R 산출 가능한 표본만)"]
-    for b in dist["buckets"]:
-        bar = "█" * min(b["n"], 20)
-        lines.append(f"  {b['label']:>5s} {bar} {b['n']}건")
-    if dist.get("mean") is not None:
-        lines.append(f"  평균 R = {dist['mean']:+.2f}")
-    if by_grade:
-        parts = [f"{g} 평균{by_grade[g]['mean']:+.2f}(n={by_grade[g]['n']})"
-                 for g in ("S", "A", "B", "C", "D")
-                 if by_grade.get(g) and by_grade[g].get("n")]
-        if parts:
-            lines.append("  등급별: " + " · ".join(parts))
-    lines.append("ℹ️ 표시 전용 — 등급 산식·알림 필터는 이 섹션으로 바뀌지 않습니다.")
+    2026-09-22: 합의(🤝) 줄 제거(데이터가 가설을 기각). 역신호 후보(🔻)/확정 구분은
+    유지한다 — 확정은 2주 연속 판정이라 주간 리포트가 유일한 노출 지점이다."""
+    lines = [_SEP]
+    if not rows_by_author:
+        lines.append("🏆 <b>작성자 랭킹</b>")
+        lines.append("  아직 표본 부족합니다 — 터치 후 종결된 레벨이 쌓이면 "
+                     "다음 리포트부터 순위가 표시됩니다.")
+        if reverse_confirmed:
+            names = " · ".join(f"@{html.escape(a)}" for a in sorted(reverse_confirmed))
+            lines.append(f"🔻 역신호 확정 {len(reverse_confirmed)}명: {names} — "
+                         f"2주 연속 E_LB&lt;0 (알림 필터 무변경)")
+        return lines
+
+    ranked = ranking.rank_authors(rows_by_author, now, min_neff=min_neff, **rank_kw)
+    ranked_authors = {a for a, _ in ranked}
+    lines.append(f"🏆 <b>작성자 랭킹</b> (E_LB, R 트랙 n_eff≥{min_neff:g})")
+    n_anti = 0
+    if ranked:
+        for i, (author, met) in enumerate(ranked, 1):
+            line, is_anti = _weekly_rank_line(i, author, met)
+            n_anti += is_anti
+            if i <= top_n:
+                lines.append(line)
+        if len(ranked) > top_n:
+            lines.append(f"  · 외 {len(ranked) - top_n}명 (상위 {top_n}만 표시)")
+    else:
+        lines.append("  게이트 통과 작성자 없음 (계속 관찰 중)")
+
+    # R NULL(2트랙) — 랭킹엔 미등재, 승률축만 게이트 통과
+    win_only = []
+    under_sample = []
+    for author, rows in rows_by_author.items():
+        if author in ranked_authors:
+            continue
+        met = ranking.author_metrics(rows, now, **rank_kw)
+        if met["neff_r"] == 0.0 and met["neff_win"] >= min_neff:
+            wins = sum(1 for r in rows if r.get("outcome") in ranking.WIN_OUTCOMES)
+            losses = sum(1 for r in rows if r.get("outcome") in ranking.LOSS_OUTCOMES)
+            win_only.append((author, met, wins, losses))
+        else:
+            under_sample.append((author, len(rows)))
+
+    if win_only:
+        win_only.sort(key=lambda x: x[1]["p_hat"] or 0.0, reverse=True)
+        lines.append("🎯 승률만 확정 (R 미보유 표본, 랭킹 미등재)")
+        for author, met, wins, losses in win_only[:top_n]:
+            lines.append(f"  @{html.escape(author)}  승률{met['p_hat'] * 100:.0f}% "
+                         f"({wins}승{losses}패, n_eff {met['neff_win']:.1f})")
+
+    if under_sample:
+        under_sample.sort(key=lambda x: x[1], reverse=True)
+        names = " · ".join(f"@{html.escape(a)}({n}건)" for a, n in under_sample[:5])
+        more = f" · 외 {len(under_sample) - 5}명" if len(under_sample) > 5 else ""
+        lines.append(f"📋 표본 부족(n_eff&lt;{min_neff:g}): {names}{more}")
+    if n_anti:
+        lines.append(f"⚠️ 역신호 후보 {n_anti}명 — 게이트 통과 + E_LB≤0 (🔻, 관찰용)")
+    if reverse_confirmed:
+        names = " · ".join(f"@{html.escape(a)}" for a in sorted(reverse_confirmed))
+        lines.append(f"🔻 역신호 확정 {len(reverse_confirmed)}명: {names} — "
+                     f"2주 연속 E_LB&lt;0 (확정 경보 발송됨, 알림 필터 무변경)")
     return lines
 
 
+def _fit_weekly(text: str, max_chars) -> str:
+    """길이 예산 가드 — 목표 3,500자(설정 weekly_report_max_chars).
+
+    텔레그램 4096 분할 발송(_split_send)이 이미 있지만, **두 통으로 쪼개진 주간
+    리포트는 읽히지 않는다**. 그래서 발송 레이어에 가기 전에 리포트 스스로 예산을
+    지킨다. 절단은 반드시 줄 경계에서 한다 — HTML 태그 중간을 자르면 parse_mode
+    =HTML 발송이 400 으로 실패한다(태그는 한 줄 안에서 닫힌다)."""
+    if not max_chars or len(text) <= max_chars:
+        return text
+    notice = f"\n… (길이 제한으로 이하 생략)\n{_SEP}"
+    budget = max(int(max_chars) - len(notice), 0)
+    cut = text[:budget]
+    nl = cut.rfind("\n")
+    if nl > 0:
+        cut = cut[:nl]
+    return cut + notice
+
+
+# (2026-09-22 R4) 이 섹션은 주간 리포트에서 **제거**됐다 — BTC 레짐 below
+# 표본이 8월 이후 0건 증가라 표본 도달이 무기한이다(db_final_review).
+# 함수 자체는 scripts/test_infra.py 의 렌더 격리 검증이 참조하므로 남긴다.
 def _regime_heatmap_section(heatmap: dict, min_cell_n: int = 5) -> list:
     """등급×장세 히트맵 섹션 (2026-08-17 #5).
 
@@ -1050,21 +1158,7 @@ def _regime_heatmap_section(heatmap: dict, min_cell_n: int = 5) -> list:
     return lines
 
 
-def _holding_period_section(hold: dict) -> list:
-    """⏱️ 보유기간(터치→종결 경과) 분포 섹션 (2026-08-01 내부기능강화 리서치 영역4).
-    미주입/표본 0 이면 빈 목록. **표시 전용** — 알림 필터에 영향 없음."""
-    if not hold or not hold.get("n"):
-        return []
-    lines = [_SEP, f"⏱️ 보유기간 분포 (터치→종결 경과, 종결 {hold['n']}건)"]
-    for b in hold["buckets"]:
-        if not b["n"]:
-            continue  # 표본 없는 구간은 행 생략(calibration.py 관례와 동일)
-        lines.append(f"  {b['label']:>8s}  {b['n']}건  hit {_pct(b['rate'])}")
-    lines.append("ℹ️ 표시 전용 — 알림 필터에 영향 없음")
-    return lines
-
-
-def render_weekly_report(rows_by_author: dict, now: float = None,
+def render_weekly_report(rows_by_author: dict = None, now: float = None,
                          half_life_days: float = None, z: float = None,
                          prior_m: int = None, min_neff: float = None,
                          confluence: dict = None, baseline: dict = None,
@@ -1076,148 +1170,86 @@ def render_weekly_report(rows_by_author: dict, now: float = None,
                          r_distribution: dict = None,
                          r_distribution_by_grade: dict = None,
                          holding_period: dict = None,
-                         regime_heatmap: dict = None) -> str:
-    """작성자별 종결 표본({author: rows}, storage.db.get_author_outcome_rows 행 형식)
-    → 텔레그램 HTML 주간 리포트. 파라미터 미지정 시 config.settings 의 rank_* 사용.
+                         regime_heatmap: dict = None,
+                         current: dict = None, previous: dict = None,
+                         observations: list = None, pool_n: int = None,
+                         pool_days: int = None, milestones: list = None,
+                         outcome_stats: dict = None, calibration_ver: str = None,
+                         period: tuple = None, min_n: int = None,
+                         top_authors: int = None, max_chars: int = None) -> str:
+    """주간 성적 리포트 (2026-09-22 v2 — 지표 나열형 → 의사결정형).
 
-    3부 구성(2026-07-26 카드): ① E_LB 게이트(n_eff≥min) 통과 작성자 순위,
-    ② R NULL(전부 tp_only 등) 이면서 승률 게이트만 통과한 작성자 별도(2트랙 확정,
-    랭킹엔 미등재), ③ 표본부족 안내 + 역신호 후보(①에서 게이트는 통과했지만
-    E_LB≤0) 안내. 표본이 전혀 없으면 그 상태도 우아하게 표시.
+    구성 9부:
+      ① 헤더(주차 KST 기간 · 표본 알림/종결)
+      ② 📌 이번 주 한눈에 — 지난주 대비 (알림/종결/승률/PF/평균R, 화살표 ▲▼→)
+      ③ 🔎 관찰 3줄 (규칙 기반 자동 선택, 양쪽 n≥10 · 최근 4주 누적)
+      ④ ⏳ 다음 판단 (v6 평가 150건 · MFE/MAE 50건 진행률 — 사람이 결정)
+      ⑤ 📋 판정 사유별 집계 (freqtrade /stats 형: n·비중·보유시간·실현%)
+      ⑥ 🏆 작성자 랭킹 (E_LB 수학 불변, 표시만 상위 N + 역신호 확정)
+      ⑦ 🎚️ 등급 캘리브레이션 (grade_ver 최신 표본만, 1줄/등급)
+      ⑨ 각주 1줄 (결과 확인 기준: 터치 후 7일)
 
-    2026-07-26 신규 2건(둘 다 **표시 전용** — 랭킹 수식·정렬 키는 불변):
-    - confluence: {author: {multi, total, cr}} (analytics.clustering.confluence_by_author)
-      → 랭킹/승률 행 아래 '🤝 합의 참여 X/Y회'. 미주입이면 그 줄만 빠진다.
-    - baseline: {n, positive, rate} (analytics.clustering.baseline_positive_rate)
-      + raw_records: {author: {wins, losses}} → '🎲 초과 적중률' 섹션.
-      pooled n 이 baseline_min_n 미만이면 섹션 자체를 생략한다.
+    v2 인자(전부 선택):
+      current / previous  — analytics.weekly.summary(...) 결과 + {"alerts": N}
+      observations        — analytics.weekly.observations(...) 결과
+      pool_n / pool_days  — 관찰·집계 누적 창의 표본 수 / 일수
+      milestones          — [{label, count, target, done, eta_days}, ...]
+      outcome_stats       — analytics.weekly.outcome_stats(...) 결과
+      calibration_ver     — 캘리브레이션 표본의 grade_ver (예: 'v6')
+      period              — (start_ts, end_ts). 미지정이면 now 기준 7일 창
+      max_chars           — 길이 예산(설정 weekly_report_max_chars)
 
-    2026-07-27 신규(기획 카드 #26):
-    - calibration_result: analytics.calibration.calibrate_grades(...) 결과
-      → '🎚️ 등급 캘리브레이션' 섹션(등급별 TP1 도달률·Wilson CI·단조성 신호).
-      미주입이면 섹션만 빠지고 나머지 출력은 완전히 동일하다. 표시 전용이라
-      랭킹 수식·정렬 키·알림 필터·등급 산식 어디에도 영향이 없다.
-
-    2026-08-01 신규(S9 역신호 확정, 표시 전용):
-    - reverse_confirmed: 역신호 '확정' 작성자 집합(db.get_reverse_confirmed_authors)
-      → 안내 섹션에 확정 구분 한 줄. 미주입이면 종전 출력과 완전히 동일.
-      후보(🔻, E_LB≤0 현 시점)와 확정(2주 연속, 경보 발송됨)은 다른 상태다.
-
-    2026-08-01 신규(내부기능강화 리서치 영역3·4, 둘 다 표시 전용):
-    - r_distribution / r_distribution_by_grade: analytics.distribution.r_multiple_distribution
-      / r_distribution_by_grade 결과 → '📊 R-멀티플 분포' 섹션. 미주입이면 섹션만 빠진다.
-    - holding_period: analytics.distribution.holding_period_distribution 결과 →
-      '⏱️ 보유기간 분포' 섹션. 미주입이면 섹션만 빠진다."""
+    하위호환: baseline / raw_records / confluence / calibration_legacy /
+    r_distribution / r_distribution_by_grade / holding_period / regime_heatmap 은
+    **받되 무시한다**(해당 섹션이 2026-09-22 개편에서 제거됨 — 이유는 위
+    '제거된 섹션과 이유' 주석). 기존 호출부(scripts/show_status.py 등)를 고치지
+    않아도 되도록 시그니처만 유지한다."""
     now = time.time() if now is None else now
     half_life_days = settings.get("rank_half_life_days") if half_life_days is None else half_life_days
     z = settings.get("rank_z") if z is None else z
     prior_m = settings.get("rank_prior_m") if prior_m is None else prior_m
     min_neff = settings.get("rank_min_neff") if min_neff is None else min_neff
-    baseline_min_n = settings.get("baseline_min_n") if baseline_min_n is None else baseline_min_n
-    if confluence_min_clusters is None:
-        confluence_min_clusters = settings.get("confluence_min_clusters")
+    min_n = settings.get("weekly_report_min_n") if min_n is None else min_n
+    top_authors = settings.get("weekly_report_top_authors") if top_authors is None else top_authors
+    pool_days = settings.get("weekly_report_pool_days") if pool_days is None else pool_days
+    max_chars = settings.get("weekly_report_max_chars") if max_chars is None else max_chars
     rank_kw = dict(half_life_days=half_life_days, z=z, m=prior_m)
-
-    lines = [_SEP, "📈 <b>주간 성적 리포트</b>"]
 
     rows_by_author = rows_by_author or {}
     total_rows = sum(len(rows) for rows in rows_by_author.values())
-    if not rows_by_author or total_rows == 0:
-        lines.append(_SEP)
-        lines.append("아직 표본 부족합니다 — 터치 후 종결된 레벨이 쌓이면 다음 리포트부터 "
-                      "순위가 표시됩니다.")
-        # 등급 캘리브레이션은 작성자 축과 독립이다 — 작성자 미상(author NULL) 종결
-        # 표본만 있는 경우에도 등급 축은 볼 수 있으므로 이 경로에서도 붙인다.
-        lines.extend(_calibration_section(calibration_result, calibration_legacy))
-        lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
-        lines.extend(_holding_period_section(holding_period))
-        lines.extend(_regime_heatmap_section(regime_heatmap))
-        lines.append(_SEP)
-        return "\n".join(lines)
 
-    lines.append(f"✍️ 작성자 {len(rows_by_author)}명 · 종결 표본 {total_rows}건")
-    lines.append(_SEP)
-
-    ranked = ranking.rank_authors(rows_by_author, now, min_neff=min_neff, **rank_kw)
-    ranked_authors = {author for author, _ in ranked}
-
-    # ① E_LB 게이트 통과 랭킹
-    lines.append(f"🏆 E_LB 랭킹 (R 트랙, n_eff≥{min_neff:g})")
-    n_anti = 0
-    if ranked:
-        for i, (author, met) in enumerate(ranked, 1):
-            line, is_anti = _weekly_rank_line(i, author, met)
-            lines.append(line)
-            conf = _confluence_line(confluence, author, confluence_min_clusters)
-            if conf:
-                lines.append(conf)
-            n_anti += is_anti
+    # ① 헤더
+    start_ts, end_ts = period if period else (now - 7 * 86400.0, now)
+    lines = [_SEP, "📈 <b>주간 성적 리포트</b>",
+             f"🗓 {_kst_md(start_ts)}~{_kst_md(end_ts)} (KST, 7일)"]
+    if current:
+        alerts = current.get("alerts")
+        head = f"알림 {alerts}건 · " if alerts is not None else ""
+        lines.append(f"📦 표본: {head}종결 {current.get('closed', 0)}건")
     else:
-        lines.append("  게이트 통과 작성자 없음 (계속 관찰 중)")
+        lines.append(f"📦 표본: 작성자 {len(rows_by_author)}명 · 종결 {total_rows}건")
 
-    # ② R NULL(2트랙) — 랭킹엔 미등재, 승률축만 게이트 통과
-    win_only = []
-    under_sample = []
-    for author, rows in rows_by_author.items():
-        if author in ranked_authors:
-            continue
-        met = ranking.author_metrics(rows, now, **rank_kw)
-        if met["neff_r"] == 0.0 and met["neff_win"] >= min_neff:
-            wins = sum(1 for r in rows if r.get("outcome") in ranking.WIN_OUTCOMES)
-            losses = sum(1 for r in rows if r.get("outcome") in ranking.LOSS_OUTCOMES)
-            win_only.append((author, met, wins, losses))
-        else:
-            under_sample.append((author, len(rows)))
+    # ② 이번 주 한눈에 / ③ 관찰 3줄 — v2 데이터가 주입된 경로에서만
+    lines.extend(_overview_section(current, previous, min_n))
+    if current is not None:
+        lines.extend(_observations_section(observations, pool_n, pool_days))
 
-    if win_only:
-        win_only.sort(key=lambda x: x[1]["p_hat"] or 0.0, reverse=True)
-        lines.append(_SEP)
-        lines.append("🎯 승률만 확정 (R 미보유 표본, 2트랙 — 랭킹 미등재)")
-        for author, met, wins, losses in win_only:
-            lines.append(f"  @{html.escape(author)}  승률{met['p_hat'] * 100:.0f}% "
-                         f"({wins}승{losses}패, n_eff {met['neff_win']:.1f})")
-            conf = _confluence_line(confluence, author, confluence_min_clusters)
-            if conf:
-                lines.append(conf)
+    # ④ 다음 판단 / ⑤ 판정 사유별
+    lines.extend(_milestones_section(milestones))
+    lines.extend(_outcome_stats_section(outcome_stats, pool_days))
 
-    # ③ 초과 적중률 베이스라인 (표시 대상 = 위 두 섹션에 노출된 작성자)
-    baseline_order = [a for a, _ in ranked] + [a for a, _, _, _ in win_only]
-    lines.extend(_baseline_section(rows_by_author, baseline_order, baseline,
-                                   raw_records, baseline_min_n))
+    # ⑥ 작성자 랭킹 (수학 불변 — analytics.ranking 그대로)
+    lines.extend(_author_section(rows_by_author, now, rank_kw, min_neff,
+                                 top_authors, reverse_confirmed))
 
-    # ④ 등급 캘리브레이션 (기획 카드 #26) — 작성자 축과 무관한 별도 축, 표시 전용
-    # (2026-08-01 S10 D4: 본표=현행 산식(v3) 표본, 구 산식은 참고 한 줄 병기)
-    lines.extend(_calibration_section(calibration_result, calibration_legacy))
+    # ⑦ 등급 캘리브레이션 (최신 grade_ver 표본만, 1줄/등급)
+    lines.extend(_calibration_compact(calibration_result, calibration_ver))
 
-    # ⑤ R-멀티플 분포 + ⑥ 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4) —
-    # 등급 축과도 작성자 축과도 무관한 별도 관찰, 둘 다 표시 전용
-    lines.extend(_r_distribution_section(r_distribution, r_distribution_by_grade))
-    lines.extend(_holding_period_section(holding_period))
-
-    # ⑦ 등급×장세 히트맵 (2026-08-17 #5, 표시 전용) — 각 셀 n<5 이면 셀 생략,
-    # 전체 셀 부족이면 섹션 통째 스킵(표본 도달 전 자동 침묵)
-    lines.extend(_regime_heatmap_section(regime_heatmap))
-
-    # ⑦ 안내: 표본부족 + 역신호 후보/확정
-    if under_sample or n_anti or reverse_confirmed:
-        lines.append(_SEP)
-    if under_sample:
-        under_sample.sort(key=lambda x: x[1], reverse=True)
-        names = " · ".join(f"@{html.escape(a)}({n}건)" for a, n in under_sample[:10])
-        more = f" · 외 {len(under_sample) - 10}명" if len(under_sample) > 10 else ""
-        # '<' 는 반드시 &lt; 로 (parse_mode=HTML 이라 날 '<' 가 태그 시작으로 파싱돼
-        # 400 Can't parse entities 로 발송 자체가 실패한다 — 2026-07-26 첫 발송 실패 원인)
-        lines.append(f"📋 표본 부족(n_eff&lt;{min_neff:g}, 계속 관찰 중): {names}{more}")
-    if n_anti:
-        lines.append(f"⚠️ 역신호 후보 {n_anti}명 — 게이트는 통과했지만 E_LB≤0 (🔻 표시, "
-                     f"자동 필터·태깅 아님, 관찰 참고용)")
-    if reverse_confirmed:
-        names = " · ".join(f"@{html.escape(a)}" for a in sorted(reverse_confirmed))
-        lines.append(f"🔻 역신호 확정 {len(reverse_confirmed)}명: {names} — "
-                     f"2주 연속 E_LB&lt;0 (확정 경보 발송됨, 알림 필터 무변경)")
-
+    # ⑨ 각주
     lines.append(_SEP)
-    return "\n".join(lines)
+    lines.append(_WEEKLY_FOOTNOTE)
+    lines.append(_SEP)
+    return _fit_weekly("\n".join(lines), max_chars)
 
 
 # ── 적중 DB 해시체인 무결성 경보 (2026-07-27 기획 카드 #3) ────────────────

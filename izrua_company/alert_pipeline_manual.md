@@ -197,6 +197,19 @@ timeframe_hours ≥ 4.0H    (alert_min_timeframe_hours = 4.0)
 스캘핑·단타 포스트 차단. TP가 없으면 **통과**.  
 클러스터 내 다른 멤버가 통과하면 낙오 멤버도 함께 승격.
 
+### 게이트 3-2: TP 없는 글 배제 (2026-09-22 D1/R1)
+```
+클러스터 전 멤버에 유효 TP 없음 → 터치 알림 억제   (alert_exclude_no_tp = True)
+```
+근거: TP·SL 둘 다 파싱 안 된 글(`judgment_mode='timeboxed'`)은 실현수익 PF 0.60 —
+유일한 음의 기대값(plan_2026-09-22 §2-1 D1). 09-13 C 컷이 이미 사실상 차단하고 있어
+알림량 영향 ≈0, 규칙으로 못박아 컷을 되돌려도 재발하지 않게 한다.
+"유효 TP" 기준은 판정부와 동일(`_has_effective_tp` → `_volume_band_tps`, 진입가 없으면
+raw `tp_usd>0` 로 보수 판단). 터치 기록·판정·MFE 추적은 그대로, 알림만 억제.
+억제 시 `alerts_log` 에 **kind=`touch_no_tp`, sent=0** 무음 기록 — `touch` 로 쓰면
+일일 상한·재발송 차단이 이 행을 발송분으로 오인해 정상 알림 슬롯을 잡아먹기 때문.
+**파일:** `monitor/price_check.py` (summary 키 `suppressed_no_tp`). 테스트 NOTP1~6.
+
 ### 게이트 4: 코인별 일일 발송 한도
 ```
 코인당 하루 최대 5회    (alert_max_per_coin_per_day = 5, 2026-08-17: 3→5 완화)
@@ -1142,6 +1155,61 @@ OFF 무관), 최종 🏆 교체, 우선순위 no-op, 실패 무해, 예외 삼�
 
 **되돌릴 수 없는 것**: `meta.mfe_mae_fixed_since`·`meta.grade_v6_since` 기록,
 누적된 `touch_message_id`. 전부 기록 전용이라 무해하다.
+
+---
+
+## 종합검토 라운드 1 배포 (2026-09-22 저녁, plan_2026-09-22_최종버전_종합검토.md)
+
+사용자 결정: 거래대금 순위 → **등급 감점**(10-06 이후 활성화) / 코인당 상한 → **불변**
+(건수 상한류 제안 금지) / 주간 리포트 → **전면 개편**. 결정 불필요: TP 없는 글 배제(게이트 3-2).
+
+### R3. 거래대금 순위 감점 — 플래그 OFF 배포
+
+| 키 | 기본값 | 의미 |
+|---|---|---|
+| `grade_volume_rank_enabled` | **`False`** | **2026-10-06 이후 `True`** — v6 지연 감점 2주 관찰과 알림량 변경을 겹치지 않기 위해(09-13 교훈) |
+| `grade_volume_rank_top_n` | `20` | 터치 시점 업비트 24h 거래대금 순위 1~N 이면 감점(경계 포함) |
+| `grade_volume_rank_penalty` | `-6` | 감점 폭. 시뮬(n=214): −3/−4 는 잘리는 건 0, −6 은 1-20위 C 통과율 −14.6%·잘린 7건 승률 14.3%(노이즈만), −9/−10 부터 승률 40%대 정상 신호 절단 → −6 확정 |
+
+근거: 1-20위 승률 49.3%·PF 1.32(n=146) vs 100위+ 61.9%·PF 1.90(n=84). 배선은 지연 감점과
+**완전히 동일**: `collector/grading.py` `_volume_rank_points` → `score_breakdown["vol_rank"]`
+(수집 시 None=0, 터치 재채점에서만), `regrade_current` 는 명시 인자 → 레벨 dict 키 2경로.
+`monitor/price_check.py` 지연 주입 바로 아래에서 `_lv["touch_volume_rank"] = _volume_ranks().get(ticker)`
+(터치만, 예고 None, 회차 캐시 재사용 → 추가 API 0). 산식 버전 태그는 켜는 날 승격 여부 판단.
+**켤 때 주의**: 1-20위 B→C 이동 23건 중 16건이 지연 −6 과 중첩 — 첫 주 알림량 별도 관찰.
+테스트 VR1~10(grading), VR-P1~4(price_logic). 상세 `note_2026-09-22_volrank_notp.md`.
+
+### R4. 주간 리포트 v2 — 지표 나열형 → 의사결정형
+
+알림량·등급·필터 **무영향**(텍스트 조립 레이어만). 구조 9부:
+
+| # | 섹션 | 내용 |
+|---|---|---|
+| ① | 헤더 | 기간(KST 7일) · 표본(알림 N · 종결 N) |
+| ② | 📌 이번 주 한눈에 | 알림/종결/승률/PF/평균 R 각각 `값 (지난주 → ▲▼→)`. n<`weekly_report_min_n`(10) 이면 화살표 생략 + "참고" |
+| ③ | 🔎 관찰 3줄 | 규칙 기반 자동 선택, 격차(%p) 큰 순 최대 3. 후보: 판정 사유 비중 ±10%p(주 vs 주) / 지연 <30분 vs 이상 / 거래대금 1-20 vs 100+ / 최고·최저 작성자(n≥5) / hit vs miss 보유시간 편차(≥50%, gap=편차/4) — **만료 판정은 보유시간 후보에서 제외**(정의상 판정창 끝까지 가서 매주 동어반복이 1순위로 뽑혔음, CTO 디버깅) |
+| ④ | ⏳ 다음 판단 | v6 평가 X/150 · MFE e-ratio X/50 — 진행률·예상일만, **조정은 사람이** |
+| ⑤ | 📋 판정 사유별 | outcome 별 n·비중·평균 보유시간·평균 실현%(|r|≤50, 숏 부호 반전), 최근 28일 |
+| ⑥ | 🏆 작성자 랭킹 | E_LB 수학·정렬 불변, 표시 상위 5 + 외 N명. 🤝 합의 줄 제거(데이터 기각) |
+| ⑦ | 🎚️ 캘리브레이션 | grade_ver 최신 표본만(v6 → 0건이면 v5 폴백), 구 산식 병기 제거 |
+| — | 제거 | 🎲 초과 적중률 · 📊 R 분포 막대 · ⏱️ 보유기간 분포(⑤로 대체) · 등급×장세 히트맵(below 표본 무기한). `_regime_heatmap_section` 은 test_infra 참조로 존치(미사용) |
+| ⑨ | 각주 | 결과 확인 기준 터치 후 7일(168h 내 종결 57%) |
+
+설정 `weekly_report_max_chars 3500 / min_n 10 / observations 3 / top_authors 5 / pool_days 28 /
+milestone_v6 150 / milestone_mfe 50`. 파일: `analytics/weekly.py`(신규, 순수 계산·import 0),
+`notify/telegram.py` `render_weekly_report`(하위호환 시그니처), `scripts/run_weekly_report.py`
+`build_report(conn=…)`(발송 없이 조립 — 샘플은 운영 DB `mode=ro`), `storage/db.py` 읽기 조회 4개
+(`get_resolved_rows_between`·`count_touch_alerts_between`·`count_resolved_touches_since`·
+`get_weekly_calibration_rows`). 테스트 `test_weekly_report.py` 97체크. 샘플
+`sample_weekly_2026-09-22.txt`(평문 1,947자). 상세 `note_2026-09-22_weekly_v2.md`.
+
+### 되돌리기
+
+| 증상 | 조치 |
+|---|---|
+| TP 없는 글도 알림 받고 싶다 | `alert_exclude_no_tp` → `False` |
+| 거래대금 감점을 켠 뒤 알림이 너무 줄었다 | `grade_volume_rank_enabled` → `False`, 또는 `_penalty` → `-3` |
+| 주간 리포트가 잘린다 | `weekly_report_max_chars` 상향(텔레그램 4096 한도 내), 또는 `_top_authors` 하향 |
 
 ---
 

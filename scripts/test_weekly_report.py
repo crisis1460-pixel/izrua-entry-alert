@@ -1,5 +1,13 @@
-# notify.telegram.render_weekly_report 단위·통합 테스트 (analytics/ranking.py 는
-# 재설계 없이 그대로 사용 — 여기선 텍스트 조립·섹션 분류·2트랙 확정만 검증).
+# notify.telegram.render_weekly_report 단위·통합 테스트.
+#
+# 2026-09-22 R4: 리포트를 "지표 나열형 → 의사결정형"으로 전면 개편하면서 이 파일도
+# 함께 갈았다. 랭킹 수학(analytics/ranking.py)과 캘리브레이션 수학
+# (analytics/calibration.py)은 재설계 없이 그대로라 여기선 **텍스트 조립·섹션 선택·
+# 표본 게이트·길이 예산**만 본다. 새 순수 계산부(analytics/weekly.py)의 손계산은
+# 이 파일의 V 섹션이 렌더와 함께 검증한다.
+#
+# 제거된 섹션(🎲 초과 적중률 / 📊 R-멀티플 분포 / ⏱️ 보유기간 분포 / 🌡️ 히트맵 /
+# 🤝 합의 / 구 산식 병기)은 "출력에 없다"를 역으로 검증한다(X 섹션).
 import os
 import sys
 from pathlib import Path
@@ -10,6 +18,7 @@ try:
 except Exception:
     pass
 
+from analytics import weekly
 from notify import telegram
 from storage import audit_dump, db
 
@@ -19,15 +28,18 @@ from storage import audit_dump, db
 audit_dump.SUPPRESSED = True
 
 ok = True
+n_checks = 0
 
 
 def check(name, cond):
-    global ok
+    global ok, n_checks
+    n_checks += 1
     print(("✅" if cond else "❌"), name)
     ok = ok and cond
 
 
 now = 1_800_000_000.0
+DAY = 86400.0
 RK = dict(min_neff=5.0, half_life_days=90.0, z=1.28, prior_m=10)
 
 
@@ -36,17 +48,32 @@ def rows_of(outcome, r_multiple, n, hit_rate=None, hit_count=None):
                  author_hit_rate=hit_rate, author_hit_count=hit_count) for _ in range(n)]
 
 
-# ── W1: 표본 전혀 없음 → 우아한 빈 상태 ──────────────────────────────
+def lv(outcome, *, r=None, touched=None, resolved=None, collected=None,
+       author=None, direction="long", touch=1000.0, resolve=None, vrank=None):
+    """levels 한 행(주간 리포트 v2 조회 결과 형식)."""
+    t = now - 2 * DAY if touched is None else touched
+    return dict(outcome=outcome, r_multiple=r, touched_at=t,
+                resolved_at=(t + 24 * 3600) if resolved is None else resolved,
+                collected_at=(t - 3600) if collected is None else collected,
+                author=author, direction=direction,
+                touch_price_krw=touch,
+                resolve_price_krw=(touch * 1.02 if resolve is None else resolve),
+                touch_volume_rank=vrank, judgment_mode="tp_sl")
+
+
+# ── W: 랭킹 섹션 (기존 로직 불변 — 표시만 상위 N) ─────────────────────
+# W1: 표본 전혀 없음 → 우아한 빈 상태
 msg_empty = telegram.render_weekly_report({}, now=now, **RK)
 check("W1 빈 DB 우아한 표시", "아직 표본 부족" in msg_empty)
-check("W1 헤더는 유지", "📈" in msg_empty and "주간 성적 리포트" in msg_empty)
+check("W1 헤더 유지 + 주차(KST) 행 + 각주",
+      "📈" in msg_empty and "주간 성적 리포트" in msg_empty
+      and "(KST, 7일)" in msg_empty and "터치 후 7일" in msg_empty)
 
-# ── W2: 종합 시나리오 ────────────────────────────────────────────────
-# GoodAuthor: R=[1]*5 (전부 hit) → mean 1, var 0, n_eff 5 → E_LB +1.00, 게이트 통과, 정신호
-# BadAuthor : R=[-1]*5 (전부 miss) → E_LB -1.00, 게이트 통과, 역신호 후보(🔻)
-# TpOnlyAuthor: r_multiple 전부 None, 7승0패(tp_only) → R NULL 2트랙, 승률만 확정
-#               p_hat = (1+7)/(1+1+7+0) = 8/9 ≈ 0.889 (워쳐 prior 없음 → Beta(1,1))
-# NewAuthor : 2건뿐 (게이트 미달) → 표본부족
+# W2: 종합 시나리오
+# GoodAuthor: R=[1]*5 (전부 hit) → E_LB +1.00, 게이트 통과, 정신호
+# BadAuthor : R=[-1]*5 (전부 miss) → E_LB -1.00, 역신호 후보(🔻)
+# TpOnlyAuthor: r_multiple 전부 None, 7승0패 → R NULL 2트랙(랭킹 미등재)
+# NewAuthor : 2건뿐 → 표본부족
 rows_by_author = {
     "GoodAuthor": rows_of("hit", 1.0, 5),
     "BadAuthor": rows_of("miss", -1.0, 5),
@@ -57,32 +84,46 @@ msg = telegram.render_weekly_report(rows_by_author, now=now, **RK)
 print(msg)
 print()
 
-check("W2 작성자/표본 카운트 헤더", "작성자 4명" in msg and "종결 표본 19건" in msg)
+check("W2 표본 헤더(작성자/종결)", "작성자 4명" in msg and "종결 19건" in msg)
 check("W2 GoodAuthor 랭킹 등재 +1.00", "@GoodAuthor" in msg and "E_LB +1.00" in msg)
-check("W2 BadAuthor 랭킹 등재 -1.00 + 역신호 표시", "@BadAuthor 🔻" in msg and "E_LB -1.00" in msg)
+check("W2 BadAuthor 랭킹 등재 -1.00 + 역신호 표시",
+      "@BadAuthor 🔻" in msg and "E_LB -1.00" in msg)
 check("W2 GoodAuthor가 BadAuthor보다 먼저(내림차순)",
       msg.index("@GoodAuthor") < msg.index("@BadAuthor"))
-check("W2 역신호 후보 안내 1명", "역신호 후보 1명" in msg)
-check("W2 TpOnlyAuthor 승률만 확정 섹션(7승0패, 89%)",
+check("W2 역신호 후보 1명 안내", "역신호 후보 1명" in msg)
+check("W2 TpOnlyAuthor 승률만 확정(7승0패, 89%)",
       "@TpOnlyAuthor" in msg and "7승0패" in msg and "89%" in msg
       and "승률만 확정" in msg)
-check("W2 TpOnlyAuthor 는 랭킹(E_LB) 섹션엔 미등재",
+check("W2 TpOnlyAuthor 는 E_LB 랭킹엔 미등재",
       msg.split("승률만 확정")[0].count("@TpOnlyAuthor") == 0)
 check("W2 NewAuthor 표본부족 섹션(2건)", "@NewAuthor(2건)" in msg and "표본 부족" in msg)
 
-# ── W3: 게이트 통과자 전무 → 랭킹 "없음" 문구, 안내 섹션만 ────────────
+# W3: 게이트 통과자 전무
 msg3 = telegram.render_weekly_report({"NewAuthor": rows_of("hit", 1.0, 2)}, now=now, **RK)
 check("W3 게이트 통과자 없음 문구", "게이트 통과 작성자 없음" in msg3)
-check("W3 승률만 확정 섹션은 생략(대상 없음)", "승률만 확정" not in msg3)
-check("W3 표본부족은 그대로 안내", "@NewAuthor(2건)" in msg3)
+check("W3 승률만 확정 섹션 생략(대상 없음)", "승률만 확정" not in msg3)
 
-# ── I1: 임시 DB 통합 — list_authors_with_outcomes + get_author_outcome_rows 연동 ──
+# W4: 상위 N 만 표시 (2026-09-22 — 수학·정렬은 불변, 표시만 자른다)
+many = {f"A{i:02d}": rows_of("hit", 1.0 + i * 0.1, 5) for i in range(8)}
+msg_top = telegram.render_weekly_report(many, now=now, top_authors=5, **RK)
+check("W4 상위 5명만 표시 + 나머지 건수 안내",
+      msg_top.count("E_LB +") == 5 and "외 3명 (상위 5만 표시)" in msg_top)
+check("W4 1위는 E_LB 최대(A07)", "1. @A07" in msg_top)
+
+# W5: 작성자 0명이어도 다른 섹션은 독립적으로 나온다
+msg_noauthor = telegram.render_weekly_report(
+    {}, now=now, current=weekly.summary([lv("hit")] * 12, alerts=4),
+    previous=weekly.summary([lv("miss")] * 12, alerts=9), **RK)
+check("W5 작성자 0명 + v2 데이터 → 랭킹은 빈 상태, 요약은 정상 출력",
+      "아직 표본 부족" in msg_noauthor and "📌" in msg_noauthor
+      and "알림 수  4건 (9건 → ▼)" in msg_noauthor)
+
+# ── I1: 임시 DB 통합 (list_authors_with_outcomes + get_author_outcome_rows) ──
 TEST_DB = "cache/_test_weekly_report.db"
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 db.init_db(TEST_DB)
 with db.connect(TEST_DB) as conn:
-    # GoodAuthor: 5건 hit, r=+1 (실제 도달 터치 + 종결)
     for i, r in enumerate([1.0] * 5):
         conn.execute(
             "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
@@ -90,14 +131,13 @@ with db.connect(TEST_DB) as conn:
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (f"g{i}", "SOL", "KRW-SOL", "long", "touched", now - 86400, "GoodAuthor",
              "hit", r, now))
-    # 섀도 터치(touched_at NULL) — 판정·통계 제외 대상이니 리포트에도 안 잡혀야 함
+    # 섀도 터치(touched_at NULL) — 판정·통계 제외 대상
     conn.execute(
         "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
         "collected_at, author, outcome, r_multiple, touched_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?)",
         ("shadow1", "SOL", "KRW-SOL", "long", "touched", now - 86400, "GhostAuthor",
          "hit", 1.0, None))
-    # 진행 중(outcome NULL) — 미종결이라 제외 대상
     conn.execute(
         "INSERT INTO levels (signal_key, coin_symbol, ticker, direction, status, "
         "collected_at, author, touched_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -109,176 +149,255 @@ with db.connect(TEST_DB) as conn:
     rows_by_author_db = {a: db.get_author_outcome_rows(conn, a) for a in authors}
 
 msg_db = telegram.render_weekly_report(rows_by_author_db, now=now, **RK)
-check("I1 DB 연동 렌더 결과에 GoodAuthor 랭킹 반영", "@GoodAuthor" in msg_db and "E_LB +1.00" in msg_db)
+check("I1 DB 연동 렌더 결과에 GoodAuthor 랭킹 반영",
+      "@GoodAuthor" in msg_db and "E_LB +1.00" in msg_db)
+
+# ── I2: 신규 조회 함수 (읽기 전용, 2026-09-22 R4) ─────────────────────
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE levels SET resolved_at=? WHERE signal_key='g0'", (now - 3 * DAY,))
+    conn.execute("UPDATE levels SET resolved_at=? WHERE signal_key='g1'", (now - 10 * DAY,))
+    conn.execute("INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, "
+                 "day_kst, sent) VALUES (?,?,?,?,?,?)",
+                 ("SOL", "touch", "1", now - 2 * DAY, "2027-01-14", 1))
+    conn.execute("INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, "
+                 "day_kst, sent) VALUES (?,?,?,?,?,?)",
+                 ("SOL", "touch", "2", now - 2 * DAY, "2027-01-14", 0))
+    conn.execute("INSERT INTO alerts_log (coin_symbol, kind, level_ids, sent_at, "
+                 "day_kst, sent) VALUES (?,?,?,?,?,?)",
+                 ("SOL", "preview", "3", now - 2 * DAY, "2027-01-14", 1))
+    win = db.get_resolved_rows_between(conn, now - 7 * DAY, now)
+    check("I2a get_resolved_rows_between 창 필터(7일 내 1건, 10일 전 건 제외)",
+          len(win) == 1 and win[0]["author"] == "GoodAuthor")
+    check("I2b 섀도 터치·미종결은 창 조회에서도 제외",
+          all(r["outcome"] and r["touched_at"] for r in
+              db.get_resolved_rows_between(conn, 0, now + DAY)))
+    check("I2c count_touch_alerts_between = kind='touch' AND sent=1 만",
+          db.count_touch_alerts_between(conn, now - 7 * DAY, now) == 1)
+    check("I2d count_resolved_touches_since (touched_at>=since AND outcome NOT NULL)",
+          db.count_resolved_touches_since(conn, now - DAY) == 5
+          and db.count_resolved_touches_since(conn, now + DAY) == 0)
 os.remove(TEST_DB)
 
-# ── W4: 신규 2건 반영 렌더 (초과 적중률 베이스라인 + 합의 표시) ──────────
-# 기준선 10%(n=29). GoodAuthor 5승0패 → 원시 100% → +90%p,
-# BadAuthor 0승5패 → 0% → -10%p, TpOnlyAuthor 7승0패 → +90%p
-BASE = {"n": 29, "positive": 3, "rate": 3 / 29}
-CONF = {
-    "GoodAuthor": {"multi": 1, "total": 7, "cr": 1 / 7},
-    "TpOnlyAuthor": {"multi": 3, "total": 4, "cr": 0.75},
-    "BadAuthor": {"multi": 0, "total": 1, "cr": 0.0},   # 클러스터 1개 → 표시 생략
-}
-msg4 = telegram.render_weekly_report(rows_by_author, now=now, baseline=BASE,
-                                     confluence=CONF, baseline_min_n=20,
-                                     confluence_min_clusters=2, **RK)
-print(msg4)
+# ── V: v2 본문 — ② 이번 주 한눈에 (지난주 대비 화살표) ─────────────────
+CUR = weekly.summary([lv("hit", r=1.0)] * 6 + [lv("miss", r=-1.0)] * 6, alerts=10)
+PRV = weekly.summary([lv("hit", r=1.0)] * 3 + [lv("miss", r=-1.0)] * 9, alerts=14)
+msg_v = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                      previous=PRV, **RK)
+print(msg_v)
 print()
 
-check("W4 베이스라인 헤더(10%, n=29)", "🎲 초과 적중률" in msg4
-      and "24h 보유 시 수익권 10%" in msg4 and "n=29" in msg4)
-check("W4 GoodAuthor 초과분 +90%p", "원시승률 100% → 베이스라인 대비 +90%p" in msg4)
-check("W4 BadAuthor 초과분 -10%p", "원시승률 0% → 베이스라인 대비 -10%p" in msg4)
-check("W4 caveat 병기(판정 기준 상이 + 하락장)",
-      "판정 기준이 서로 다릅니다" in msg4 and "하락장" in msg4)
-check("W4 합의 표시(랭킹 행)", "🤝 합의 참여 1/7회(14%)" in msg4)
-check("W4 합의 표시(승률축 행도)", "🤝 합의 참여 3/4회(75%)" in msg4)
-check("W4 클러스터 1개짜리는 합의 표시 생략", "0/1회" not in msg4)
-check("W4 정렬 키 불변 — 합의율 높은 쪽이 순위를 못 밀어냄(E_LB 내림차순 유지)",
-      msg4.index("@GoodAuthor") < msg4.index("@BadAuthor")
-      and "E_LB +1.00" in msg4 and "E_LB -1.00" in msg4)
-check("W4 표본부족 작성자는 초과 적중률 섹션에 미등장(표본부족 안내에만 1회)",
-      msg4.count("@NewAuthor") == 1)
+check("V1 헤더 표본 = 알림/종결", "📦 표본: 알림 10건 · 종결 12건" in msg_v)
+check("V2 알림 수 감소 ▼ / 종결 수 동일 →",
+      "알림 수  10건 (14건 → ▼)" in msg_v and "종결 수  12건 (12건 → →)" in msg_v)
+check("V3 승률 상승 ▲ (50% vs 25%)", "승률    50% (25% → ▲)" in msg_v)
+check("V4 PF·평균 R 도 지난주 대비", "PF      1.00 (0.33 → ▲)" in msg_v
+      and "평균 R  +0.00 (-0.50 → ▲)" in msg_v)
+check("V5 R 표본 수 명시", "R 산출 가능 표본 12건 기준" in msg_v)
 
-# W5: pooled 표본 미달(n=19 < 20) → 섹션 통째로 생략
-msg5 = telegram.render_weekly_report(rows_by_author, now=now,
-                                     baseline={"n": 19, "positive": 2, "rate": 2 / 19},
-                                     confluence=CONF, baseline_min_n=20, **RK)
-check("W5 표본 미달 시 베이스라인 섹션 생략", "초과 적중률" not in msg5)
-check("W5 그래도 합의 표시는 유지", "🤝 합의 참여" in msg5)
+# V6: 표본 n<10 이면 화살표 생략 + (n=…, 참고)
+CUR_THIN = weekly.summary([lv("hit", r=1.0)] * 3 + [lv("miss", r=-1.0)] * 2, alerts=2)
+msg_thin = telegram.render_weekly_report(rows_by_author, now=now, current=CUR_THIN,
+                                         previous=PRV, min_n=10, **RK)
+check("V6 소표본 지표는 화살표 생략 + '참고' 표기",
+      "승률    60% (n=5, 참고)" in msg_thin and "PF      1.50 (n=5, 참고)" in msg_thin)
+check("V6b 건수(알림/종결)는 표본 규칙과 무관하게 화살표 유지",
+      "알림 수  2건 (14건 → ▼)" in msg_thin and "종결 수  5건 (12건 → ▼)" in msg_thin)
 
-# W6: 미주입(기존 호출부 호환) → 두 기능 모두 조용히 빠지고 나머지는 동일
-msg6 = telegram.render_weekly_report(rows_by_author, now=now, **RK)
-check("W6 미주입 시 두 섹션 없음", "초과 적중률" not in msg6 and "🤝" not in msg6)
-check("W6 기존 렌더 결과 불변", msg6 == msg)
+# V7: 지난주 데이터가 없으면 '지난주 없음'
+msg_nop = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                        previous=None, **RK)
+check("V7 지난주 미주입 → '지난주 없음'", "알림 수  10건 (지난주 없음)" in msg_nop)
 
-# W7: raw_records 주입 경로(운영 경로) — rows 카운트가 아니라 DB 집계값을 쓴다
-msg7 = telegram.render_weekly_report(
-    {"GoodAuthor": rows_of("hit", 1.0, 5)}, now=now, baseline=BASE,
-    raw_records={"GoodAuthor": {"wins": 3, "losses": 7}}, baseline_min_n=20, **RK)
-check("W7 raw_records 우선 사용(3승7패=30%)", "원시승률 30%" in msg7)
+# ── O: ③ 관찰 3줄 (선택 규칙) ─────────────────────────────────────────
+# (c) 거래대금 순위: 1-20위 20건 중 4승(20%) vs 100위 밖 20건 중 16승(80%) → 격차 60%p
+POOL_RANK = ([lv("hit", vrank=5)] * 4 + [lv("miss", vrank=5)] * 16
+             + [lv("hit", vrank=150)] * 16 + [lv("miss", vrank=150)] * 4)
+# (b) 지연: <30분 12건 중 6승(50%) vs 30분+ 12건 중 6승(50%) → 격차 0%p(후보는 되나 꼴찌)
+POOL_DELAY = ([lv("hit", collected=now - 2 * DAY - 60)] * 6
+              + [lv("miss", collected=now - 2 * DAY - 60)] * 6
+              + [lv("hit", collected=now - 2 * DAY - 7200)] * 6
+              + [lv("miss", collected=now - 2 * DAY - 7200)] * 6)
+obs = weekly.observations([], [], POOL_RANK + POOL_DELAY)
+check("O1 격차 큰 순으로 선택 — 거래대금(60%p)이 지연(0%p)보다 앞",
+      obs and obs[0]["kind"] == "volume_rank" and round(obs[0]["gap"]) == 60)
+check("O2 최대 3개", len(weekly.observations([], [], POOL_RANK + POOL_DELAY)) <= 3)
 
-# ── C: 등급 캘리브레이션 섹션 (2026-07-27 기획 카드 #26) ──────────────────
-# 수학 검증은 scripts/test_ranking.py(G 섹션) 담당 — 여기선 렌더 통합만 본다.
+msg_o = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                      observations=obs, pool_n=len(POOL_RANK), **RK)
+check("O3 관찰 줄에 n 병기 + 격차 표기",
+      "거래대금 1-20위 승률 20%(n=20)" in msg_o and "100위 밖 80%(n=20)" in msg_o
+      and "격차 60%p" in msg_o)
+
+# O4: 한쪽 그룹 n<10 → 후보 자체가 안 만들어진다(침묵)
+POOL_SMALL = [lv("hit", vrank=5)] * 4 + [lv("miss", vrank=150)] * 20
+check("O4 한쪽 n<10 이면 후보 제외",
+      not any(c["kind"] == "volume_rank"
+              for c in weekly.observations([], [], POOL_SMALL)))
+msg_o4 = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                       observations=[], pool_n=24, **RK)
+check("O4b 후보 0 → '특이 관찰 없음(표본 n)'", "특이 관찰 없음 (표본 n=24)" in msg_o4)
+
+# O5: (a) 판정 사유 구성 변화 — ±10%p 미만이면 후보 아님
+MIX_CUR = [lv("hit")] * 5 + [lv("miss")] * 5
+MIX_PRV_SAME = [lv("hit")] * 5 + [lv("miss")] * 5
+MIX_PRV_DIFF = [lv("hit")] * 9 + [lv("miss")] * 1
+check("O5 구성 변화 10%p 미만이면 침묵",
+      not any(c["kind"] == "outcome_mix"
+              for c in weekly.observations(MIX_CUR, MIX_PRV_SAME, [])))
+check("O5b 40%p 변화면 후보 채택(양쪽 n≥10)",
+      any(c["kind"] == "outcome_mix"
+          for c in weekly.observations(MIX_CUR, MIX_PRV_DIFF, [])))
+check("O5c 지난주 n<10 이면 비교 불가 → 침묵",
+      not any(c["kind"] == "outcome_mix"
+              for c in weekly.observations(MIX_CUR, MIX_PRV_DIFF[:5], [])))
+
+# O6: (d) 작성자 극단 — 종결 n≥5 자격자 2명 이상일 때만
+AUTH_POOL = ([lv("hit", author="alice")] * 5 + [lv("miss", author="bob")] * 5
+             + [lv("hit", author="solo")] * 2)
+a_obs = [c for c in weekly.observations(AUTH_POOL, [], []) if c["kind"] == "authors"]
+check("O6 작성자 최고/최저(n≥5 자격자만, 격차 100%p)",
+      a_obs and a_obs[0]["top"] == "alice" and a_obs[0]["low"] == "bob"
+      and round(a_obs[0]["gap"]) == 100)
+check("O6b 자격자 1명이면 후보 아님",
+      not any(c["kind"] == "authors"
+              for c in weekly.observations([lv("hit", author="alice")] * 5, [], [])))
+
+# O7: (e) 보유시간 이상치 — 상대편차 50% 미만이면 침묵
+HOLD_FLAT = ([lv("hit", resolved=now - 2 * DAY + 24 * 3600)] * 10
+             + [lv("miss", resolved=now - 2 * DAY + 26 * 3600)] * 10)
+HOLD_OUT = ([lv("hit", resolved=now - 2 * DAY + 10 * 3600)] * 10
+            + [lv("miss", resolved=now - 2 * DAY + 160 * 3600)] * 10)
+check("O7 편차 작으면 후보 아님",
+      not any(c["kind"] == "hold_outlier"
+              for c in weekly.observations([], [], HOLD_FLAT)))
+check("O7b 큰 이상치는 후보 채택",
+      any(c["kind"] == "hold_outlier"
+          for c in weekly.observations([], [], HOLD_OUT)))
+
+# ── M: ④ 다음 판단 (마일스톤) ─────────────────────────────────────────
+MS = [dict(weekly.milestone(42, 150, per_day=3.0), label="v6 지연감점 평가"),
+      dict(weekly.milestone(50, 50, per_day=2.0), label="MFE/MAE e-ratio")]
+msg_m = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                      milestones=MS, **RK)
+check("M1 진행률 + 최근 30일 속도 기반 예상일",
+      "v6 지연감점 평가: 42/150건 (예상 36일)" in msg_m)
+check("M2 도달 완료는 ✅", "MFE/MAE e-ratio: 50/50건 (도달 ✅)" in msg_m)
+check("M3 카운트 정의를 본문에 명시(단순 정의)",
+      "종결 = 기준시각 이후 터치 + outcome 기록" in msg_m)
+check("M4 속도 0 이면 예상일 생략",
+      weekly.milestone(10, 150, per_day=0)["eta_days"] is None)
+
+# ── S: ⑤ 판정 사유별 집계 ─────────────────────────────────────────────
+STAT_ROWS = ([lv("hit", resolve=1100.0)] * 10                      # +10%
+             + [lv("miss", resolve=950.0)] * 6                     # -5%
+             + [lv("timeboxed_loss", resolve=2000.0)] * 2          # +100% → 이상치 제외
+             + [lv("hit", direction="short", resolve=900.0)] * 2)  # 숏 -10% → +10%
+ST = weekly.outcome_stats(STAT_ROWS)
+msg_s = telegram.render_weekly_report(rows_by_author, now=now, current=CUR,
+                                      outcome_stats=ST, pool_days=28, **RK)
+check("S1 헤더(최근 28일, 종결 n)", "📋 <b>판정 사유별</b> (최근 28일, 종결 20건)" in msg_s)
+check("S2 사유별 n·비중·평균 보유·평균 실현%",
+      "적중(TP) 12건(60%) · 보유 24h · 실현 +10.0%" in msg_s)
+check("S3 |50%| 초과 이상치는 실현% 표본에서 제외(행은 남음)",
+      "만료·손실 2건(10%) · 보유 24h · 실현 -" in msg_s)
+check("S4 숏은 부호 반전(−10% 가격 → +10% 실현)",
+      round(weekly.realized_pct(lv("hit", direction="short", resolve=900.0)), 6) == 10.0)
+check("S5 표본 0 사유는 행 자체 생략", "만료·수익" not in msg_s)
+check("S6 미주입이면 섹션 생략",
+      "판정 사유별" not in telegram.render_weekly_report(rows_by_author, now=now, **RK))
+
+# ── C: ⑦ 등급 캘리브레이션 (1줄/등급 압축, 최신 grade_ver 만) ──────────
 from analytics import calibration  # noqa: E402
 
 CAL_ROWS = ([("S", "miss", 0)] * 4 + [("A", "miss", 0)] * 4
             + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 7 + [("D", "hit", 0)] * 6)
 CAL = calibration.calibrate_grades(CAL_ROWS)
-msg8 = telegram.render_weekly_report(rows_by_author, now=now,
-                                     calibration_result=CAL, **RK)
-print(msg8)
-print()
+msg_c = telegram.render_weekly_report(rows_by_author, now=now,
+                                      calibration_result=CAL, calibration_ver="v6", **RK)
+check("C1 헤더에 산식 버전 + 종결 표본",
+      "🎚️ <b>등급 캘리브레이션</b> (v6 표본, TP1 도달률, 종결 26건)" in msg_c)
+check("C2 1줄/등급 (등급·도달률·CI)",
+      "S  0% (0/4)  CI 0%~49%" in msg_c and "C  42% (5/12)  CI 19%~68%" in msg_c)
+check("C3 표본 없는 등급(B)은 행 생략", "\n  B  " not in msg_c)
+check("C4 소표본 등급 ⚠️ 표기 (S·A 2건)", msg_c.count("⚠️n&lt;5") == 2)
+check("C5 단조성 위반은 1줄 요약", "단조성 위반 1건" in msg_c
+      and "D 100% &gt; C 42%, CI 겹침" in msg_c and "표기 전용" in msg_c)
+check("C6 HTML 안전 — 날 '<'/'>' 없음", "n<5" not in msg_c and "% > " not in msg_c)
+check("C7 구 산식 병기 제거(legacy 주입해도 출력 없음)",
+      "구 산식" not in telegram.render_weekly_report(
+          rows_by_author, now=now, calibration_result=CAL,
+          calibration_legacy=calibration.calibrate_grades([("S", "hit", 0)] * 9), **RK))
 
-check("C1 섹션 헤더(종결 26건) + 신뢰수준 문구", "🎚️ 등급 캘리브레이션" in msg8
-      and "TP1 도달률" in msg8 and "종결 26건" in msg8
-      and "CI = 95% Wilson score 구간" in msg8)
-check("C2 등급 행 + Wilson CI 표기", "S  0% (0/4)" in msg8 and "C  42% (5/12)" in msg8
-      and "D  100% (6/6)" in msg8 and "CI 19%~68%" in msg8 and "CI 61%~100%" in msg8)
-check("C3 표본 없는 등급(B)은 행 자체 생략", "  B  " not in msg8)
-check("C4 소표본 등급에 '참고용' 병기 (S·A 만)",
-      msg8.count("표본 부족(n&lt;5), 참고용") == 2)
-check("C5 단조성 위반 표기 + CI 겹침 라벨",
-      "단조성 위반 1건" in msg8 and "D 100% &gt; C 42%" in msg8
-      and "CI 겹침 — 약한 신호" in msg8)
-check("C6 산식 불변 명시(재검토 '신호'일 뿐)",
-      "배점 재검토" in msg8 and "등급 산식·알림 필터는 이 리포트로 바뀌지 않습니다" in msg8)
-check("C7 E_LB 와 다른 축임을 명시", "E_LB(작성자 실력 축)와는 <b>다른 축</b>" in msg8)
-check("C8 HTML 안전 — 날 '<'/'>' 없음(parse_mode=HTML 400 방지)",
-      "n<5" not in msg8 and "% > " not in msg8)
-check("C9 랭킹 섹션은 그대로 (캘리브레이션은 정렬·수식 무관)",
-      "E_LB +1.00" in msg8 and msg8.index("@GoodAuthor") < msg8.index("@BadAuthor"))
-
-# C10: 단조 유지 케이스 → ✅ 문구, 위반 문구 없음
 CAL_OK = calibration.calibrate_grades(
     [("S", "hit", 0)] * 9 + [("S", "miss", 0)]
     + [("C", "hit", 0)] * 5 + [("C", "miss", 0)] * 5
     + [("D", "hit", 0)] + [("D", "miss", 0)] * 9)
-msg9 = telegram.render_weekly_report(rows_by_author, now=now,
-                                     calibration_result=CAL_OK, **RK)
-check("C10 단조 유지 시 ✅ 문구", "✅ 단조성 유지" in msg9 and "단조성 위반" not in msg9)
-
-# C11: 판정 가능한 등급이 2개 미만 → 보류 문구
+check("C8 단조 유지 시 ✅ 한 줄",
+      "✅ 단조성 유지" in telegram.render_weekly_report(
+          rows_by_author, now=now, calibration_result=CAL_OK, **RK))
 CAL_THIN = calibration.calibrate_grades([("C", "hit", 0)] * 3 + [("D", "miss", 0)] * 2)
-msg10 = telegram.render_weekly_report(rows_by_author, now=now,
-                                      calibration_result=CAL_THIN, **RK)
-check("C11 판정 보류 문구", "단조성 판정 보류" in msg10 and "단조성 위반" not in msg10)
-
-# C12: 종결 표본 0 → 섹션 통째 생략 (빈 표를 띄우지 않는다)
-CAL_EMPTY = calibration.calibrate_grades([])
-check("C12 표본 0 시 섹션 생략",
+check("C9 판정 보류 문구",
+      "단조성 판정 보류" in telegram.render_weekly_report(
+          rows_by_author, now=now, calibration_result=CAL_THIN, **RK))
+check("C10 표본 0 이면 섹션 통째 생략",
       "등급 캘리브레이션" not in telegram.render_weekly_report(
-          rows_by_author, now=now, calibration_result=CAL_EMPTY, **RK))
+          rows_by_author, now=now,
+          calibration_result=calibration.calibrate_grades([]), **RK))
+check("C11 작성자 표본 0 에서도 등급 축은 독립적으로 표시",
+      "🎚️" in telegram.render_weekly_report({}, now=now, calibration_result=CAL, **RK))
 
-# C13: 미주입(기존 호출부) → 섹션만 빠지고 나머지 출력은 완전히 동일
-check("C13 미주입 시 기존 렌더 불변", "등급 캘리브레이션" not in msg6 and msg6 == msg)
-
-# C14: 작성자 표본이 하나도 없어도(빈 DB 경로) 등급 축은 표시된다 — 독립 축이므로
-msg11 = telegram.render_weekly_report({}, now=now, calibration_result=CAL, **RK)
-check("C14 빈 작성자 표본에서도 등급 축 표시",
-      "아직 표본 부족" in msg11 and "🎚️ 등급 캘리브레이션" in msg11)
-
-# ── RC: 역신호 확정 구분 한 줄 (S9, 2026-08-01 — 표시 전용, 정렬·수식 불변) ──
+# ── RC: 역신호 확정 구분 (S9, 표시 전용) ──────────────────────────────
 msg_rc = telegram.render_weekly_report(rows_by_author, now=now,
                                        reverse_confirmed={"BadAuthor"}, **RK)
-check("RC1 역신호 확정 한 줄 표기(필터 무변경 명시 + HTML 안전 &lt;)",
+check("RC1 역신호 확정 한 줄(필터 무변경 명시 + HTML 안전 &lt;)",
       "🔻 역신호 확정 1명" in msg_rc and "@BadAuthor" in msg_rc
       and "알림 필터 무변경" in msg_rc and "E_LB&lt;0" in msg_rc)
-check("RC2 미주입 시 확정 줄 없음(기존 렌더 완전 불변)",
-      "역신호 확정" not in msg and msg6 == msg)
+check("RC2 미주입 시 확정 줄 없음", "역신호 확정" not in msg)
+check("RC3 작성자 표본 0 에서도 확정 줄은 유지(유일 노출 지점)",
+      "역신호 확정 1명" in telegram.render_weekly_report(
+          {}, now=now, reverse_confirmed={"BadAuthor"}, **RK))
 
-# ── WD: R-멀티플 분포 + 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4) ──
-# 수학 검증은 scripts/test_ranking.py(DI 섹션) 담당 — 여기선 렌더 통합만 본다.
+# ── X: 제거된 섹션은 출력에 없다 (하위호환 인자는 받되 무시) ────────────
 from analytics import distribution  # noqa: E402
 
 R_ROWS = [(-0.5, "C"), (0.3, "C"), (1.5, "B"), (2.7, "A"), (4.0, "S")]
-DIST = distribution.r_multiple_distribution(R_ROWS)
-DIST_BY_G = distribution.r_distribution_by_grade(R_ROWS)
-msg_d1 = telegram.render_weekly_report(rows_by_author, now=now,
-                                       r_distribution=DIST,
-                                       r_distribution_by_grade=DIST_BY_G, **RK)
-check("WD1 헤더 + 평균R", "📊 R-멀티플 분포 (종결 5건, R 트랙 — R 산출 가능한 표본만)" in msg_d1
-      and "평균 R = +1.60" in msg_d1)
-check("WD2 구간별 바+건수", "-1~0 █ 1건" in msg_d1 and "0~1 █ 1건" in msg_d1
-      and "1~2 █ 1건" in msg_d1 and "2~3 █ 1건" in msg_d1 and "3+ █ 1건" in msg_d1)
-check("WD3 등급별 평균 병기 + 표본0 등급 생략",
-      "S 평균+4.00(n=1)" in msg_d1 and "C 평균-0.10(n=2)" in msg_d1 and "D 평균" not in msg_d1)
+msg_x = telegram.render_weekly_report(
+    rows_by_author, now=now,
+    baseline={"n": 29, "positive": 3, "rate": 3 / 29},
+    raw_records={"GoodAuthor": {"wins": 3, "losses": 7}}, baseline_min_n=20,
+    confluence={"GoodAuthor": {"multi": 1, "total": 7, "cr": 1 / 7}},
+    confluence_min_clusters=2,
+    r_distribution=distribution.r_multiple_distribution(R_ROWS),
+    r_distribution_by_grade=distribution.r_distribution_by_grade(R_ROWS),
+    holding_period=distribution.holding_period_distribution(
+        [dict(touched_at=0, resolved_at=10 * 3600, outcome="hit")]),
+    regime_heatmap={"cells": {("S", "trend"): {"n": 8, "hit": 0.75, "mfe": 12.0}}},
+    **RK)
+check("X1 🎲 초과 적중률 제거", "초과 적중률" not in msg_x)
+check("X2 🤝 합의 줄 제거", "🤝" not in msg_x)
+check("X3 📊 R-멀티플 분포 제거", "R-멀티플 분포" not in msg_x)
+check("X4 ⏱️ 보유기간 분포 제거", "보유기간 분포" not in msg_x)
+check("X5 🌡️ 등급×장세 히트맵 제거", "히트맵" not in msg_x and "🌡️" not in msg_x)
+check("X6 구 인자를 넘겨도 예외 없이 기존 렌더와 동일", msg_x == msg)
 
-HOLD_ROWS = [dict(touched_at=0, resolved_at=10 * 3600, outcome="hit"),
-            dict(touched_at=0, resolved_at=20 * 3600, outcome="miss"),
-            dict(touched_at=0, resolved_at=50 * 3600, outcome="miss"),
-            dict(touched_at=0, resolved_at=100 * 3600, outcome="hit")]
-HOLD = distribution.holding_period_distribution(HOLD_ROWS)
-msg_d2 = telegram.render_weekly_report(rows_by_author, now=now, holding_period=HOLD, **RK)
-check("WD4 보유기간 헤더+구간별 hit율",
-      "⏱️ 보유기간 분포 (터치→종결 경과, 종결 4건)" in msg_d2
-      and "24h 이내" in msg_d2 and "hit 50%" in msg_d2
-      and "24~72h" in msg_d2 and "hit 0%" in msg_d2
-      and "72h+" in msg_d2 and "hit 100%" in msg_d2)
-check("WD5 표시전용 문구", "표시 전용 — 알림 필터에 영향 없음" in msg_d2)
-
-HOLD_SPARSE = distribution.holding_period_distribution(
-    [dict(touched_at=0, resolved_at=5 * 3600, outcome="hit")])
-msg_d3 = telegram.render_weekly_report(rows_by_author, now=now, holding_period=HOLD_SPARSE, **RK)
-check("WD6 표본 없는 구간 행 생략", "24~72h" not in msg_d3 and "72h+" not in msg_d3
-      and "24h 이내" in msg_d3)
-
-check("WD7 미주입 시 두 섹션 없음 + 기존 렌더 완전 불변",
-      "R-멀티플 분포" not in msg6 and "보유기간 분포" not in msg6 and msg6 == msg)
-
-DIST_EMPTY = distribution.r_multiple_distribution([])
-HOLD_EMPTY = distribution.holding_period_distribution([])
-check("WD8 표본 0 시 섹션 통째 생략",
-      "R-멀티플 분포" not in telegram.render_weekly_report(
-          rows_by_author, now=now, r_distribution=DIST_EMPTY, **RK)
-      and "보유기간 분포" not in telegram.render_weekly_report(
-          rows_by_author, now=now, holding_period=HOLD_EMPTY, **RK))
-
-check("WD9 빈 작성자 표본에서도 독립 축으로 표시(등급 캘리브레이션과 동일 원칙)",
-      "아직 표본 부족" in telegram.render_weekly_report({}, now=now, r_distribution=DIST, **RK)
-      and "📊 R-멀티플 분포" in telegram.render_weekly_report({}, now=now, r_distribution=DIST, **RK))
+# ── L: 길이 예산 ──────────────────────────────────────────────────────
+BIG = {f"Author{i:03d}": rows_of("hit", 1.0 + i * 0.01, 6) for i in range(120)}
+msg_big = telegram.render_weekly_report(BIG, now=now, current=CUR, previous=PRV,
+                                        observations=obs, pool_n=40,
+                                        outcome_stats=ST, calibration_result=CAL,
+                                        calibration_ver="v6", milestones=MS,
+                                        top_authors=200, max_chars=4000, **RK)
+check("L1 4,000자 초과분은 절단", len(msg_big) <= 4000)
+check("L2 절단 사실을 한 줄로 알림", "길이 제한으로 이하 생략" in msg_big)
+check("L3 절단은 줄 경계에서만(태그 중간 절단 금지)",
+      msg_big.count("<b>") == msg_big.count("</b>"))
+msg_fit = telegram.render_weekly_report(rows_by_author, now=now, max_chars=4000, **RK)
+check("L4 예산 이내면 그대로", "길이 제한" not in msg_fit)
+check("L5 운영 설정 기본값(3,500자) 이내 — 표준 구성",
+      len(telegram.render_weekly_report(
+          rows_by_author, now=now, current=CUR, previous=PRV, observations=obs,
+          pool_n=40, outcome_stats=ST, calibration_result=CAL,
+          calibration_ver="v6", milestones=MS, **RK)) <= 3500)
 
 # ── A: 주간 감사 덤프 + raw_text 보존정책 (2026-07-27 기획 카드 #4) ──────────
 # storage/audit_dump.py + db.prune_raw_text. 알림·필터·등급과 무관한 기록 전용 기능이라
@@ -503,6 +622,5 @@ for _d in (A_DIR, G_DIR, N_DIR):
     shutil.rmtree(_d, ignore_errors=True)
 
 print()
-n_checks = 75
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")
 sys.exit(0 if ok else 1)

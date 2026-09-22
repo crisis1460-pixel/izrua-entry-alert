@@ -14,6 +14,7 @@
 """
 
 import logging
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -25,14 +26,60 @@ try:
 except Exception:
     pass
 
-from analytics import clustering, distribution
+from analytics import calibration, weekly
 from config import settings
 from notify import telegram
-from scripts.show_status import _calibration_pair
 from storage import audit_dump, db
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("alert.weekly_report")
+
+DAY = 86400.0
+
+# 캘리브레이션 표본 우선순위 (2026-09-22 R4): 최신 산식부터 보고, 종결 표본이 0 이면
+# 한 단계 아래 버전으로 내려간다. 구 산식 병기는 제거 — 신·구 등급은 의미가 달라
+# 한 리포트에 두 표를 놓으면 읽는 사람이 어느 쪽을 보는지 모른다.
+_CAL_VER_FALLBACK = ("v6", "v5")
+
+
+def _calibration_latest(conn):
+    """(결과, 사용한 버전). 표본이 있는 첫 버전을 쓴다. 구세대 스키마면 (None, None)."""
+    vers = [settings.get("grade_formula_ver")] + [
+        v for v in _CAL_VER_FALLBACK if v != settings.get("grade_formula_ver")]
+    for ver in vers:
+        if not ver:
+            continue
+        try:
+            rows = db.get_weekly_calibration_rows(conn, ver)
+        except sqlite3.OperationalError:
+            return None, None
+        if rows:
+            return calibration.calibrate_grades(rows), ver
+    return None, None
+
+
+def _milestones(conn, now: float) -> list:
+    """④ 다음 판단 — 표본 도달 마일스톤 2개(고정).
+
+    카운트 정의는 의도적으로 단순하다: `touched_at >= 기준시각 AND outcome IS NOT
+    NULL`. "공정 종결"(tp_only 를 TP1 대칭 가상손절로 재판정한 표본)은 정의가
+    복잡해 리포트에 싣기 어렵고, 여기서 필요한 건 진행률뿐이다.
+    속도는 최근 30일 실적(같은 정의)으로 잡는다."""
+    out = []
+    for key, label, target in (
+        ("grade_v6_since", "v6 지연감점 평가", settings.get("weekly_report_milestone_v6")),
+        ("mfe_mae_fixed_since", "MFE/MAE e-ratio", settings.get("weekly_report_milestone_mfe")),
+    ):
+        since = db.meta_float(conn, key)
+        if not since:
+            continue
+        count = db.count_resolved_touches_since(conn, since)
+        recent = db.count_resolved_touches_since(conn, max(since, now - 30 * DAY))
+        span_days = max(min(30.0, (now - since) / DAY), 1.0)
+        m = weekly.milestone(count, target, per_day=recent / span_days)
+        m["label"] = label
+        out.append(m)
+    return out
 
 
 def send_report(db_path: str = None, now: float = None) -> bool:
@@ -45,59 +92,75 @@ def send_report(db_path: str = None, now: float = None) -> bool:
     now = time.time() if now is None else now
     db.init_db(db_path)
 
-    with db.connect(db_path) as conn:
-        authors = db.list_authors_with_outcomes(conn)
-        rows_by_author = {a: db.get_author_outcome_rows(conn, a) for a in authors}
-        # 초과 적중률 베이스라인 (2026-07-26 카드 B안): 이미 기록 중인 ret_24h 재사용
-        # — 추가 API 호출 0. 표본 미달이면 렌더러가 섹션을 통째로 생략한다.
-        baseline = clustering.baseline_positive_rate(db.get_ret24_values(conn))
-        raw_records = db.get_author_raw_record(conn)
-        # 합의(confluence): 터치 이력 전체에 price_check 와 동일한 병합 규칙을 재적용.
-        # 표시 전용 — E_LB·정렬 키에는 들어가지 않는다.
-        confluence = clustering.confluence_by_author(
-            db.get_touched_levels_for_clusters(conn),
-            settings.get("cluster_band_pct"),
-            window_sec=settings.get("confluence_window_hours") * 3600,
-        )
-        # 등급 캘리브레이션(기획 카드 #26): 등급별 실측 TP1 도달률 + Wilson CI.
-        # 순수 로컬 연산(외부 API 0). SQL 은 show_status 에 한 벌만 둔다.
-        # 2026-08-01 S10 D4: 산식 버전 분리 집계 — v3 표본이 기본 표,
-        # 구버전(grade_ver NULL) 표본은 "구 산식(참고)" 로 병기만 한다.
-        calibration_result, calibration_legacy = _calibration_pair(conn)
-        # 역신호 확정 구분(S9, 표시 전용) — run_cycle 스냅샷 훅이 meta 에 기록한
-        # 확정 상태를 안내 한 줄로만 병기한다(정렬·수식·필터 불변).
-        reverse_confirmed = db.get_reverse_confirmed_authors(conn)
-        # R-멀티플 분포 + 보유기간 분포 (2026-08-01 내부기능강화 리서치 영역3·4).
-        # 둘 다 순수 조회 + analytics.distribution 손계산 — 외부 API 호출 0, 표시 전용.
-        r_rows = db.get_closed_r_rows(conn)
-        r_dist = distribution.r_multiple_distribution(r_rows)
-        r_dist_by_grade = distribution.r_distribution_by_grade(r_rows)
-        holding = distribution.holding_period_distribution(db.get_closed_holding_rows(conn))
-        # 등급×장세 히트맵 (2026-08-17 #5, 표시 전용) — touch_adx14/touch_bb_width_pctile
-        # 축적이 시작된 후에만 셀이 채워짐. 각 셀 n<5 이면 렌더러가 자동 스킵.
-        regime_heatmap = db.get_regime_heatmap(conn)
-
-    total_rows = sum(len(rows) for rows in rows_by_author.values())
-    text = telegram.render_weekly_report(rows_by_author, now=now, baseline=baseline,
-                                         raw_records=raw_records, confluence=confluence,
-                                         calibration_result=calibration_result,
-                                         calibration_legacy=calibration_legacy,
-                                         reverse_confirmed=reverse_confirmed,
-                                         r_distribution=r_dist,
-                                         r_distribution_by_grade=r_dist_by_grade,
-                                         holding_period=holding,
-                                         regime_heatmap=regime_heatmap)
+    text, meta = build_report(db_path, now)
     ok = telegram.send(text)
 
     logger.info(
-        "주간 리포트 %s: 작성자 %d명 / 종결 표본 %d건 / 베이스라인 %s / 합의 작성자 %d명",
+        "주간 리포트 %s: 작성자 %d명 / 이번 주 종결 %d건 / 알림 %s건 / 길이 %d자",
         "발송 완료" if ok else "발송 실패(백오프 후 재시도)",
-        len(rows_by_author), total_rows,
-        f"{baseline['rate'] * 100:.0f}%(n={baseline['n']})" if baseline["rate"] is not None
-        else "표본없음",
-        len(confluence),
+        meta["authors"], meta["closed"], meta["alerts"], len(text),
     )
     return bool(ok)
+
+
+def _collect(conn, now: float, pool_days: float) -> dict:
+    """리포트 조립에 필요한 원천 데이터 일괄 조회 — **SELECT 만 한다**."""
+    authors = db.list_authors_with_outcomes(conn)
+    wk_start = now - 7 * DAY
+    pv_start = now - 14 * DAY
+    return {
+        "rows_by_author": {a: db.get_author_outcome_rows(conn, a) for a in authors},
+        # 등급 캘리브레이션 — grade_ver 최신 표본만(구 산식 병기 제거, 2026-09-22 R4)
+        "calibration": _calibration_latest(conn),
+        # 역신호 확정 구분(S9, 표시 전용) — run_cycle 스냅샷 훅이 meta 에 기록한
+        # 확정 상태를 안내 한 줄로만 병기한다(정렬·수식·필터 불변).
+        "reverse_confirmed": db.get_reverse_confirmed_authors(conn),
+        # ── v2 창 데이터 ──
+        "wk_start": wk_start,
+        "cur_rows": db.get_resolved_rows_between(conn, wk_start, now),
+        "prev_rows": db.get_resolved_rows_between(conn, pv_start, wk_start),
+        "pool_rows": db.get_resolved_rows_between(conn, now - pool_days * DAY, now),
+        "cur_alerts": db.count_touch_alerts_between(conn, wk_start, now),
+        "prev_alerts": db.count_touch_alerts_between(conn, pv_start, wk_start),
+        "milestones": _milestones(conn, now),
+    }
+
+
+def build_report(db_path: str = None, now: float = None, conn=None) -> tuple:
+    """(리포트 텍스트, 로그용 메타) — 발송은 하지 않는다. DB 는 **읽기만** 한다.
+
+    send_report 에서 분리한 이유: 샘플 렌더링·미리보기가 send() 를 거치지 않고
+    같은 조립 경로를 탈 수 있어야 한다(발송 사고 방지).
+    conn 을 주면 그 연결을 그대로 쓴다 — 운영 DB 를 `mode=ro` URI 로 열어 샘플을
+    뽑을 때 쓰는 경로다(db.connect 는 WAL 설정 등 쓰기를 동반하므로 부적합)."""
+    db_path = db_path or settings.get("db_path")
+    now = time.time() if now is None else now
+    pool_days = settings.get("weekly_report_pool_days")
+
+    if conn is not None:
+        d = _collect(conn, now, pool_days)
+    else:
+        with db.connect(db_path) as c:
+            d = _collect(c, now, pool_days)
+
+    calibration_result, calibration_ver = d["calibration"]
+    current = weekly.summary(d["cur_rows"], alerts=d["cur_alerts"])
+    previous = weekly.summary(d["prev_rows"], alerts=d["prev_alerts"])
+    obs = weekly.observations(d["cur_rows"], d["prev_rows"], d["pool_rows"],
+                              limit=settings.get("weekly_report_observations"),
+                              min_n=settings.get("weekly_report_min_n"))
+    stats = weekly.outcome_stats(d["pool_rows"])
+
+    text = telegram.render_weekly_report(
+        d["rows_by_author"], now=now,
+        calibration_result=calibration_result, calibration_ver=calibration_ver,
+        reverse_confirmed=d["reverse_confirmed"],
+        current=current, previous=previous, observations=obs,
+        pool_n=stats["total"], pool_days=pool_days,
+        milestones=d["milestones"], outcome_stats=stats,
+        period=(d["wk_start"], now))
+    return text, {"authors": len(d["rows_by_author"]), "closed": current["closed"],
+                  "alerts": d["cur_alerts"], "pool_n": stats["total"]}
 
 
 def main() -> int:

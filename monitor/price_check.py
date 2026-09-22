@@ -970,6 +970,23 @@ def run_once(now: float | None = None) -> dict:
                     _lv["touch_delay_minutes"] = (
                         max(0.0, (now - _col) / 60.0) if (touched and _col) else None)
 
+                # 거래대금 순위 감점 주입 (2026-09-22 D2/R3) — 지연 감점과 **같은
+                # 자리·같은 규약**이다(둘 다 regrade_current 의 dict 키 경로를
+                # 타므로 _rep·전 멤버 재채점보다 앞이어야 한다). 터치에만 실린다 —
+                # 예고는 아직 닿지 않아 '터치 시점 순위'가 정의되지 않는다.
+                # _volume_ranks() 는 이번 회차 캐시이고, 터치 건은 어차피 아래
+                # 억제 터치 기록 경로(m-8)에서 같은 캐시를 부르므로 **추가 API 콜 0**.
+                # 조회 실패({})는 rank None → 감점 0 (무해 폴백).
+                _vr_now = None
+                if touched:
+                    try:
+                        _vr_now = _volume_ranks().get(ticker)
+                    except Exception as e:  # noqa: BLE001 - 채점 부가입력, 경로 생존 우선
+                        logger.warning("[체크] %s 거래대금 순위 조회 실패(감점 없이 진행): %s",
+                                       coin, e)
+                for _lv in cluster:
+                    _lv["touch_volume_rank"] = _vr_now
+
                 rep = _rep(cluster, current_usd)  # 재채점 기준 대표 선정
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"
@@ -1077,6 +1094,34 @@ def run_once(now: float | None = None) -> dict:
                                         coin)
                             send_ok = False
                             obs["suppressed_tp_too_close"] += 1
+
+                # TP 없는 글(judgment_mode='timeboxed') 터치 알림 배제
+                # (2026-09-22 D1/R1 — 기획서 §2-1 D1, 사용자 결정).
+                # 실측: TP·SL 둘 다 없는 글의 실현수익 평균 -2.37% / PF 0.60
+                # (이상치 제외 n=78) — 세 판정축 중 유일한 음의 기대값이고
+                # 발송분 31건 PF 0.13. 09-13 C 컷이 이미 사실상 차단하고 있어
+                # 알림량 영향은 ≈0 이지만, 컷을 되돌리면 재발하므로 규칙으로
+                # 못박는다(그래서 v6 관찰 기간에 켜도 안전하다).
+                # 기준은 판정부(_judge_outcomes)와 **같은 유효 TP 정의**
+                # (_volume_band_tps 의 오염 방어선 entry < tp <= entry*4) —
+                # 판정이 'timeboxed' 로 떨어지는 집합과 정확히 일치시킨다.
+                # 클러스터 **전 멤버**가 무TP 일 때만 억제한다: 형제 중 하나라도
+                # TP 가 있으면 그 신호는 timeboxed 가 아니므로 종전대로 나간다.
+                # 터치 기록·판정·MFE 추적은 아래에서 그대로 수행된다 — 알림만 끈다.
+                if send_ok and kind == "touch" and cfg_get("alert_exclude_no_tp") \
+                        and not any(_has_effective_tp(l) for l in cluster):
+                    logger.info("[체크] %s TP 없는 글(timeboxed) - 알림 억제(no_tp)", coin)
+                    send_ok = False
+                    summary["suppressed_no_tp"] = summary.get("suppressed_no_tp", 0) + 1
+                    # 무음 기록 (2026-09-13 A안 패턴) — 사건 자체는 남긴다.
+                    # kind 를 'touch' 가 아니라 'touch_no_tp' 로 두는 이유: 'touch'
+                    # 로 쓰면 일일 상한(count_alerts_today)·재발송 차단·TP 단계
+                    # 게이트(touch_alert_sent)가 전부 이 행을 '발송된 본알림'으로
+                    # 오인해, 억제된 신호가 같은 코인의 정상 알림 슬롯을 잡아먹는다.
+                    try:
+                        db.record_alert(conn, coin, "touch_no_tp", ids, day, now, sent=0)
+                    except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
+                        logger.warning("[체크] %s no_tp 무음 기록 실패(무시): %s", coin, e)
 
                 if send_ok and kind == "touch" and \
                         db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
@@ -2229,6 +2274,23 @@ def _volume_band_tp1(rep: dict) -> Optional[float]:
     """유효 TP1 (USD) — 없으면 None (호출부가 +10% 폴백). 규칙은 _volume_band_tps."""
     tps = _volume_band_tps(rep)
     return tps[0] if tps else None
+
+
+def _has_effective_tp(lv: dict) -> bool:
+    """이 레벨에 **판정에 쓰이는 유효 TP** 가 있는가 (2026-09-22 D1/R1).
+
+    판정부(_judge_outcomes)가 `mode = "tp_only" if tp_krw > 0 else "timeboxed"`
+    로 쓰는 것과 같은 기준이어야 한다 — 그래서 값 자체가 아니라 **오염 방어선을
+    통과한 유효 TP**(_volume_band_tps: entry < tp <= entry*4, tps_usd∪tp_usd)를
+    본다. 그 단일 출처를 쓰면 판정이 'timeboxed' 로 떨어지는 집합과 정확히
+    일치한다(ALGO tp=1.0 류 서수 오인 값은 판정에서도 '없음'이다).
+
+    진입가가 없어 sanity 를 적용할 수 없는 행은 raw tp_usd>0 로 **보수적으로**
+    판단한다 — 확신 없이 알림을 억제하지 않는다(억제는 정보 손실)."""
+    entry = lv.get("entry_usd") or 0
+    if entry <= 0:
+        return (lv.get("tp_usd") or 0) > 0
+    return bool(_volume_band_tps(lv))
 
 
 def _b_swing_pass(lv: dict) -> bool:

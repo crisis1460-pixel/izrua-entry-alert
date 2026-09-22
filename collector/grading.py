@@ -71,6 +71,17 @@ v3 그대로** 두고 상단(5천+)만 끌어올렸다 — 소형 작성자의 �
     GRADE_ORDER 에는 'S' 를 남긴다 — 과거 DB 행에 'S' 가 있어 **읽기 경로는 계속
     S 를 이해해야** 하고, 신규 발급만 중단된다.
   settings.grade_formula_ver 'v5' → 'v6' 태그 승격, 과거 행 소급 재라벨 없음(D4).
+2026-09-22 추가(D2/R3 — 거래대금 순위 감점, **플래그 OFF 배포**):
+  근거: izrua_company/plan_2026-09-22_최종버전_종합검토.md §2-1 D2 — 터치 시점
+  업비트 24h 거래대금 순위 1-20위 군 승률 49.3%·PF 1.32(n=146) vs 100위+
+  61.9%·PF 1.90(n=84). 공정 승률 35.7% vs 50.0%(LB80 42.9), tp_sl 층에서도 유지.
+  `touch_volume_rank` <= settings.grade_volume_rank_top_n(20) 이면
+  settings.grade_volume_rank_penalty(-6). score_breakdown 키 "vol_rank".
+  지연 감점과 **완전히 같은 배선** — 수집 시점엔 None(0점)이고 터치 재채점에서만
+  실린다. 산식 버전 태그는 올리지 않는다: 스위치가 OFF 라 v6 점수가 변하지 않기
+  때문(켜는 날 태그 승격 여부를 함께 판단한다).
+  ⚠️ settings.grade_volume_rank_enabled 는 **2026-10-06 까지 False** — v6 지연
+  감점 2주 관찰과 알림량 변경을 겹치지 않는다(09-13 교훈, plan §3 순서 원칙).
 """
 
 from typing import Optional, Tuple
@@ -94,6 +105,15 @@ GRADE_THRESHOLDS_DEFAULT = (("A", 55.0), ("B", 47.0), ("C", 40.0))
 # 기본값은 settings(grade_touch_delay_*)가 정본이고 아래는 설정 부재 시 폴백.
 TOUCH_DELAY_MIN_MINUTES_DEFAULT = 30
 TOUCH_DELAY_PENALTY_DEFAULT = -6
+
+# ── 거래대금 순위 감점 (2026-09-22 D2/R3 — 사용자 결정 "등급 감점 방식") ───
+# 근거: plan_2026-09-22_최종버전_종합검토.md §2-1 D2 — 터치 시점 업비트 24h
+# 거래대금 순위 1-20위 군 승률 49.3%·PF 1.32(n=146) vs 100위+ 61.9%·PF 1.90
+# (n=84). 지연 감점과 **완전히 같은 배선**: 수집 시점엔 순위가 없어 None(0점),
+# 터치 재채점에서만 실린다. 기본값 정본은 settings(grade_volume_rank_*)이고
+# 아래는 설정 부재 시 폴백. **플래그는 2026-10-06 까지 OFF**(v6 관찰과 비중첩).
+VOLUME_RANK_TOP_N_DEFAULT = 20
+VOLUME_RANK_PENALTY_DEFAULT = -6
 
 # 목표거리(TP 거리) 단일 배점표 — (상한 %, 점수). 아래→위 순서로 첫 매칭 구간 적용.
 # 음수 구간(=감점)은 모든 글에 적용, 5%+ 구간은 보상(0 포함 — v3 부터 40%+ 는
@@ -237,6 +257,38 @@ def _touch_delay_points(touch_delay_minutes: Optional[float]) -> float:
     return 0.0
 
 
+def _volume_rank_points(touch_volume_rank: Optional[int]) -> float:
+    """거래대금 순위 감점 (2026-09-22 D2/R3).
+
+    touch_volume_rank = 터치 시점 업비트 KRW 마켓 24h 거래대금 순위(1부터).
+    **수집 시점에는 값이 없으므로 None → 0** — 이 감점은 터치 재채점에서만
+    실린다(지연 감점 v6 Q1 과 동일 설계). rank <= grade_volume_rank_top_n
+    (기본 20) 이면 grade_volume_rank_penalty(기본 -6), 그 외 0. 경계는
+    프로젝트 관례대로 '이하 포함'(정확히 20위 = 감점). 순수 감점 — 이 요소로
+    등급이 오르는 경로는 없다.
+
+    스위치: settings.grade_volume_rank_enabled. **2026-10-06 까지 False** 라
+    실사용 경로에서는 항상 0 을 돌려준다(v6 지연 감점 관찰과 비중첩)."""
+    if touch_volume_rank is None:
+        return 0.0
+    try:
+        from config import settings
+        if not settings.get("grade_volume_rank_enabled"):
+            return 0.0
+        top_n = settings.get("grade_volume_rank_top_n")
+        penalty = settings.get("grade_volume_rank_penalty")
+    except Exception:  # noqa: BLE001 - 설정 조회 실패가 채점을 죽이면 안 된다
+        return 0.0
+    top_n = VOLUME_RANK_TOP_N_DEFAULT if top_n is None else top_n
+    penalty = VOLUME_RANK_PENALTY_DEFAULT if penalty is None else penalty
+    try:
+        if 0 < float(touch_volume_rank) <= float(top_n):
+            return float(penalty)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0
+
+
 def _social_sentiment_points(stwits_bullish_ratio: Optional[float]) -> float:
     """StockTwits 소셜 심리 가감점 (2026-08-17).
 
@@ -329,15 +381,20 @@ def score_breakdown(
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
     touch_delay_minutes: Optional[float] = None,
+    touch_volume_rank: Optional[int] = None,
 ) -> dict:
     """채점 요소 분해 — 각 구성 요소별 점수를 dict로 반환.
 
     calculate_grade()가 내부적으로 사용하며, 수집 시 분해 저장에도 직접 호출된다.
     키: follower, proximity, tp_dist, data, author, ladder, regime, dex,
-    onchain_addr, social, delay.  sum(values()) == 총점.
+    onchain_addr, social, delay, vol_rank.  sum(values()) == 총점.
 
     touch_delay_minutes (2026-09-22 v6 Q1): (touched_at − collected_at)/60.
     수집 시점엔 None(=0점), 터치 재채점에서만 값이 실린다.
+
+    touch_volume_rank (2026-09-22 D2/R3): 터치 시점 업비트 24h 거래대금 순위.
+    지연과 같은 규약 — 수집 시점엔 None(=0점), 터치 재채점에서만 실린다.
+    **스위치는 2026-10-06 까지 OFF** 라 그때까지는 항상 0.
 
     tp_ladder_count (2026-08-15 v5): levels.tp_ladder_count (extractor 가 센
     유효 TP 단계 수, 0 = 단일 목표/사다리 미상). None 도 0~1 과 같은 -3 —
@@ -416,6 +473,11 @@ def score_breakdown(
     # 터치 재채점에서만 값이 실린다(모듈 헤더 v6 ①).
     bd["delay"] = _touch_delay_points(touch_delay_minutes)
 
+    # 거래대금 순위 감점 (2026-09-22 D2/R3) — 지연과 같은 규약(수집 시 None → 0,
+    # 터치 재채점에서만). 스위치 OFF(2026-10-06 까지) 동안은 항상 0 이라 이 키가
+    # 늘어도 기존 총점·등급은 한 톨도 움직이지 않는다.
+    bd["vol_rank"] = _volume_rank_points(touch_volume_rank)
+
     return bd
 
 
@@ -436,6 +498,7 @@ def calculate_grade(
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
     touch_delay_minutes: Optional[float] = None,
+    touch_volume_rank: Optional[int] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """반환 (grade, score, rr). rr 은 계산 불가 시 None (판단 보류 — 필터에서 제외 금지).
 
@@ -455,7 +518,8 @@ def calculate_grade(
                          dex_liquidity_usd=dex_liquidity_usd,
                          active_addr_pctile=active_addr_pctile,
                          stwits_bullish_ratio=stwits_bullish_ratio,
-                         touch_delay_minutes=touch_delay_minutes)
+                         touch_delay_minutes=touch_delay_minutes,
+                         touch_volume_rank=touch_volume_rank)
     score = float(sum(bd.values()))
 
     rr = None
@@ -476,7 +540,7 @@ def calculate_grade_with_breakdown(
     adx14=None, bb_width_pctile=None,
     dex_buy_ratio=None, dex_liquidity_usd=None,
     active_addr_pctile=None, stwits_bullish_ratio=None,
-    touch_delay_minutes=None,
+    touch_delay_minutes=None, touch_volume_rank=None,
 ) -> tuple:
     """calculate_grade + score_breakdown 을 단일 호출로 — 수집 경로 이중계산 방지."""
     bd = score_breakdown(followers, direction, entry, stop_loss, target,
@@ -487,7 +551,8 @@ def calculate_grade_with_breakdown(
                          dex_liquidity_usd=dex_liquidity_usd,
                          active_addr_pctile=active_addr_pctile,
                          stwits_bullish_ratio=stwits_bullish_ratio,
-                         touch_delay_minutes=touch_delay_minutes)
+                         touch_delay_minutes=touch_delay_minutes,
+                         touch_volume_rank=touch_volume_rank)
     score = float(sum(bd.values()))
     rr = None
     if entry and stop_loss and target:
@@ -517,6 +582,7 @@ def regrade_current(
     active_addr_pctile: Optional[float] = None,
     stwits_bullish_ratio: Optional[float] = None,
     touch_delay_minutes: Optional[float] = None,
+    touch_volume_rank: Optional[int] = None,
 ) -> Tuple[str, float, Optional[float]]:
     """수집 시 저장된 레벨 dict에 '현재가'만 갈아끼워 재채점 (알림 필터 재평가용).
 
@@ -539,9 +605,15 @@ def regrade_current(
     touch_delay_minutes (2026-09-22 v6 Q1): 명시 인자가 우선이고, 없으면 레벨
     dict 의 동명 키를 본다 — price_check 가 클러스터 전 멤버에 한 번 심어 두면
     대표 선정(_rep)·전 멤버 재채점·rep 재채점(F3)이 전부 같은 값을 쓴다.
-    양쪽 다 없으면 None → 감점 0(수집 시점·예고 경로와 동일)."""
+    양쪽 다 없으면 None → 감점 0(수집 시점·예고 경로와 동일).
+
+    touch_volume_rank (2026-09-22 D2/R3): 지연과 **완전히 같은 2경로 규약** —
+    명시 인자 우선, 없으면 레벨 dict 의 동명 키. price_check 가 지연 주입 바로
+    옆에서 터치 클러스터 전 멤버에 심는다(예고는 None)."""
     if touch_delay_minutes is None:
         touch_delay_minutes = level.get("touch_delay_minutes")
+    if touch_volume_rank is None:
+        touch_volume_rank = level.get("touch_volume_rank")
     return calculate_grade(
         level.get("author_followers"),
         level.get("direction"),
@@ -559,4 +631,5 @@ def regrade_current(
         active_addr_pctile=active_addr_pctile,
         stwits_bullish_ratio=stwits_bullish_ratio,
         touch_delay_minutes=touch_delay_minutes,
+        touch_volume_rank=touch_volume_rank,
     )

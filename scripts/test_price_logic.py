@@ -4185,6 +4185,159 @@ check("DLY4 터치 재채점 산식 버전 도장 v6 (Fix5 클러스터 공통 k
       _dly_on["touch_grade_ver"] == "v6")
 
 # ══════════════════════════════════════════════════════════════════════
+# VR-P*: 거래대금 순위 감점 배선 (2026-09-22 D2/R3 — 플래그 OFF 배포)
+# ══════════════════════════════════════════════════════════════════════
+# 운영 기본값은 OFF(2026-10-06 이후 True)라 이 파일의 다른 블록은 전혀 영향을
+# 받지 않는다 — 그 불변성 자체가 VR-P4 의 검증 대상이다. 여기서만 켜서
+# ① 터치 회차에 회차 캐시(_volume_ranks)의 순위가 클러스터에 실제로 심기는가
+# ② 예고 회차에는 None 인가(터치 시점 순위라는 정의) ③ 저장되는 touch_score 에
+# 감점이 반영되는가 를 본다. 순위 스텁은 파일 상단 upbit.fetch_volume_ranks
+# (KRW-LINK → 5위 = top_n 20 이내) 을 그대로 쓴다 — 추가 네트워크 0.
+_vrp_prev_db = settings.SETTINGS["db_path"]
+
+
+def _vrp_run(mode, enabled, tag):
+    """LINK 레벨 1건을 터치/예고시키고 (재채점에 실린 rank 목록, 저장 행) 반환."""
+    path = f"cache/_test_vrp_{tag}.db"
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    db.init_db(path)
+    settings.SETTINGS["db_path"] = path
+    settings.SETTINGS["grade_volume_rank_enabled"] = enabled
+    t0 = time.time()
+    with db.connect(path) as conn:
+        lv = dict(coin_symbol="LINK", ticker="KRW-LINK", direction="long",
+                  entry_usd=100.0, sl_usd=94.0, tp_usd=110.0, rr=1.6,
+                  grade="B", score=60, author="VRP_auth",
+                  author_followers=50000, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=19, mcap_tier_icon="🥇",
+                  post_url="https://tv.com/vrp", post_age_minutes=600,
+                  collected_at=t0 - 7200)   # 2시간 전 — 지연 감점 구간 밖
+        lv["signal_key"] = db.make_signal_key("LINK", 100.0, "VRP_auth", "vrp")
+        db.upsert_level(conn, lv)
+    if mode == "touch":
+        fake["price"] = 100.0 * USDT_KRW * 1.001
+        fake["low"] = 99.0 * USDT_KRW
+    else:   # 예고 — 현재가는 밴드(+1%) 안이지만 저가가 진입가를 못 찍었다
+        fake["price"] = 100.0 * USDT_KRW * 1.005
+        fake["low"] = 100.2 * USDT_KRW
+    fake["candles"] = fake["high"] = None
+    seen = []
+    # price_check 는 regrade_current 를 **호출 시점에** grading 모듈에서 지연
+    # import(순환 방지) 하므로, 패치 지점은 grading 모듈 쪽이다.
+    _real_regrade = _grading_neutralize.regrade_current
+
+    def _spy(level, price, **kw):
+        seen.append(level.get("touch_volume_rank"))
+        return _real_regrade(level, price, **kw)
+
+    _grading_neutralize.regrade_current = _spy
+    try:
+        price_check.run_once(t0)
+    finally:
+        _grading_neutralize.regrade_current = _real_regrade
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT touch_score, touch_grade, status FROM levels WHERE signal_key=?",
+            (lv["signal_key"],)).fetchone()
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    return seen, row
+
+
+_vrp_seen_on, _vrp_row_on = _vrp_run("touch", True, "on")
+_vrp_seen_off, _vrp_row_off = _vrp_run("touch", False, "off")
+_vrp_seen_pv, _vrp_row_pv = _vrp_run("preview", True, "pv")
+settings.SETTINGS["grade_volume_rank_enabled"] = False   # 운영 기본값(OFF) 복구
+settings.SETTINGS["db_path"] = _vrp_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+
+check("VR-P1 터치 회차 — 재채점 시점에 회차 캐시의 순위(KRW-LINK=5)가 실려 있다",
+      bool(_vrp_seen_on) and all(r == 5 for r in _vrp_seen_on)
+      and _vrp_row_on["status"] == "touched")
+check("VR-P2 예고 회차 — 주입값 None (터치 시점 순위라는 정의, 감점 0)",
+      bool(_vrp_seen_pv) and all(r is None for r in _vrp_seen_pv)
+      and _vrp_row_pv["status"] == "previewed")
+check("VR-P3 저장 스냅샷에 감점 반영 — 같은 픽스처의 touch_score 가 정확히 -6",
+      _vrp_row_on["touch_score"] == _vrp_row_off["touch_score"] - 6)
+check("VR-P4 플래그 OFF — 순위가 실려도(5위) 점수 불변 = 기존 회귀 무영향",
+      _vrp_seen_off and all(r == 5 for r in _vrp_seen_off))
+
+# ══════════════════════════════════════════════════════════════════════
+# NOTP*: TP 없는 글(judgment_mode='timeboxed') 터치 알림 배제 (2026-09-22 D1/R1)
+# ══════════════════════════════════════════════════════════════════════
+# 실측: TP·SL 둘 다 없는 글의 실현수익 PF 0.60 — 세 판정축 중 유일한 음의
+# 기대값. 억제해도 **터치 기록·판정·MFE 추적은 그대로**(데이터는 계속 쌓인다)
+# 이고, 억제 사실은 alerts_log 에 kind='touch_no_tp' · sent=0 으로 남는다
+# (A안 무음 기록 패턴). 'touch' 가 아닌 별도 kind 인 이유는 일일 상한·재발송
+# 차단·TP 단계 게이트가 이 행을 발송된 본알림으로 오인하면 안 되기 때문.
+_notp_prev_db = settings.SETTINGS["db_path"]
+
+
+def _notp_run(tp, enabled, tag):
+    """TP 유무를 바꿔 한 번 터치시키고 (발송건수, 저장 행, alerts_log 행) 반환."""
+    path = f"cache/_test_notp_{tag}.db"
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    db.init_db(path)
+    settings.SETTINGS["db_path"] = path
+    settings.SETTINGS["alert_exclude_no_tp"] = enabled
+    t0 = time.time()
+    with db.connect(path) as conn:
+        lv = dict(coin_symbol="NOTPC", ticker="KRW-NOTPC", direction="long",
+                  entry_usd=100.0, sl_usd=None, tp_usd=tp, rr=None,
+                  grade="B", score=50, author="NOTP_auth",
+                  author_followers=50000, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=80, mcap_tier_icon="🥈",
+                  post_url="https://tv.com/notp", post_age_minutes=600,
+                  collected_at=t0 - 7200)
+        lv["signal_key"] = db.make_signal_key("NOTPC", 100.0, "NOTP_auth", tag)
+        db.upsert_level(conn, lv)
+    fake["price"] = 100.0 * USDT_KRW * 1.001
+    fake["low"] = 99.0 * USDT_KRW
+    fake["candles"] = fake["high"] = None
+    _before = len(sent_messages)
+    price_check.run_once(t0)
+    _n_sent = len(sent_messages) - _before
+    with db.connect(path) as conn:
+        row = conn.execute(
+            "SELECT status, touched_at, touch_score FROM levels WHERE signal_key=?",
+            (lv["signal_key"],)).fetchone()
+        logs = conn.execute(
+            "SELECT kind, sent FROM alerts_log ORDER BY id").fetchall()
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    return _n_sent, row, [(r["kind"], r["sent"]) for r in logs]
+
+
+_notp_no, _notp_no_row, _notp_no_log = _notp_run(None, True, "no")
+_notp_yes, _notp_yes_row, _notp_yes_log = _notp_run(115.0, True, "yes")
+_notp_off, _notp_off_row, _notp_off_log = _notp_run(None, False, "off")
+settings.SETTINGS["alert_exclude_no_tp"] = True   # 운영 기본값 복구
+settings.SETTINGS["db_path"] = _notp_prev_db
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+
+check("NOTP1 TP 없는 글 터치 — 알림 0건 (억제)", _notp_no == 0)
+check("NOTP2 억제해도 터치 기록·재채점 스냅샷은 그대로 (데이터는 계속 쌓인다)",
+      _notp_no_row["status"] == "touched"
+      and _notp_no_row["touched_at"] is not None
+      and _notp_no_row["touch_score"] is not None)
+check("NOTP3 억제 사실은 alerts_log 에 kind='touch_no_tp' · sent=0 으로 남는다",
+      _notp_no_log == [("touch_no_tp", 0)])
+check("NOTP4 무음 기록은 'touch' 가 아니다 — 일일 상한·재발송·TP 게이트 무손상",
+      all(k != "touch" for k, _ in _notp_no_log))
+check("NOTP5 TP 있는 글은 종전대로 발송 (억제는 무TP 클러스터 한정)",
+      _notp_yes == 1 and _notp_yes_log == [("touch", 1)])
+check("NOTP6 플래그 False — 종전 동작(무TP 글도 발송), 무음 기록 없음",
+      _notp_off == 1 and _notp_off_log == [("touch", 1)])
+
+# ══════════════════════════════════════════════════════════════════════
 # RX*: 결과 이모지 반응 (2026-09-22 Q4)
 # ══════════════════════════════════════════════════════════════════════
 # 핵심 계약: ① 새 메시지 0건 ② tp_alert_send_enabled=False 와 무관하게 동작

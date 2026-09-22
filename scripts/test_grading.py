@@ -26,6 +26,7 @@ from collector.grading import (AUTHOR_TRACK_MAX, AUTHOR_TRACK_MIN_N, AUTHOR_TRAC
                                LADDER_MIN_STEPS, LADDER_PENALTY,
                                TOUCH_DELAY_MIN_MINUTES_DEFAULT, TOUCH_DELAY_PENALTY_DEFAULT,
                                TP_DISTANCE_BANDS, TP_REWARD_MAX,
+                               VOLUME_RANK_PENALTY_DEFAULT, VOLUME_RANK_TOP_N_DEFAULT,
                                author_track_points, calculate_grade, grade_from_score,
                                meets_min_grade, regrade_current, score_breakdown,
                                tp_distance_points)
@@ -538,6 +539,80 @@ try:
 finally:
     settings.SETTINGS["grade_thresholds"] = [["A", 55], ["B", 47], ["C", 40]]
 check("V6B-f 경계 설정 손상 시 크래시 없이 기본값 폴백", _broken == "A")
+
+# ── VR: 거래대금 순위 감점 (2026-09-22 D2/R3 — 플래그 OFF 배포) ────────────
+# 근거(plan_2026-09-22_최종버전_종합검토.md §2-1 D2): 1-20위 군 승률 49.3%
+# ·PF 1.32(n=146) vs 100위+ 61.9%·PF 1.90(n=84). 지연 감점과 같은 배선 —
+# 수집 시점엔 None(0점), 터치 재채점에서만. **2026-10-06 까지 스위치 OFF**.
+
+
+def _vr(rank):
+    return calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                           tp_ladder_count=3, touch_volume_rank=rank)[1]
+
+
+check("VR1 설정 정본 — 스위치 OFF(2026-10-06 이후 True) · top_n 20 · 감점 -6",
+      settings.get("grade_volume_rank_enabled") is False
+      and settings.get("grade_volume_rank_top_n") == 20
+      and settings.get("grade_volume_rank_penalty") == -6
+      and VOLUME_RANK_TOP_N_DEFAULT == 20 and VOLUME_RANK_PENALTY_DEFAULT == -6)
+# 플래그 OFF = 기존 동작 완전 불변(이번 배포의 핵심 계약)
+check("VR2 플래그 OFF — 어떤 순위도 0점, 총점·등급이 종전과 한 톨도 안 움직인다",
+      all(eq(_vr(r), _base_r) for r in (None, 1, 20, 21, 100, 999)))
+_bd_vr_off = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, touch_volume_rank=1)
+check("VR3 breakdown 에 'vol_rank' 키가 생기되 OFF 면 값 0 + sum==총점 유지",
+      _bd_vr_off["vol_rank"] == 0.0 and eq(sum(_bd_vr_off.values()), _base_r))
+
+settings.SETTINGS["grade_volume_rank_enabled"] = True
+try:
+    _vr_none, _vr_1, _vr_19 = _vr(None), _vr(1), _vr(19)
+    _vr_20, _vr_21, _vr_300 = _vr(20), _vr(21), _vr(300)
+    _bd_vr = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                             tp_ladder_count=3, touch_volume_rank=5)
+    _bd_vr0 = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                              tp_ladder_count=3, touch_volume_rank=500)
+    # 지연(-6)과 중첩 — 두 감점은 독립 키라 단순 합산돼야 한다(-12)
+    settings.SETTINGS["grade_touch_delay_enabled"] = True
+    _both = calculate_grade(500, "long", 100.0, 90.0, 110.0, 100.0,
+                            tp_ladder_count=3, touch_delay_minutes=5,
+                            touch_volume_rank=5)[1]
+    _bd_both = score_breakdown(500, "long", 100.0, 90.0, 110.0, 100.0,
+                               tp_ladder_count=3, touch_delay_minutes=5,
+                               touch_volume_rank=5)
+    # regrade 2경로 (명시 인자 / 레벨 dict 키) — price_check 는 dict 키로 심는다
+    _rg_kw = regrade_current(_lv_r, 100.0, touch_volume_rank=5)[1]
+    _rg_dict = regrade_current(dict(_lv_r, touch_volume_rank=5), 100.0)[1]
+    _rg_none = regrade_current(_lv_r, 100.0)[1]
+    # 순수 감점 — 어떤 순위도 미전달(None)보다 점수를 올리지 못한다
+    _vr_monotone = all(_vr(r) <= _vr(None) for r in (1, 5, 20, 21, 100, 10_000))
+finally:
+    settings.SETTINGS["grade_volume_rank_enabled"] = False
+    settings.SETTINGS["grade_touch_delay_enabled"] = True
+
+check("VR4 ON · top_n(20) 이내면 -6, 밖이면 0 — 경계 20 은 **감점 포함**(이하)",
+      eq(_vr_1, _base_r - 6) and eq(_vr_19, _base_r - 6)
+      and eq(_vr_20, _base_r - 6)
+      and eq(_vr_21, _base_r) and eq(_vr_300, _base_r))
+check("VR5 ON 이어도 None(수집 시점·예고)은 0 — 터치 재채점에서만 실린다",
+      eq(_vr_none, _base_r))
+check("VR6 breakdown 'vol_rank' 키 격리 + sum(values)==총점 (다른 키 불변)",
+      _bd_vr["vol_rank"] == -6.0 and _bd_vr0["vol_rank"] == 0.0
+      and eq(sum(_bd_vr.values()), _base_r - 6)
+      and {k: v for k, v in _bd_vr.items() if k != "vol_rank"}
+      == {k: v for k, v in _bd_vr0.items() if k != "vol_rank"})
+check("VR7 지연 감점(-6)과 중첩되면 단순 합산 -12 (두 키 독립)",
+      eq(_both, _base_r - 12)
+      and _bd_both["delay"] == -6.0 and _bd_both["vol_rank"] == -6.0
+      and eq(sum(_bd_both.values()), _base_r - 12))
+check("VR8 regrade — 명시 인자·레벨 dict 키 양쪽 경로 동일, 미전달은 0",
+      eq(_rg_kw, _base_r - 6) and eq(_rg_dict, _base_r - 6)
+      and eq(_rg_none, _base_r))
+check("VR9 순수 감점 — 어떤 순위도 미전달(None)보다 점수를 올리지 못한다",
+      _vr_monotone)
+# 롤백은 스위치 한 줄 — OFF 복귀 즉시 종전 점수
+check("VR10 롤백 스위치 — OFF 복귀 시 즉시 감점 0 (되돌리기 한 줄)",
+      eq(_vr(1), _base_r))
 
 print()
 print(f"{'전체 통과' if ok else '실패 있음'} ({n_checks}개 체크)")

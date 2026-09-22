@@ -1366,6 +1366,77 @@ def get_author_raw_record(conn) -> dict:
     return {r["author"]: {"wins": r["w"] or 0, "losses": r["l"] or 0} for r in rows}
 
 
+## ── 주간 리포트 v2 조회 (2026-09-22 R4) ─────────────────────────────────
+# 전부 **읽기 전용**이다 — 기존 함수 시그니처·스키마는 건드리지 않고 조회만 추가한다.
+# 소비자는 analytics/weekly.py(순수 계산) → notify/telegram.render_weekly_report.
+
+# 주간 리포트 v2 가 쓰는 levels 컬럼 묶음 — 한 벌로 고정해 창(window)마다 같은
+# 모양의 행을 돌려준다(이번 주 / 지난주 / 최근 4주 누적이 전부 같은 계산부를 탄다).
+_WEEKLY_ROW_COLS = (
+    "id, author, direction, outcome, judgment_mode, collected_at, touched_at, "
+    "resolved_at, touch_price_krw, resolve_price_krw, r_multiple, "
+    "touch_volume_rank, touch_grade, grade_ver"
+)
+
+
+def get_resolved_rows_between(conn, start_ts: float, end_ts: float) -> list:
+    """종결 시각(resolved_at)이 [start_ts, end_ts) 인 종결 터치 행 목록.
+
+    표본 기준은 기존 통계(get_author_outcome_rows·fetch_calibration_rows)와 동일 —
+    미종결(outcome NULL)·섀도 터치(touched_at NULL)는 표본이 아니다.
+    resolved_at 전용 인덱스는 두지 않는다(levels 는 1천 행대이고, 이 조회는 주 1회
+    리포트 경로에서만 돈다 — 2분 핫패스가 아니다)."""
+    return [dict(r) for r in conn.execute(
+        f"SELECT {_WEEKLY_ROW_COLS} FROM levels "
+        "WHERE outcome IS NOT NULL AND touched_at IS NOT NULL "
+        "AND resolved_at IS NOT NULL AND resolved_at >= ? AND resolved_at < ?",
+        (float(start_ts), float(end_ts))
+    ).fetchall()]
+
+
+def count_touch_alerts_between(conn, start_ts: float, end_ts: float) -> int:
+    """구간 내 **실제 발송된** 터치 알림 건수 (alerts_log, kind='touch' AND sent=1).
+
+    sent 는 2026-09-13 A안으로 붙은 컬럼이라 구세대 DB 엔 없을 수 있다 —
+    OperationalError 면 sent 조건 없이 재시도한다(그 시절 행은 전부 실발송)."""
+    q = ("SELECT COUNT(*) AS n FROM alerts_log WHERE kind='touch' "
+         "AND sent_at >= ? AND sent_at < ?")
+    args = (float(start_ts), float(end_ts))
+    try:
+        row = conn.execute(q + " AND sent = 1", args).fetchone()
+    except sqlite3.OperationalError:
+        row = conn.execute(q, args).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def count_resolved_touches_since(conn, since_ts: float) -> int:
+    """마일스톤 카운트 — `touched_at >= since AND outcome IS NOT NULL` 의 단순 건수.
+
+    "공정 종결"(tp_only 를 TP1 대칭 가상손절로 재판정한 표본)의 정의는 복잡해서
+    리포트에 싣기 어렵다. 마일스톤은 **진행률만** 보여주는 자리이므로 여기서는
+    의도적으로 단순 정의를 쓴다 — 리포트 문구에도 그대로 적는다."""
+    if since_ts is None:
+        return 0
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM levels "
+        "WHERE touched_at IS NOT NULL AND touched_at >= ? AND outcome IS NOT NULL",
+        (float(since_ts),)
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def get_weekly_calibration_rows(conn, ver: str) -> list:
+    """등급 캘리브레이션 표본 [(touch_grade 아닌 grade, outcome, ambiguous), ...] —
+    grade_ver 가 지정 버전인 행만. scripts/show_status.fetch_calibration_rows 와 같은
+    표본 기준이며, 주간 리포트가 show_status 를 import 하지 않아도 되게 db 쪽에 둔다
+    (run_weekly_report 는 최신 버전 → 표본 0 이면 직전 버전 순으로 시도한다)."""
+    return [tuple(r) for r in conn.execute(
+        "SELECT grade, outcome, ambiguous FROM levels "
+        "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL "
+        "AND grade_ver = ?", (ver,)
+    ).fetchall()]
+
+
 ## ── 적중 판정 해시체인 (2026-07-27 기획 카드 #3) ─────────────────────────
 # 목적: levels 에 쌓이는 판정(hit/miss 등)은 작성자 랭킹(E_LB)의 근간이라 "단 한 번만
 # 쓰인다"는 불변 스냅샷 원칙이 이미 있지만, DB 파일을 직접 열어 행을 고치거나 지우면
