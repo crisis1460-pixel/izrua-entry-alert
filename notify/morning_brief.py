@@ -17,6 +17,7 @@ meta 선기록(중복 방지 우선)과 반대인 이유: 브리핑은 하루 �
 """
 
 import html
+import json
 import logging
 import re
 import time
@@ -37,6 +38,11 @@ META_LAST_BRIEF_DATE = "last_morning_brief_date"
 # 자르면 오늘 0~8시 적중이 매번 빠지고, '어제+오늘'로 넓히면 어제 이미 보여준 걸
 # 또 보여준다. 발송 시각을 남겨야 누락도 중복도 없다.
 META_LAST_BRIEF_AT = "last_morning_brief_at"
+# 분할 발송 중 **뉴스 메시지만** 실패한 큐 id 목록(JSON). 날짜는 이미 마킹돼 재시도가
+# 다음 날 브리핑이 되는데, 그때 48h 신선도 가드가 이 행들을 조용히 소비하면 한 번도
+# 못 본 뉴스가 사라진다(2026-09-27 리뷰 RV2-N7, 09-14 유실 사고의 변형). 이 목록의
+# 행은 가드를 면제한다. 다음 브리핑 발송 뒤 그 회차의 실패분으로 덮어쓴다.
+META_NEWS_RETRY_IDS = "morning_brief_news_retry_ids"
 # 위 키가 아직 없을 때(최초 1회, 또는 옛 DB) 쓰는 폴백 창. 브리핑 주기가 하루라
 # 24시간이면 직전 회차를 충분히 덮는다.
 _BRIEF_FALLBACK_WINDOW_SEC = 86400.0
@@ -713,29 +719,45 @@ def _item_header(sym: str, ch: str) -> str:
 _SEG_GLUE = "\ue000"   # 조각 안 공백 보호용 사용자 정의 문자(표시폭 1 = 공백과 같다)
 
 
-def _wrap_escaped(text: str, segments: bool = False) -> list:
+def _wrap_segments(src: str) -> tuple:
+    """segments 모드 접기 — (줄 목록, 고아 없음 여부)."""
+    avail = _NEWS_WRAP_W - _display_width(_NEWS_INDENT)
+    segs = src.split(" · ")
+    protect = [_display_width(sg) <= avail - 2 for sg in segs]
+    # 조각 보호가 오히려 고아 줄을 만들면("… 25bp ·" / "단기") 뒤쪽 조각부터 보호를
+    # 풀어 어절 단위 균형 맞추기에 맡긴다.
+    for k in range(len(segs), -1, -1):
+        cand_src = " · ".join(sg.replace(" ", _SEG_GLUE) if (protect[i] and i < k) else sg
+                              for i, sg in enumerate(segs))
+        cand = _wrap_indented(cand_src, _NEWS_WRAP_W, _NEWS_INDENT)
+        if orphan_lines(cand, _NEWS_INDENT, strict=True) == 0:
+            return cand, True
+    return _wrap_indented(src, _NEWS_WRAP_W, _NEWS_INDENT), False
+
+
+def _wrap_escaped(text: str, segments: bool = False, reorder: bool = False) -> list:
     """행잉 인덴트로 접고 줄마다 HTML escape.
 
     segments=True(요약줄·맥락줄): " · " 로 나뉜 조각을 **한 덩어리**로 접는다 —
     "저항 / 시험" 처럼 한 항목이 줄 경계에서 갈라지지 않게(2026-09-27 고아단어
     요청). 폭보다 긴 조각만 예외로 종전처럼 어절 단위로 접힌다.
     escape 는 접은 **뒤에** 각 줄에 적용한다 — 먼저 escape 하면 `&amp;` 같은
-    엔티티가 줄 경계에서 쪼개져 깨진 문자로 보인다."""
+    엔티티가 줄 경계에서 쪼개져 깨진 문자로 보인다.
+
+    reorder=True(가격 맥락줄 전용 — 조각 순서에 의미가 없는 줄): 보호를 다 풀어도 고아가
+    남으면 첫 조각("24h ±x%")을 맨 뒤로 돌려 한 번 더 접는다(2026-09-27 리뷰 RV2-W1:
+    극소가 코인 "분기 ↑0.00000596(+2.2%) ↓0.00000570(-2.2%)" 의 마지막 덩어리가 혼자
+    남았다 — 두 덩어리가 한 줄에 안 들어가 순서를 지키면 해가 없다). 요약줄은 칩이
+    맨 앞이어야 하므로 쓰지 않는다."""
     src = text or ""
     wrapped = _wrap_indented(src, _NEWS_WRAP_W, _NEWS_INDENT)
     if segments and " · " in src:
-        avail = _NEWS_WRAP_W - _display_width(_NEWS_INDENT)
-        segs = src.split(" · ")
-        protect = [_display_width(sg) <= avail - 2 for sg in segs]
-        # 조각 보호가 오히려 고아 줄을 만들면("… 25bp ·" / "단기") 뒤쪽 조각부터 보호를
-        # 풀어 어절 단위 균형 맞추기에 맡긴다.
-        for k in range(len(segs), -1, -1):
-            cand_src = " · ".join(sg.replace(" ", _SEG_GLUE) if (protect[i] and i < k) else sg
-                                  for i, sg in enumerate(segs))
-            cand = _wrap_indented(cand_src, _NEWS_WRAP_W, _NEWS_INDENT)
-            if orphan_lines(cand, _NEWS_INDENT, strict=True) == 0:
-                wrapped = cand
-                break
+        wrapped, clean = _wrap_segments(src)
+        if not clean and reorder:
+            segs = src.split(" · ")
+            alt, alt_clean = _wrap_segments(" · ".join(segs[1:] + segs[:1]))
+            if alt_clean:
+                wrapped = alt
     return [_NEWS_INDENT + html.escape(ln[len(_NEWS_INDENT):].replace(_SEG_GLUE, " "))
             for ln in wrapped]
 
@@ -766,6 +788,16 @@ def _item_ctx(ctx_map: dict, sym: str, row: dict, now) -> dict:
     return ctx
 
 
+def _retry_ids(conn) -> set:
+    """전날 분할 뉴스 메시지 발송 실패로 남은 큐 id(META_NEWS_RETRY_IDS). 실패는 빈 집합."""
+    try:
+        raw = db.get_meta(conn, META_NEWS_RETRY_IDS) or ""
+        return {int(x) for x in json.loads(raw)} if raw else set()
+    except Exception as e:  # noqa: BLE001 - 면제 없이 종전 동작으로 강등
+        logger.warning("[brief] 재시도 id meta 읽기 실패: %s", e)
+        return set()
+
+
 def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
                 now: float = None):
     """📰 블록 재료. 반환 (헤더 줄, [(항목 줄 목록, 큐 id), ...]) 또는 None.
@@ -791,6 +823,7 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
         n_sent = 3
 
     cands = []   # {"row", "v2", "parsed"|"summ", "key"}
+    retry_ids = _retry_ids(conn)
     for r in rows:
         # 꺼낸 이상 **전부** 소비 처리한다 — 안 그러면 밀려난 저점수 뉴스가
         # 큐 머리에 남아 다음 날 후보 창을 막는다(get_news_digest 는 오래된
@@ -799,19 +832,29 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
         # 신선도 가드 (2026-09-27 대표 결정 "48시간 이내") — 큐에 이미 남아 있던 옛 글도
         # 렌더에서 제외(소비는 위에서 처리해 큐 머리를 막지 않는다). 게시 시각이 없는
         # 구세대 행은 적재 시각으로 본다.
+        # 예외(2026-09-27 리뷰 RV2-N7): 전날 분할 뉴스 메시지 발송이 실패해 **재시도로
+        # 남은 행**은 가드를 면제한다. 안 그러면 게시 24h 가 넘은 뉴스가 사용자에게 한 번도
+        # 안 나간 채 이 가드에서 조용히 소비된다(09-14 유실 사고의 변형).
         try:
             _max_h = float(settings.get("news_max_age_hours") or 0)
         except (TypeError, ValueError):
             _max_h = 0.0
         _pub = r.get("posted_at") or r.get("created_at")
         _ref = now if now is not None else time.time()
-        if _max_h > 0 and _pub and _ref - float(_pub) > _max_h * 3600:
+        if _max_h > 0 and _pub and _ref - float(_pub) > _max_h * 3600 \
+                and r["id"] not in retry_ids:
             logger.info("[brief] 게시 %.0fh 경과 — 제외: %s", (_ref - float(_pub)) / 3600,
                         r.get("symbol"))
             continue
         sym = r.get("symbol") or ""
         summary = r.get("summary") or ""
         en = (r.get("summary_en") or "") if structured else ""
+        if structured and not en:
+            # v2 가 켜진 뒤 원문(summary_en) 없는 **레거시 큐 행**은 싣지 않고 소비만 한다
+            # (RV2-N8). 종전 경로(_first_sentence)는 번역문을 55자에서 "…"로 잘라 실어
+            # "…·중간 절단 금지" 계약을 어긴다(09-28 브리핑 XRP/17290 재적재 행).
+            logger.info("[brief] 원문 없는 레거시 행 — 소비만: %s (id=%s)", sym, r["id"])
+            continue
         if _is_queued_noise(sym, summary, en):
             logger.info("[brief] 큐 노이즈 제외: %s (%s)", sym, (en or summary)[:40])
             continue
@@ -821,6 +864,11 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
             p = news_parse.parse(en)
             if p.get("kind") == "noise":
                 logger.info("[brief] 원문 노이즈 제외: %s (%s)", sym, p.get("why"))
+                continue
+            if sym == news_parse.MARKET_SYMBOL and not news_parse.is_market_news(p):
+                # 🌐 시장 항목은 확인된 시장 사실만(RV2-N3·N5) — 적재 뒤 판정 규칙이 바뀌어
+                # 가정·예상 기사로 풀린 옛 MARKET 행은 코인이 없어 실을 자리가 없다.
+                logger.info("[brief] 🌐 시장 사실 아님 — 제외: %s", p.get("title", "")[:40])
                 continue
             tier = news_parse.compose(p, sym, en, "", {}, n_sent)["tier"]
             fresh = r.get("posted_at") or r.get("created_at") or 0
@@ -886,7 +934,7 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
             if comp["detail"]:
                 lines += _wrap_escaped(" ".join(comp["detail"]))
             if comp["context"]:
-                lines += _wrap_escaped(comp["context"], segments=True)
+                lines += _wrap_escaped(comp["context"], segments=True, reorder=True)
         else:
             lines += _wrap_escaped(c["summ"])
         items.append((lines, r["id"]))
@@ -1214,7 +1262,11 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
     lines, news_start, items = _assemble(conn, now, timeout, consumed_ids)
     whole = "\n".join(lines)
     if news_start < 0:
-        return [("\n".join(_fit_telegram(lines, -1)), [])]
+        # 뉴스 블록이 없어도 **판정한 후보**(원문 없는 레거시·48h 초과·노이즈)는 본문과 함께
+        # 소비한다(RV2-N8 "싣지 않고 소비만"). 종전엔 [] 로 버려 이런 행이 큐 머리에 영구히
+        # 남았다 — 꺼낼 수 있는 15건이 전부 그런 행이면 새 뉴스가 영영 안 꺼내진다.
+        # 뉴스 블록 조립이 예외로 죽은 경우는 _assemble 이 consumed_ids 를 비운다.
+        return [("\n".join(_fit_telegram(lines, -1)), list(consumed_ids))]
     if _tg_len(whole) <= _TELEGRAM_MAX_CHARS:
         return [(whole, list(consumed_ids))]
 
@@ -1298,6 +1350,7 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
     # 메시지는 **각자 성공한 것만** 소비 처리한다 — 실패한 메시지의 뉴스는 큐에
     # 남아 다음 브리핑에 다시 실린다(09-14 사고: 안 실린 뉴스의 영구 소실 방지).
     consumed_ids: list = list(msgs[0][1])
+    failed_ids: list = []
     for extra_text, extra_ids in msgs[1:]:
         try:
             ok = telegram.send(extra_text)
@@ -1309,6 +1362,7 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
         if ok:
             consumed_ids.extend(extra_ids)
         else:
+            failed_ids.extend(extra_ids)
             logger.warning("[brief] 뉴스 분할 메시지 발송 실패 — %d건 미소비(다음 브리핑 재시도)",
                            len(extra_ids))
             print("::warning::모닝 브리핑 뉴스 분할 메시지 발송 실패 - 해당 뉴스는 다음 브리핑으로")
@@ -1323,6 +1377,9 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
             # 다음 회차 재시도가 같은 뉴스를 다시 싣는다.
             if consumed_ids:
                 db.consume_news_digest(conn, consumed_ids)
+            # 뉴스 메시지 실패분은 다음 브리핑에서 신선도 가드 면제(RV2-N7). 이번 회차에
+            # 다시 실려 성공한 id 는 빠지고, 또 실패하면 다시 남는다(덮어쓰기).
+            db.set_meta(conn, META_NEWS_RETRY_IDS, json.dumps(sorted(set(failed_ids))))
     except BaseException as e:  # noqa: BLE001 - meta 기록 실패로 회차를 죽이면 안 된다
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise

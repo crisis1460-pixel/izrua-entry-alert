@@ -4791,22 +4791,138 @@ check("ARM7 신규 레벨 진입가 -1% 수집 → 관용 없음: armed=0 · 터
       and _a7_row["status"] == "watching" and _a7_row["touched_at"] is None
       and _a7_sent == 0 and _a7_logs == [])
 
-# ARM8: 신규 레벨 · current >= entry → armed_at=collected_at, 소급 터치 유지
+# ARM8 (2026-09-27 리뷰 #1 로 계약 변경): 신규 레벨의 무장은 **수집 시점 가격**으로
+# INSERT 때 기록된다(run_collect). 수집 시 current>=entry 면 armed=1, armed_at=collected_at
+# → 수집 이후 캔들로 소급 터치가 유지된다(정상 레벨의 판정 축 보존).
 _a8_path = _arm_open("new_above")
 _a8_col = _ARM_T0 - 600
-_a8_id = _arm_seed(_a8_path, "new_above", _a8_col)
+_a8_id = _arm_seed(_a8_path, "new_above", _a8_col, armed=1)
 _arm_set_since(_a8_path, _ARM_T0 - 3600)
-_a8_log0 = len(_arm_logcap.lines)
 _a8_sent = _arm_cycle(_ARM_T0, _ARM_E * 1.001,
                       candles=[(_a8_col + 60, _ARM_T0 - 60, _ARM_E * 1.01,
                                 _ARM_E * 0.999, _ARM_E * 1.001)])
-_a8_logs = _arm_log_lines(_a8_log0)
 _a8_row = _arm_row(_a8_path, _a8_id)
 _arm_close(_a8_path)
-check("ARM8 신규 레벨 current>=entry → armed_at=collected_at · 수집 이후 캔들로 "
-      "소급 터치 + 발송(09-27 설계 보존)",
+check("ARM8 수집 시 무장(armed=1, armed_at=collected_at) → 수집 이후 캔들로 소급 터치 + 발송"
+      " (리뷰 #1 미탐 B 방지: 첫 판정 때 다시 내려가 있어도 잠기지 않음)",
       _a8_row["armed"] == 1 and abs(_a8_row["armed_at"] - _a8_col) < 1e-6
       and _a8_row["status"] == "touched" and _a8_sent == 1)
+
+# ARM8b (리뷰 #1 오탐 A 방지): 수집 시 가격 미상으로 armed=NULL 인 **신규** 레벨은 첫 판정에서
+# armed_at=now — 수집~지금 사이 저가(진입가 아래에서 수집됐을 수 있음)로 소급 터치하지 않는다.
+_a8b_path = _arm_open("new_null")
+_a8b_col = _ARM_T0 - 600
+_a8b_id = _arm_seed(_a8b_path, "new_null", _a8b_col)
+_arm_set_since(_a8b_path, _ARM_T0 - 3600)
+_a8b_log0 = len(_arm_logcap.lines)
+_a8b_sent = _arm_cycle(_ARM_T0, _ARM_E * 1.001,
+                       candles=[(_a8b_col + 60, _ARM_T0 - 60, _ARM_E * 1.01,
+                                 _ARM_E * 0.97, _ARM_E * 1.001)])
+_a8b_logs = _arm_log_lines(_a8b_log0)
+_a8b_row = _arm_row(_a8b_path, _a8b_id)
+_arm_close(_a8b_path)
+check("ARM8b 가격 미상 신규 레벨 첫 판정 → armed_at=now, 수집 직후 저가로 즉시 터치 안 함",
+      _a8b_row["armed"] == 1 and abs(_a8b_row["armed_at"] - _ARM_T0) < 1e-6
+      and _a8b_row["status"] != "touched" and _a8b_row["touched_at"] is None)
+
+# RV1-3 (리뷰 #3): 상단 멤버가 이번 회차에 승격(armed_at=now)해도, 이미 무장된 하단 형제의
+# 진짜 터치(구간 저가 ≤ 자기 진입가)는 잡혀야 한다.
+_g_path = _arm_open("cluster_floor")
+_g_top = _arm_seed(_g_path, "g_top", _ARM_T0 - 3600, entry=100.0, armed=0)
+_g_low = _arm_seed(_g_path, "g_low", _ARM_T0 - 3600, entry=99.8, armed=1)
+_arm_set_since(_g_path, _ARM_T0 - 86400)
+_g_sent = _arm_cycle(_ARM_T0, _ARM_E * 1.002,
+                     candles=[(_ARM_T0 - 200, _ARM_T0 - 140, _ARM_E * 0.999,
+                               _ARM_E * 0.996, _ARM_E * 0.997),
+                              (_ARM_T0 - 140, _ARM_T0 - 80, _ARM_E * 1.003,
+                               _ARM_E * 0.997, _ARM_E * 1.002)])
+_g_low_row = _arm_row(_g_path, _g_low)
+_arm_close(_g_path)
+check("RV1-3 상단 승격 회차에도 하단 무장 형제의 터치를 놓치지 않음(멤버별 도달 판정)",
+      _g_low_row["status"] == "touched" and _g_sent == 1)
+
+# RV1-4 (리뷰 #4): no_tp 게이트는 대표 후보 풀(도달 멤버) 기준 — 도달 멤버가 전부 무TP 이고
+# 미도달 섀도만 TP 가 있으면 억제돼야 한다(종전: 섀도 TP 때문에 무TP 대표로 발송).
+_n4_path = _arm_open("notp_pool")
+_n4_top = _arm_seed(_n4_path, "n4_top", _ARM_T0 - 3600, entry=100.0, tp=None, armed=1)
+_n4_low = _arm_seed(_n4_path, "n4_low", _ARM_T0 - 3600, entry=99.7, tp=115.0, armed=1)
+_arm_set_since(_n4_path, _ARM_T0 - 86400)
+_n4_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.999)
+_n4_logs = _arm_logs(_n4_path)
+_arm_close(_n4_path)
+check("RV1-4 도달 멤버가 전부 무TP 면 섀도에 TP 가 있어도 no_tp 억제(touch_no_tp sent=0)",
+      _n4_sent == 0 and ("touch_no_tp", 0) in _n4_logs and ("touch", 1) not in _n4_logs)
+
+# RV1-1 (리뷰 #1): 수집 경로가 **수집 시점 가격**으로 armed/armed_at 을 INSERT 한다.
+from scripts import run_collect as _rc_arm
+_c1_path = _arm_open("collect_arm")
+_c1_idea = dict(title="ARMC long setup", url="https://tv.com/c1", author="ARM_auth",
+                description="Entry: 100\nStop loss: 94\nTarget 1: 115\nTarget 2: 130",
+                direction="long", age_minutes=30)
+with db.connect(_c1_path) as conn:
+    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=101.0,
+                                    rank=80, tier_icon="🥈"),
+                         dict(_c1_idea), {}, 5.0, lookup_followers=False)
+    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=97.0,
+                                    rank=80, tier_icon="🥈"),
+                         dict(_c1_idea, url="https://tv.com/c2"), {}, 5.0,
+                         lookup_followers=False)
+    conn.commit()
+    _c1_rows = [dict(r) for r in conn.execute(
+        "SELECT post_url, armed, armed_at, collected_at FROM levels ORDER BY id")]
+_arm_close(_c1_path)
+check("RV1-1 수집 시 현재가≥진입가 → armed=1·armed_at=collected_at / 아래 → armed=0",
+      len(_c1_rows) == 2
+      and _c1_rows[0]["armed"] == 1 and _c1_rows[0]["armed_at"] == _c1_rows[0]["collected_at"]
+      and _c1_rows[1]["armed"] == 0 and _c1_rows[1]["armed_at"] is None)
+
+# RV1-2 (리뷰 #2): TradingView 행은 재파싱에서 텍스트가 숏이어도 만료하지 않는다
+# (수집 때 작성자 태그 long 이 우선했다). 텔레그램 행은 종전대로 reparse_invalid.
+_r2_path = _arm_open("reparse_tv")
+_r2_text = "Bears are short here, I disagree. Entry 100 / TP 120 / SL 95"
+with db.connect(_r2_path) as conn:
+    for _src in ("tradingview", "telegram"):
+        _lv = dict(coin_symbol="ARMC", ticker="KRW-ARMC", direction="long", entry_usd=100.0,
+                   sl_usd=95.0, tp_usd=120.0, grade="B", score=50, author="A",
+                   collected_at=_ARM_T0 - 600, raw_text=_r2_text, source=_src,
+                   signal_key=db.make_signal_key("ARMC", 100.0, "A", _src))
+        db.upsert_level(conn, _lv)
+    conn.commit()
+    db.reparse_all(conn)
+    conn.commit()
+    _r2 = {r["source"]: (r["status"], r["expired_reason"]) for r in conn.execute(
+        "SELECT source, status, expired_reason FROM levels")}
+_arm_close(_r2_path)
+check("RV1-2 재파싱 숏 판정: TradingView 행은 유지, 텔레그램 행은 reparse_invalid 만료",
+      _r2.get("tradingview", ("",))[0] == "watching"
+      and _r2.get("telegram") == ("expired", "reparse_invalid"))
+
+# RV1-5·6 (리뷰 #5·#6): 관통 NULL 즉시터치 오염 12건 touch_stale 백필(1회성) +
+# STALE 배제가 자체 승률(get_author_self_stats)·원시 기록에도 적용된다.
+_s5_path = _arm_open("stale_flag")
+with db.connect(_s5_path) as conn:
+    for _id, _oc in ((76, "miss"), (77, "miss"), (900, "hit")):
+        conn.execute("INSERT INTO levels (id, signal_key, coin_symbol, ticker, direction, "
+                     "status, author, collected_at, touched_at, outcome, r_multiple) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (_id, f"s5_{_id}", "ARMC", "KRW-ARMC", "long", "resolved", "S5",
+                      _ARM_T0 - 9000, _ARM_T0 - 8900, _oc, -1.0 if _oc == "miss" else 1.5))
+    conn.execute("DELETE FROM meta WHERE key='backfill_touch_stale_v1'")
+    conn.commit()
+db.init_db(_s5_path)
+with db.connect(_s5_path) as conn:
+    _s5_flags = {r["id"]: r["touch_stale"] for r in conn.execute(
+        "SELECT id, touch_stale FROM levels")}
+    _s5_self = db.get_author_self_stats(conn, "S5")
+    _s5_raw = db.get_author_raw_record(conn).get("S5", {})
+    _s5_meta = db.get_meta(conn, "backfill_touch_stale_v1")
+_arm_close(_s5_path)
+check("RV1-5 관통 NULL 즉시터치 오염 id 에 touch_stale=1 백필(1회성 meta 가드), 그 외 NULL",
+      _s5_flags.get(76) == 1 and _s5_flags.get(77) == 1 and _s5_flags.get(900) is None
+      and _s5_meta is not None)
+check("RV1-6 오염 표본은 자체 승률·원시 기록에서도 제외(패 2건 빠지고 승 1건만)",
+      _s5_self["tp_hits"] == 1 and _s5_self["losses"] == 0
+      and _s5_raw.get("wins") == 1 and _s5_raw.get("losses") == 0)
 
 # ARM9: 레거시 관용 무장(armed_at=now)은 무장 전 캔들 저가를 터치 앵커로 쓰지 않는다
 # (현재가 자체가 진입가 아래라 같은 회차 터치는 레거시 관용의 설계 그대로다 —
@@ -4862,10 +4978,10 @@ _arm_close(_a11_path)
 _arm_pc_logger.removeHandler(_arm_logcap)
 _arm_pc_logger.setLevel(_arm_pc_prev_level)
 check("ARM11 무장 로그 '레거시 관용' 꼬리표 — 관용 구간 무장(ARM5)에만, "
-      "current>=entry(레거시 ARM11·신규 ARM8)엔 없음",
+      "current>=entry(레거시 ARM11·신규 ARM8b)엔 없음",
       len(_a5_logs) == 1 and "레거시 관용" in _a5_logs[0]
       and len(_a11_logs) == 1 and "레거시 관용" not in _a11_logs[0]
-      and len(_a8_logs) == 1 and "레거시 관용" not in _a8_logs[0])
+      and len(_a8b_logs) == 1 and "레거시 관용" not in _a8b_logs[0])
 
 # ── BTH1~BTH4: best_tp_hit — miss/timeboxed 에도 도달 TP 단계 기록 (S1, B-E1) ──
 # 종전엔 hit 경로만 best_tp_hit 를 넘겨, TP 에 도달했다가 손절·만료로 끝난 62건이
@@ -5080,6 +5196,27 @@ check("DSP1f 모순 없는 렌더 - 가격행 외 전 행 32칼럼 이내(잘림
       all(_dtg._line_width(ln) <= _dtg._MAX_LINE_COLS for ln in _sui_lines
           if ln != _dtg._SEP and not ln.startswith("🔗")))
 
+# FIX-F1 (2026-09-27 리뷰): 1천만원대 목표가(BTC)는 '원 진입+x%' head 자체가 32칼럼 초과 →
+# '진입+x%' 도 다음 줄로. 가격대별(10원대~1억원대) 목표 행 전부 32칼럼 이내.
+_btc = dict(_sui, id=990, coin_symbol="BTC", entry_usd=85000.0, tp_usd=95400.0,
+            tps_usd="[95400.0, 99000.0]", tp_ladder_count=2)
+_m_btc = _dtg.render_alert("touch", "BTC", [dict(_btc)], 85000.0 * _D_USDT, _D_USDT)
+_btc_lines = _m_btc.split("\n")
+_tgt = [i for i, ln in enumerate(_btc_lines) if ln.startswith("    목표:")]
+check("FIX-F1 BTC 목표 행 32칼럼 이내 + '진입+x%'·1/N 은 다음 줄(값 칼럼 정렬)",
+      _tgt and _dtg._line_width(_btc_lines[_tgt[0]]) <= _dtg._MAX_LINE_COLS
+      and "진입+" not in _btc_lines[_tgt[0]]
+      and _btc_lines[_tgt[0] + 1].strip().startswith("진입+")
+      and "1/2" in _btc_lines[_tgt[0] + 1])
+_widths_ok = True
+for _e in (0.012, 0.9, 13.0, 250.0, 4200.0, 85000.0):
+    _lv = dict(_sui, entry_usd=_e, tp_usd=_e * 1.3, tps_usd=f"[{_e * 1.3}, {_e * 1.6}]")
+    _mm = _dtg.render_alert("touch", "SUI", [_lv], _e * _D_USDT, _D_USDT)
+    for _ln in _mm.split("\n"):
+        if _ln.startswith("    목표:") or _ln.startswith(_dtg._VALUE_INDENT):
+            _widths_ok &= _dtg._line_width(_ln) <= _dtg._MAX_LINE_COLS
+check("FIX-F1b 가격대 6단계(0.01~85,000 USD) 목표 행·꼬리표 줄 전부 32칼럼 이내", _widths_ok)
+
 # D1 경계: 1% 이내면 병기 없음
 _m_d1 = _dtg.render_alert("touch", "SUI", [dict(_sui)], 1.42 * _D_USDT * 0.995, _D_USDT)
 check("DSP2 진입가 대비 -0.5% 는 병기 없음(1% 초과만)", "(현재" not in _m_d1)
@@ -5202,13 +5339,17 @@ with db.connect(_DSP_DB) as conn:
     _dsp_sent = db.get_alerts_sent_by_day(conn, days=5)
     _dsp_rec = db.get_alerts_recorded_by_day(conn, days=5)
     _dsp_ids = db.get_sent_touch_level_ids(conn)
+    db.record_alert(conn, "X", "news", [0], "2026-09-27", now=_D_T)
+    db.record_alert(conn, "X", "tp1", [1], "2026-09-27", now=_D_T)
     _dsp_obs = db.get_observation_report(conn, days=5)
 check("DSP15 tp_hits = hit 건수(SL 미기재 포함, 만료·수익 제외) · 승률 wins 는 종전 정의",
       _dsp_st["tp_hits"] == 2 and _dsp_st["wins"] == 2 and _dsp_st["losses"] == 1)
 check("DSP16 발송 칸 sent=1 만(1) · 기록 칸 전체(3) · 발송 터치 레벨 id = {1}",
       _dsp_sent.get("2026-09-27") == 1 and _dsp_rec.get("2026-09-27") == 3
       and _dsp_ids == {1}
-      and any(r["alerts_sent"] == 1 and r["alerts_recorded"] == 3 for r in _dsp_obs))
+      and any(r["alerts_sent"] == 3 and r["alerts_recorded"] == 5 for r in _dsp_obs))
+check("FIX-F2 전환율 분자 = 진입 알림(터치·예고) 발송만 — 뉴스·TP 발송 제외(1)",
+      any(r["entry_alerts_sent"] == 1 for r in _dsp_obs))
 os.remove(_DSP_DB)
 
 # T10 + T9: 스윙 게이트 승계 — 무TP 형제는 초단타 대표를 승계하지 못한다

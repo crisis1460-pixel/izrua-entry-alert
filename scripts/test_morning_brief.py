@@ -312,6 +312,62 @@ _old_post = {"title": "ADA Market Analysis", "description": _en_age.replace("XRP
 check("NEWS-AGE4 수집 단계: 티커 경로 게시 50h 전 글은 skipped",
       _nb_age.maybe_send_news_brief(None, _old_post, "ADA", "age", now=AT_9) == "skipped")
 
+# ── RV2-N7: 분할 뉴스 메시지 실패분은 다음 날 48h 가드에 조용히 소비되지 않는다 ──────
+# (2026-09-27 코드 리뷰 — 09-14 유실 사고의 변형). 게시 30h 전 글 5건 → 1일차 뉴스
+# 메시지 실패 → 2일차(게시 54h)에 **실려서** 발송된 뒤 소비돼야 한다.
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+    for i in range(5):
+        sym = f"R7{i}"
+        en = (f"#{sym} Market Analysis\n{sym} is at 1.2345 on the 4h, pulling back from the "
+              f"1.4000 highs and holding above the demand zone.\nBull case: hold above 1.2000 "
+              f"and resume the push toward 1.4000.\nBear case: lose 1.1500 and slide toward 1.0500.")
+        db.queue_news_digest(conn, sym, f"r7ch{i}", f"{sym} 는 1.2345 부근입니다.",
+                             f"https://t.me/rv2n7/{i}", TODAY, AT_9 - 30 * 3600 + i,
+                             summary_en=en, posted_at=AT_9 - 30 * 3600 + i)
+    conn.commit()
+morning_brief._TELEGRAM_MAX_CHARS = _SPLIT_LIMIT
+set_brief_meta("")
+sent_log.clear()
+_fail_news["on"] = True
+telegram.send = _send_fail_news
+_n7_day1 = morning_brief.maybe_send_brief(TEST_DB, now=AT_9)
+_n7_unc1 = _unconsumed()
+set_brief_meta("")
+sent_log.clear()
+_fail_news["on"] = False
+_n7_day2 = morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 86400)
+_n7_txt2 = "\n".join(sent_log)
+check("RV2-N7 뉴스 메시지 실패분(게시 30h)은 다음 날(게시 54h) 가드 면제로 실리고 그 뒤 소비",
+      _n7_day1 == "ok" and _n7_unc1 == 5 and _n7_day2 == "ok"
+      and all(f"R7{i}" in _n7_txt2 for i in range(5)) and _unconsumed() == 0)
+with db.connect(TEST_DB) as conn:
+    _n7_meta = db.get_meta(conn, morning_brief.META_NEWS_RETRY_IDS)
+check("RV2-N7b 재시도 성공 뒤 면제 목록은 비워진다", _n7_meta == "[]")
+morning_brief._TELEGRAM_MAX_CHARS = _orig_max
+telegram.send = _fake_send
+
+# ── RV2-N8: v2 스위치 ON 이면 원문(summary_en) 없는 레거시 큐 행은 싣지 않고 소비만 ──
+# 운영 큐의 XRP/17290 재적재 행이 09-28 브리핑에 "…동안 건설된 1.…" 로 잘려 실릴 뻔했다.
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+    db.queue_news_digest(conn, "XRP", "BitcoinBullets",
+                         "# XRP 시장 분석\nXRP는 4시간에 1.4944이며, 1.6500 고점에서 물러나고 9월 통합 기간 "
+                         "동안 건설된 1.4500 근처의 수요 구역에 착륙했습니다.",
+                         "https://t.me/BitcoinBullets/17290", TODAY, AT_9 - 600)
+    conn.commit()
+    _n8_ids = []
+    _n8 = morning_brief._news_items(conn, _n8_ids, timeout=1.0, now=AT_9)
+_n8_txt = "\n".join(str(x) for x in (_n8 or []))
+check("RV2-N8 v2 ON: 원문 없는 레거시 행은 실리지 않고('…' 절단 없음) 소비 id 에는 들어간다",
+      settings.get("news_structured_enabled") is True and _n8 is None and "…" not in _n8_txt
+      and len(_n8_ids) == 1)
+set_brief_meta("")
+sent_log.clear()
+check("RV2-N8b 뉴스 블록이 없어도 판정한 레거시 행은 발송 성공 후 소비(큐 머리 영구 잔류 방지)",
+      morning_brief.maybe_send_brief(TEST_DB, now=AT_9) == "ok" and len(sent_log) == 1
+      and "…" not in sent_log[0] and "주요 뉴스" not in sent_log[0] and _unconsumed() == 0)
+
 # ── X1: run_cycle 편입 — 결과 dict 에 morning_brief 키가 들어간다 ─────────
 from scripts import run_cycle
 

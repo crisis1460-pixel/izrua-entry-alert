@@ -114,6 +114,7 @@ def print_observation(conn, days: int) -> None:
     print("-" * len(header))
 
     tot = {"collected": 0, "touches_total": 0, "previews_total": 0, "alerts_sent": 0,
+           "entry_alerts_sent": 0,
            "suppressed_grade": 0, "suppressed_cap": 0, "preview_dwell": 0,
            "suppressed_send_fail": 0, "suppressed_tp_too_close": 0,
            "suppressed_tp_gate": 0}
@@ -121,7 +122,9 @@ def print_observation(conn, days: int) -> None:
         for k in tot:
             tot[k] += r.get(k, 0) or 0
         raw_events = (r["touches_total"] or 0) + (r["previews_total"] or 0)
-        conv = f"{r['alerts_sent'] / raw_events * 100:.0f}%" if raw_events else "-"
+        # 전환율 분자 = 진입 알림(터치·예고) 발송만 (2026-09-27 리뷰 F2 — 뉴스·TP 포함 시 540%)
+        conv = (f"{(r.get('entry_alerts_sent') or 0) / raw_events * 100:.0f}%"
+                if raw_events else "-")
         supp = (f"{r['suppressed_grade']}/{r['suppressed_cap']}/"
                 f"{r['suppressed_send_fail']}/{r.get('suppressed_tp_too_close', 0)}"
                 f"  {r.get('preview_dwell', 0):>5}")
@@ -132,14 +135,15 @@ def print_observation(conn, days: int) -> None:
 
     print("-" * len(header))
     raw_total = tot["touches_total"] + tot["previews_total"]
-    conv_total = f"{tot['alerts_sent'] / raw_total * 100:.0f}%" if raw_total else "-"
+    conv_total = (f"{tot['entry_alerts_sent'] / raw_total * 100:.0f}%"
+                  if raw_total else "-")
     supp_total = (f"{tot['suppressed_grade']}/{tot['suppressed_cap']}/"
                   f"{tot['suppressed_send_fail']}/{tot['suppressed_tp_too_close']}"
                   f"  {tot.get('preview_dwell', 0):>5}")
     print(f"{'합계':<12}{_n(tot['collected']):>6}{_n(tot['touches_total']):>6}"
           f"{_n(tot['previews_total']):>6}{_n(tot['alerts_sent']):>6}"
           f"{conv_total:>8}  {supp_total:<26}")
-    print("  (전환율 = 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패/근접TP(B안))")
+    print("  (발송 = 뉴스·TP 포함 전체 실발송. 전환율 = 진입 알림 발송 ÷ (터치+예고). 억제 = 등급미달/일일상한/텔레그램실패/근접TP(B안))")
     print("   체류 = 예고 밴드에 머문 회차 — 억제가 아니라 관측 지표")
     if tot["suppressed_tp_gate"]:
         print(f"  TP단계알림 게이트 차단(M-2, 본알림 무발송 신호): {tot['suppressed_tp_gate']}건")

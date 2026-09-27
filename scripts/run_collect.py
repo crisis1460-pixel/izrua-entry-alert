@@ -355,6 +355,18 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
             "collected_at": time.time(),
             "source": source,
         }
+        # 무장 상태를 **수집 시점 가격**으로 바로 기록 (2026-09-27 리뷰 #1).
+        # 종전엔 다음 가격체크 회차의 현재가로 첫 판정하면서 armed_at=collected_at 을
+        # 찍어, (A) 진입가 아래에서 수집된 뒤 그 사이 위로 올라가면 수집 직후 저가로
+        # 즉시 터치되고 (B) 위에서 수집돼 실제로 닿은 뒤 다시 내려가 있으면 armed=0 으로
+        # 잠겨 진짜 터치가 사라졌다(08-15 이후 복원: A 7건 · B 3건). 기준가는 sanity 와
+        # 같은 달러가(CoinGecko 우선, 업비트 폴백). 가격 미상이면 None → 가격체크 첫 판정.
+        _p_now = _sanity_price(coin)
+        _e = setup.get("entry")
+        if _p_now and _e and settings.get("watch_arming_enabled"):
+            _up = (_p_now <= _e) if setup["direction"] == "short" else (_p_now >= _e)
+            level["armed"] = 1 if _up else 0
+            level["armed_at"] = level["collected_at"] if _up else None
         return True, bool(db.upsert_level(conn, level))
     except Exception as e:  # noqa: BLE001 - 글 1건 오류가 사이클 전체를 막으면 안 됨
         logger.warning("[%s] 아이디어 1건 처리 실패 - 스킵: %s", coin.get("symbol"), e)

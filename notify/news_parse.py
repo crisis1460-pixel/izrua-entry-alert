@@ -56,7 +56,14 @@ _AMT_RX = re.compile(
     r"(?P<sign>[+\-−])?\$\s?(?P<num>\d[\d,]*(?:\.\d+)?)\s?"
     r"(?P<unit>trillion|billion|million|bn|[TBMK])\b"
     r"|(?P<sign2>[+\-−])?\$(?P<big>\d{1,3}(?:,\d{3}){2,})(?!\.\d)(?![\d,])"
-    r"|(?<![\w$.])(?P<num3>\d+(?:\.\d+)?)(?P<unit3>[BM])\b(?=\s*(?:BTC|ETH|ETF|USD|in\b|of\b|worth\b|net|inflow|outflow))"
+    # 셋째 대안($ 없는 "500M in net inflows") — 2026-09-27 리뷰 RV2-N1·N2:
+    #  · 단위는 **대문자 B/M 만**(인라인 (?-i:)) — 소문자 "15m" 은 타임프레임이다
+    #    ("broke out on the 15m in the morning" 이 $15M 고래 매수로 읽혔다).
+    #  · 뒤따름은 달러 흐름 단어로 한정 — "1.2M ETH"·"1.5M of BTC" 는 **코인 수량**이지
+    #    달러가 아니다(대표 금액 $1.2M 오표기). 줄을 넘지 않는다([ \t]*).
+    r"|(?<![\w$.])(?P<num3>\d+(?:\.\d+)?)(?P<unit3>(?-i:[BM]))\b"
+    r"(?=[ \t]*(?:USD\b|ETFs?\b|(?:BTC|ETH)[ \t]+ETFs?\b|worth\b|net\b|"
+    r"in[ \t]+(?:net[ \t]+)?(?:inflows?|outflows?)|inflows?|outflows?))"
     r"|(?<![\w$.])(?P<num4>\d+(?:\.\d+)?)\s(?P<unit4>billion|million)\s(?:dollars|USD)",
     re.I)
 _UNIT_MUL = {"t": 1e12, "trillion": 1e12, "b": 1e9, "bn": 1e9, "billion": 1e9,
@@ -106,8 +113,13 @@ def amounts(text: str, k: int = 4) -> list:
 
 # ── 가격 레벨 ────────────────────────────────────────────────────────
 
+# 단위가 붙은 금액("$1.2B"·"$150K"·"$5 million")은 가격 수준이 아니다 — 가격 후보
+# 정규식 끝에 붙이는 부정 전방탐색(2026-09-27 리뷰 RV2-N6: "$1.2B in liquidations" 가
+# "지지 $1.2" 로, "$150K" 가 "목표 $150(-99.8%)" 로 잘려 쓰였다).
+_NO_UNIT = r"(?![\d.,]*\s?(?:[KMBT]|bn|thousand|million|billion|trillion)\b)"
 # 가격다운 수치만: $표기 · 소수 · 천단위 · 3자리 이상. "2% inflation" 의 2 같은 건 제외.
-_NUM = r"(?:\$\d[\d,]*(?:\.\d+)?|\d[\d,]*\.\d+|\d{1,3}(?:,\d{3})+|\d{3,})(?![\d%])"
+_NUM = (r"(?:\$\d[\d,]*(?:\.\d+)?|\d[\d,]*\.\d+|\d{1,3}(?:,\d{3})+|\d{3,})(?![\d%])"
+        + r"(?i:" + _NO_UNIT + r")")
 _SUPPORT_RX = re.compile(r"support\b[^.\n$\d]{0,24}(" + _NUM + r")|(" + _NUM + r")\s+support\b", re.I)
 _RESIST_RX = re.compile(r"resistance\b[^.\n$\d]{0,24}(" + _NUM + r")|(" + _NUM + r")\s+resistance\b", re.I)
 
@@ -186,7 +198,9 @@ H_TYPES = frozenset(k for k, *_r, tier in _TYPES if tier == "H")
 
 # 유형별 극성 보정 단어 — 유형 문맥 안에서만 센다(전역 감성 사전 아님).
 _POL_WORDS = {
-    "etf": (r"inflow|net-?flow|turn(?:ed|ing)? (?:back to )?(?:buying|positive)|buying|approv",
+    # ETF 승인·거절·연기는 자금 흐름이 아니라 별도 결정 이벤트다(_ETF_DECISION, RV2-N4) —
+    # 종전엔 approv 가 긍정 단어라 "SEC approves spot Solana ETF" 가 "ETF 순유입"이 됐다.
+    "etf": (r"inflow|net-?flow|turn(?:ed|ing)? (?:back to )?(?:buying|positive)|buying",
             r"outflow|net sold|selling|redemption"),
     "reg": (r"approv|opens? (?:the )?door|exemption|pass(?:es|ed)\b|green light|clears?\b|dismiss|roadmap|framework",
             r"fail|reject|odds (?:crash|drop|fall)|crash|lawsuit|sues?\b|sued|charges?\b|\bban\b|delay|crackdown"),
@@ -204,6 +218,62 @@ _POL_RX = {k: (re.compile(p, re.I), re.compile(n, re.I)) for k, (p, n) in _POL_W
 _STALE_RX = re.compile(r"\b(?:months|years)\s+(?:after|ago|later)\b", re.I)
 _EXCHANGE_RX = re.compile(r"\b(?:binance|coinbase|kraken|bybit|bitget|okx|upbit|bithumb|"
                           r"robinhood|gemini|kucoin|htx|gate\.io|mexc|exchange)\b", re.I)
+
+# ── 확인되지 않은 서술(가정·예상·루머·질문·의견) — 2026-09-27 리뷰 RV2-N3·N5·N11 ──
+# 사용자 규칙: 🟢/🔴/⚪ 칩은 **확인된 사실 뉴스에만**. "Bitcoin could drop to $50K if ETF
+# inflows stall, analyst warns" 가 🟢 ETF 순유입으로, "Fed expected to hike rates?" 가
+# "연준이 기준금리를 인상했습니다"로 나갔다. 이벤트 트리거가 걸린 **그 구절**(제목의
+# 대시·물음표·콜론으로 나뉜 조각, 본문은 문장)에 아래 표지가 있으면 사실로 올리지 않는다.
+# 구절 단위로 보는 이유: "Solana Treasury Giant Teams Up With Kraken — Is Institutional
+# Demand Entering A New Phase?" 처럼 사실 뒤에 수사 질문이 붙는 제목이 흔하다.
+_SPEC_RX = re.compile(
+    r"\?|\b(?:could|might|would|if|whether|predicts?|predicted|predictions?|forecasts?|"
+    r"expect(?:s|ed|ing|ations?)?|likely|unlikely|odds|rumou?r(?:s|ed)?|reportedly|"
+    r"alleged(?:ly)?|unconfirmed|speculat\w*|possible|possibly|potential(?:ly)?|"
+    r"warns?|warning|analysts?|price[sd]?\s+in|pricing\s+in|poised|mulls?|considers?|"
+    r"weighs?|(?<!in )may(?!\s+\d))\b", re.I)
+_SPEC_EXEMPT_RX = re.compile(r"\b(?:as|than)\s+expected\b", re.I)
+_SEG_SEP_RX = re.compile(r"(?<=[?!.;:])\s+|\s+[—–|]\s+|\s+-\s+|\n")
+# 해킹 트리거가 걸려도 부인·루머·피싱·"피해 없음"이면 해킹 사실이 아니다(RV2-N11).
+_HACK_NEG_RX = re.compile(
+    r"\bdenie[sd]\b|\bdeny(?:ing)?\b|\brumou?rs?\b|\bno funds\b|\bfunds? (?:are|were|remain) safe\b|"
+    # "compromised" 는 넣지 않는다 — "Private keys were not compromised"(실측 Bitget $351.6M
+    # 유출 기사)처럼 실제 해킹 기사의 경위 설명에 흔하다.
+    r"\bnot (?:been )?(?:hacked|affected|exploited|stolen)\b|\bphishing\b|\bscam\w*|"
+    r"\bfalse\b|\bfake\b|\bimpersonat\w*", re.I)
+# ETF 승인·거절·연기(RV2-N4). 자금 흐름 단어가 함께 있으면 흐름 기사로 둔다.
+_ETF_FLOW_WORD_RX = re.compile(r"\binflows?\b|\boutflows?\b|\bnet-?flows?\b|\bflows?\b", re.I)
+_ETF_DECISION = [
+    ("approve", 1, re.compile(r"\bapprov(?:e|es|ed|al|ing)\b|\bgreen[- ]?light", re.I)),
+    ("reject", -1, re.compile(r"\breject(?:s|ed|ion)?\b|\bdenie[sd]\b|\bdisapprov\w*", re.I)),
+    ("delay", -1, re.compile(r"\bdelay(?:s|ed)?\b|\bpostpone\w*|\bextends? (?:the )?(?:review|deadline)", re.I)),
+]
+
+
+def _segment_at(text: str, pos: int) -> str:
+    """text 안 pos 가 속한 구절(대시·물음표·콜론·문장 경계로 나눈 조각)."""
+    start = 0
+    for m in _SEG_SEP_RX.finditer(text or ""):
+        if m.start() >= pos:
+            return text[start:m.start()] if m.start() > start else text[start:m.end()]
+        start = m.end()
+    return (text or "")[start:]
+
+
+def is_speculative(text: str, pos: int) -> bool:
+    """pos(이벤트 트리거 위치)가 걸린 구절이 가정·예상·루머·질문·의견 서술인가."""
+    seg = _SPEC_EXEMPT_RX.sub(" ", _segment_at(text, pos))
+    return bool(_SPEC_RX.search(seg))
+
+
+def _etf_decision(lead: str) -> tuple:
+    """(결정 키, 극성) — 승인·거절·연기 기사면. 흐름 단어가 있으면 ("", 0)."""
+    if _ETF_FLOW_WORD_RX.search(lead or ""):
+        return "", 0
+    for key, pol, rx in _ETF_DECISION:
+        if rx.search(lead or ""):
+            return key, pol
+    return "", 0
 
 # ── 차트 시나리오(BitcoinBullets 템플릿) ───────────────────────────────
 _BULL_LINE_RX = re.compile(r"bull(?:ish)?\s*(?:case|scenario)\s*[:：](?P<t>[^\n]*)", re.I)
@@ -316,8 +386,28 @@ _TARGET_RX = [
     (re.compile(r"(\$?[\d.,]+)\s*-\s*(\$?[\d.,]+)\s+is the (\w+) target", re.I), "range"),
     (re.compile(r"first target should be around (\d+%)", re.I), "pct"),
     (re.compile(r"\bx2\b", re.I), "x2"),
-    (re.compile(r"(?:reach|retest|toward|to)\s+(\$\d[\d,]*(?:\.\d+)?)", re.I), "level"),
+    (re.compile(r"(?:reach|retest|toward|to)\s+(" + r"\$\d[\d,]*(?:\.\d+)?(?:\s?K\b)?" + _NO_UNIT + r")",
+                re.I), "level"),
 ]
+
+# 제목·목표의 "$가격" 토큰 — 단위 금액($1.2B)은 제외, "$150K" 는 $150,000 으로 정규화
+# (2026-09-27 리뷰 RV2-N6).
+_DOLLAR_LEVEL_RX = re.compile(r"\$\d[\d,]*(?:\.\d+)?(?:\s?K\b)?" + _NO_UNIT, re.I)
+
+
+def _norm_level(tok: str) -> str:
+    """"$150K" → "$150,000", "$1.5k" → "$1,500". 그 외는 그대로."""
+    t = (tok or "").strip()
+    m = re.fullmatch(r"\$(\d[\d,]*(?:\.\d+)?)\s?[Kk]", t)
+    if not m:
+        return t
+    v = float(m.group(1).replace(",", "")) * 1000
+    return f"${v:,.0f}" if v == int(v) else f"${v:,.2f}"
+
+
+def _dollar_level(text: str) -> str:
+    m = _DOLLAR_LEVEL_RX.search(text or "")
+    return _norm_level(m.group(0)) if m else ""
 
 
 _ART_BULL_RX = re.compile(r"rebound|rally|bulls?\b|bullish|outperform|heading toward|higher|climb|"
@@ -353,7 +443,7 @@ def parse_call(text: str) -> dict:
         elif kind == "x2":
             target = "2배"
         else:
-            target = m.group(1)
+            target = _norm_level(m.group(1))
         break
     cond = bool(re.search(r"\bif\b|\bonly if\b|once we|after a break", body, re.I))
     return {"tf": tf, "stance": stance, "pattern": pat, "target": target,
@@ -393,24 +483,40 @@ def classify_event(text: str) -> Optional[dict]:
     amts = amounts(body)
     # 제목·첫 문장에 걸린 유형을 우선 — 본문 뒤쪽 한 단어로 유형이 정해지지 않게.
     hit = None
+    spec = False
     for scope in (lead, body):
         for k, rx, lab, pol, hz, tier in TYPES:
-            if rx.search(scope):
-                hit = (k, lab, pol, hz, tier)
-                break
+            m = rx.search(scope)
+            if not m:
+                continue
+            # 부인·루머·피싱 기사는 해킹 사실이 아니다(RV2-N11) — 다른 유형을 계속 찾는다.
+            if k == "hack" and _HACK_NEG_RX.search(lead):
+                continue
+            hit = (k, lab, pol, hz, tier)
+            spec = is_speculative(scope, m.start())
+            break
         if hit:
             break
-    if not hit and _MACRO_WEAK_RX.search(lead):
-        hit = ("macro", "매크로", 0, "단기", "M")
+    if not hit:
+        mw = _MACRO_WEAK_RX.search(lead)
+        if mw:
+            hit = ("macro", "매크로", 0, "단기", "M")
+            spec = is_speculative(lead, mw.start())
     if not hit:
         return None
     k, lab, pol, hz, tier = hit
     pol = _polarity(k, pol, body, amts)
+    decision = ""
+    if k == "etf":
+        decision, dpol = _etf_decision(lead)
+        if decision:
+            pol = dpol
     stale = bool(_STALE_RX.search(lead))
     if stale:
         tier, pol = "M", 0
     return {"type": k, "label": lab, "pol": pol, "horizon": hz, "tier": tier,
-            "amounts": amts, "levels": levels(body), "stale": stale}
+            "amounts": amts, "levels": levels(body), "stale": stale,
+            "spec": spec, "decision": decision}
 
 
 def parse(text: str) -> dict:
@@ -432,6 +538,16 @@ def parse(text: str) -> dict:
         return {"kind": "noise", "why": "지난 예측 자찬·홍보", "title": title}
     lead2 = "\n".join(body.split("\n")[:2])
     ev = classify_event(lead2)
+    # 가정·예상·루머·질문형 구절에서 걸린 이벤트는 사실형으로 올리지 않는다(RV2-N3·N5).
+    # 콜·기사형 의견으로 풀리면 그쪽(💬, 칩 없음), 아니면 맨 끝에서 💬 전망 기사로 싣는다.
+    spec_ev = ev if (ev and ev.get("spec")) else None
+    if spec_ev:
+        ev = None
+    # 채널 콜 템플릿("$BTCUSDT Update: 15m")의 본문 한 줄("Whales bought the dip")은 채널의
+    # 차트 해설이지 확인된 사건이 아니다 — 금액도 H 유형도 없으면 사실형으로 올리지 않는다
+    # (RV2-N1: 이 글이 "🟢 호재 고래 매수 $15M" 으로 나갔다).
+    if ev and not ev["amounts"] and ev["type"] not in H_TYPES and re.search(r"update\s*:", title, re.I):
+        ev = None
     if ev and (ev["amounts"] or ev["type"] in H_TYPES or ev["type"] in ("macro", "whale", "flow")):
         ev_full = classify_event(body) or ev
         # 제목에서 정한 유형을 유지하되 금액·레벨은 본문 전체에서 모은다.
@@ -445,11 +561,26 @@ def parse(text: str) -> dict:
         if c["stance"] != "관망" or c["pattern"] or c["target"] or c["levels"]:
             return {"kind": "call", "title": title, "source": "채널", **c}
     ev = classify_event(body)
+    if ev and ev.get("spec"):
+        spec_ev = spec_ev or ev
+        ev = None
     if ev and ev["amounts"]:
         return {"kind": "fact", "title": title, **ev}
+    if spec_ev:
+        # 사실형 유형은 걸렸지만 가정·예상·루머·질문 구절 — 칩 없는 💬 전망 기사로만
+        # 싣는다. 원문에 없는 사실을 만들지 않도록 수치·레벨·방향은 붙이지 않고 제목만
+        # 인용한다(RV2-N3·N5). 아래 기사형 분기("가격 흐름을 다뤘습니다"·"$X 부근을 향해
+        # 움직이고 있다고 봤습니다")보다 앞에 둔다 — 질문형 제목엔 그 서술도 단정이다.
+        c = parse_call(text)
+        c.update(stance="관망", pattern="", target="", levels={}, title_level="",
+                 title_en=title, conditional=False)
+        return {"kind": "call", "title": title, "source": "기사", "speculative": True,
+                "event_type": spec_ev.get("type"), **c}
     # 기사형 의견 — "Dogecoin (DOGE) Faces Strong Resistance at $0.1000" 처럼 제목에
     # 가격 수준이 있는 분석 기사. 방향 단정 없이 💬 로 싣는다(Q3).
-    if re.search(r"\$\d", title) and re.search(
+    # 가격 수준은 단위 금액이 아닌 $토큰만(RV2-N6 — "$1.2B in liquidations" 는 금액).
+    title_lv = _dollar_level(title)
+    if title_lv and re.search(
             r"resistance|support|toward|heading|ceiling|mark|level|holds?|rebound|rally|target",
             title, re.I):
         c = parse_call(text)
@@ -462,7 +593,7 @@ def parse(text: str) -> dict:
             c["stance"] = "관망"
         if c["pattern"] in ("저항 돌파", "지지 확인"):
             c["pattern"] = ""
-        lv = re.search(r"\$\d[\d,]*(?:\.\d+)?", title).group(0)
+        lv = title_lv
         c["title_level"] = lv
         if not c["levels"]:
             if re.search(r"support", title, re.I):
@@ -545,7 +676,7 @@ NAME_STOPLIST = frozenset({
     "near", "avalanche", "maple", "sun", "sun token", "official trump", "trump",
     "global dollar", "superverse", "super", "edgex", "monad", "cosmos", "venice",
     "vaulta", "aethir", "conflux", "decentraland", "basic attention", "artificial inu",
-    "falcon finance", "pump.fun", "doublezero", "kamino", "jito", "internet computer",
+    "falcon finance", "falcon", "pump.fun", "doublezero", "kamino", "jito", "internet computer",
     "tether gold", "world liberty financial", "theta network", "theta", "ecash",
 })
 _SUFFIX_RX = re.compile(r"\s+(?:protocol|network|hub|finance|token|coin|chain|\(ex-[^)]*\))$", re.I)
@@ -566,6 +697,10 @@ def build_name_index(universe) -> dict:
         if not sym:
             continue
         syms.add(sym)
+        # 원래 이름이 불용어면 접미사 뗀 별칭도 등록하지 않는다(RV2-N12: "falcon finance"
+        # 는 막혔는데 "falcon" 이 새어 "Falcon Heavy launch" → FF 로 매칭됐다).
+        if name and name.strip().lower() in NAME_STOPLIST:
+            continue
         if name and name.upper() != sym:
             for alias in {name, _SUFFIX_RX.sub("", name)}:
                 a = alias.strip().lower()
@@ -753,14 +888,31 @@ def _bp(text: str) -> str:
     return f"{m.group(1)}bp" if m else ""
 
 
+_FED_MOVE_RX = [
+    ("인상", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:hikes?|hiked|raises?|raised)\b|\brate hike", re.I)),
+    ("인하", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:cuts?|lowers?|lowered)\b|\brate cut", re.I)),
+    ("동결", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:holds?|held|pauses?|paused)\b", re.I)),
+]
+
+
 def _fed_move(text: str) -> str:
-    t = text or ""
-    if re.search(r"\bfed\b[^\n]{0,50}\b(?:hikes?|raises?)\b|\brate hike", t, re.I):
-        return "인상"
-    if re.search(r"\bfed\b[^\n]{0,50}\b(?:cuts?|lowers?)\b|\brate cut", t, re.I):
-        return "인하"
-    if re.search(r"\bfed\b[^\n]{0,50}\b(?:holds?|pauses?)\b", t, re.I):
-        return "동결"
+    """연준 결정의 **확정 서술**만 — "인상"/"인하"/"동결" 또는 "".
+
+    2026-09-27 리뷰 RV2-N3: 종전엔 본문 어디서든 hike 류 단어가 보이면(질문·예상 문장
+    포함) "미 연준이 기준금리를 인상했습니다"라고 썼다. 이제 줄(제목 먼저) 순서로 보고,
+    결정 동사가 걸린 구절이 가정·예상·질문(is_speculative)이면 건너뛴다. 한 줄 안에서는
+    **가장 앞에 걸린 결정**을 쓴다("Fed holds … traders expect a rate cut" → 동결)."""
+    for line in (text or "").split("\n"):
+        best = None
+        for mv, rx in _FED_MOVE_RX:
+            for m in rx.finditer(line):
+                if is_speculative(line, m.end() - 1):
+                    continue
+                if best is None or m.start() < best[0]:
+                    best = (m.start(), mv)
+                break
+        if best:
+            return best[1]
     return ""
 
 
@@ -785,6 +937,12 @@ _DEPOSIT_RX = re.compile(r"deposit(?:s|ed)?\b[^\n]{0,60}\binto\b", re.I)
 def event_phrase(p: dict, text: str) -> str:
     k, pol = p.get("type"), p.get("pol", 0)
     if k == "etf":
+        dec = p.get("decision")
+        if dec:
+            return {"approve": "ETF 승인", "reject": "ETF 거절", "delay": "ETF 결정 연기"}[dec]
+        if not _ETF_FLOW_WORD_RX.search(text or "") and not p.get("amounts"):
+            # 흐름 단어·금액 없이 "순유입"이라 쓰면 원문에 없는 사실이 된다(RV2-N4).
+            return "ETF 매수세" if pol > 0 else ("ETF 매도세" if pol < 0 else "ETF 소식")
         return "ETF 순유입" if pol > 0 else ("ETF 순유출" if pol < 0 else "ETF 자금 동향")
     if k == "whale":
         if _DEPOSIT_RX.search(text):
@@ -835,6 +993,8 @@ def summary_line(p: dict, text: str) -> str:
         return f"💬 차트 의견{tf} · {act} · 단기"
     if kind == "call":
         tf = f"({p['tf']})" if p.get("tf") else ""
+        if p.get("speculative"):
+            return "💬 전망·가정 기사 · 미확인"
         if p.get("source") == "기사":
             st = "" if p.get("stance") == "관망" else f" · {p['stance']} 논조"
             lv = p.get("levels") or {}
@@ -859,12 +1019,27 @@ def _fact_what(p: dict, text: str, sym: str) -> str:
     subj = "시장" if sym == MARKET_SYMBOL else ko_name(sym)
     asset = _asset_of(text, sym)
     if k == "etf":
+        dec = p.get("decision")
+        if dec:
+            actor = "미 SEC" if re.search(r"\bSEC\b", text) else "규제 당국"
+            spot = "현물 " if re.search(r"\bspot\b", text, re.I) else ""
+            etf = f"{asset} {spot}ETF"
+            if dec == "approve":
+                return f"{josa(actor, '이/가')} {josa(etf, '을/를')} 승인했습니다."
+            if dec == "reject":
+                return f"{josa(actor, '이/가')} {josa(etf, '을/를')} 승인하지 않았습니다."
+            return f"{josa(actor, '이/가')} {etf} 승인 여부 결정을 미뤘습니다."
+        has_flow = bool(_ETF_FLOW_WORD_RX.search(text))
         if pol > 0:
-            return (f"{asset} 현물 ETF로 {amt} 규모의 순유입이 집계됐습니다." if amt
-                    else f"{asset} 현물 ETF 자금이 순유입으로 돌아섰습니다.")
+            if amt:
+                return f"{asset} 현물 ETF로 {amt} 규모의 순유입이 집계됐습니다."
+            return (f"{asset} 현물 ETF 자금이 순유입으로 돌아섰습니다." if has_flow
+                    else f"{asset} 현물 ETF에 매수 수요가 들어오고 있다는 소식입니다.")
         if pol < 0:
-            return (f"{asset} 현물 ETF에서 {amt} 규모의 순유출이 나왔습니다." if amt
-                    else f"{asset} 현물 ETF에서 자금이 빠져나가고 있습니다.")
+            if amt:
+                return f"{asset} 현물 ETF에서 {amt} 규모의 순유출이 나왔습니다."
+            return (f"{asset} 현물 ETF에서 자금이 빠져나가고 있습니다." if has_flow
+                    else f"{asset} 현물 ETF에서 매도·환매가 나오고 있다는 소식입니다.")
         return f"{asset} 현물 ETF 자금 흐름 관련 소식입니다" + (f"(언급 규모 {amt})." if amt else ".")
     if k == "hack":
         where = (_first_cap(r"(?:drained|stolen|taken) from ([A-Z][\w.]*\w)", text)
@@ -922,12 +1097,16 @@ def _fact_what(p: dict, text: str, sym: str) -> str:
         else:
             what = qty or (f"{amt} 규모" if amt else "")
         if _DEPOSIT_RX.search(text):
-            who = _first_cap(r"(?:BREAKING:\s*)?([A-Z][\w]+) deposits", text) or "대형 지갑"
+            # 주체는 두세 단어 이름까지("Trend Research") — RV2-N10: 종전엔 "Research"만 잡혔다.
+            who = _first_cap(r"(?<![\w:])([A-Z][\w]+(?:[ \t]+[A-Z][\w]+){0,2})[ \t]+deposit(?:s|ed)\b",
+                             text) or "대형 지갑"
             dest = _first_cap(r"\binto ([A-Z][\w]+(?: [A-Z][\w]+)?)", text) or "거래소"
-            return f"{josa(who, '이/가')} {what + ' ' if what else ''}{josa(asset, '을/를')} {josa(dest, '으로/로')} 입금했습니다."
+            # 수량(qty)에 이미 자산 티커가 있으면 자산명을 또 붙이지 않는다("ETH 50,000개 이더리움" 방지).
+            obj = what if qty else (f"{what} {asset}" if what else asset)
+            return f"{josa(who, '이/가')} {josa(obj, '을/를')} {josa(dest, '으로/로')} 입금했습니다."
         who = _first_cap(r"^(?:BREAKING:\s*|JUST IN:\s*)?([A-Z][a-z]\w+) moved", text) or "고래 지갑"
         verb = "매수했습니다" if pol > 0 else ("매도했습니다" if pol < 0 else "옮겼습니다")
-        obj = f"{what}의 {asset}" if what else asset
+        obj = what if qty else (f"{what}의 {asset}" if what else asset)
         return f"{josa(who, '이/가')} {josa(obj, '을/를')} {verb}."
     if k == "flow":
         d = "유입" if pol >= 0 else "유출"
@@ -960,6 +1139,13 @@ def _fact_why(p: dict, text: str) -> str:
             return "거래소 해킹은 해당 거래소 자산뿐 아니라 시장 전반의 위험회피로 번지기도 하는 단기 악재입니다."
         return "해킹은 보통 해당 생태계 코인에 단기 매도 압력으로 작용하는 악재입니다."
     if k == "etf":
+        dec = p.get("decision")
+        if dec == "approve":
+            return "ETF 승인은 기관 자금이 들어올 통로가 열린다는 뜻이라 통상 호재로 받아들여집니다."
+        if dec == "reject":
+            return "ETF 불승인은 기관 자금 유입 기대를 늦춰 통상 악재로 받아들여집니다."
+        if dec == "delay":
+            return "ETF 결정 연기는 불확실성을 늘려 통상 단기 악재로 받아들여집니다."
         if pol > 0:
             return "ETF 순유입은 기관의 현물 매수 수요로 해석돼 통상 단기 호재로 받아들여집니다."
         if pol < 0:
@@ -1118,6 +1304,15 @@ def _call_sentences(p: dict, sym: str, summary_ko: str) -> list:
     out = []
     lv = p.get("levels") or {}
     tl = p.get("title_level") or ""
+    if p.get("speculative"):
+        # 가정·예상·루머·질문형 기사(RV2-N3·N5·N11) — 사건을 서술하지 않고 제목만 인용한다.
+        kt = _ko_title(summary_ko) or (p.get("title_en") or "").strip()
+        subj = "시장" if sym == MARKET_SYMBOL else name
+        out.append(f"{josa(subj, '을/를')} 다룬 전망·가정 기사입니다.")
+        if kt:
+            out.append(f"기사 제목은 “{kt}”입니다.")
+        out.append("확인된 사건이 아니라 예상·가정·의견을 담은 내용이라 사실로 단정할 수 없습니다.")
+        return out
     if p.get("source") == "기사":
         if tl and lv.get("support") == tl:
             out.append(f"분석 기사는 {josa(name, '이/가')} {tl} 지지선 위에서 버티고 있다고 봤습니다.")
@@ -1163,6 +1358,11 @@ def _call_sentences(p: dict, sym: str, summary_ko: str) -> list:
         ko = _pick_ko_detail(summary_ko, " ".join(out))
         if ko:
             out.append(ko)
+    if len(out) < 2:
+        # 번역 보조문도 없으면(번역 실패로 영문 유지 등) 템플릿 2문장째 — 사용자 요구
+        # "설명 2~3문장"(RV2-N9). 사실을 보태지 않는 성격 안내 문장만 쓴다.
+        out.append("확인된 사건이 아니라 분석 의견입니다." if p.get("source") == "기사"
+                   else "확인된 사건이 아니라 채널의 차트 해석입니다.")
     return out
 
 

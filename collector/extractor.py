@@ -123,7 +123,15 @@ _SPACED_ORDINAL_LABEL = re.compile(
     # "Target 2 (major) 0.5" 류에서도 지워지는 건 서수뿐이라 가격은 보존된다.
     # 재파싱 회귀 보강: "Target 1 at $2,507.06"(749), "Target Two (R2): $2,714.10"(799) —
     # 'at'/'@' 뒤따름과 영어 서수 단어도 서수로 본다.
-    r"\s+(?:[0-9]{1,2}|one|two|three|four|five|six)(?=\s*(?:\(|[:=@]|at\s))", re.I
+    # 2026-09-27 리뷰 RV2-E1: 괄호·at 뒤따름을 무조건 서수로 보면 1~2자리 **가격**이 지워졌다
+    # ("Entry 45 (support zone)" → 진입 없음, "Target 15 at resistance" → TP 없음 — SOL·
+    # AVAX·LINK 가격대). 괄호는 ①안이 서수 표기(TP1·T2·R2)이거나 ②닫은 뒤 콜론·등호·
+    # 가격 숫자가 올 때만, at/@ 은 **뒤에 가격 숫자가 올 때만** 서수로 본다.
+    r"\s+(?:[0-9]{1,2}|one|two|three|four|five|six)"
+    r"(?=[ \t]*(?:[:=]"
+    r"|\((?:TP|TGT|T|R|Target)[ \t]?[0-9]{1,2}\)"
+    r"|\([^)\n]{0,40}\)[ \t]*(?:[:=]|[:=]?[ \t]*\$?[0-9])"
+    r"|(?:@|at\s)[ \t]*\$?[0-9]))", re.I
 )
 
 # 가격 숫자 하나: 1,234.56 / 0.00123 / 12100 / $8.30 (콤마·$ 허용)
@@ -202,7 +210,9 @@ _R_MULTIPLE = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*R\b", re.I)
 #    "1:2 risk-to-reward"·"to 3:1" 처럼 한쪽이 1 인 비율도 지운다(가격이 아님).
 _RR_RATIO = re.compile(
     r"(?:\bR\s*[/:]\s*R\b|\bRRR?\b|\brisk\s*[/:-]?\s*(?:to\s*[-\s]?)?reward(?:\s*ratio)?)"
-    r"(?:\s*\([^)]*\))?\s*[:=]?\s*~?\s*\d+(?:\.\d+)?(?:\s*[:/]\s*\d+(?:\.\d+)?)?",
+    # 2026-09-27 리뷰 RV2-E5: 종전 `\s*[:=]?\s*~?\s*` 는 공백 런에서 3차 백트래킹
+    # ("RR"+공백 1600자 → 8초). 구분 문자 한 클래스로 합친다(허용 문자열은 같다).
+    r"(?:\s*\([^)]*\))?[\s:=~]*\d+(?:\.\d+)?(?:\s*[:/]\s*\d+(?:\.\d+)?)?",
     re.I,
 )
 _ONE_RATIO = re.compile(
@@ -219,8 +229,11 @@ _LEVERAGE_LABEL = re.compile(
 #    "4-hour"·"15 minute"(831). 656 PROVE "(M15 Entry / H1" → 1.0, 879 "4H" → 4.0.
 _TF_TOKEN = re.compile(r"(?<![\w.,$])[HMDW]\d{1,3}\b")
 _TF_NUM_UNIT = re.compile(
-    r"(?<![\w.,$])\d{1,3}\s?(?:h|hr|hrs|m|min|mins|d|w)\b"
-    r"|(?<![\w.,$])\d{1,3}\s*-?\s*(?:hours?|minutes?|mins?|days?|weeks?|months?|years?|candles?|bars?)\b",
+    # "650 w/ trailing stop" 의 w/ 는 with 약어다 — 한 글자 단위 w 뒤 '/' 는 기간 아님(RV2-E6).
+    r"(?<![\w.,$])\d{1,3}\s?(?:h|hr|hrs|m|min|mins|d|w(?!/))\b"
+    # `\s*-?\s*` 는 공백 런에서 2차 백트래킹(RV2-E5 계열, 숫자+공백 4000자 0.58s) —
+    # `(?:\s*-)?\s*` 로 같은 문자열을 선형으로 받는다.
+    r"|(?<![\w.,$])\d{1,3}(?:\s*-)?\s*(?:hours?|minutes?|mins?|days?|weeks?|months?|years?|candles?|bars?)\b",
     re.I,
 )
 # ④ 기간: "Over The Next 30 Days"(575 ZORA → 진입 30.0), "2 weeks" — ③의 둘째 줄이 담당.
@@ -422,11 +435,16 @@ def _window_end(text: str, end: int) -> int:
     return end
 
 
-def _is_trigger(text: str, nstart: int, nend: int) -> bool:
+def _is_trigger(text: str, nstart: int, nend: int, same_line: bool = False) -> bool:
     """진입값(text[nstart:nend]) 주변이 돌파 트리거 서술인가 (감사 C-B).
     문맥 = 그 숫자가 놓인 문장(문장부호·개행 경계) ∪ 숫자 앞뒤 ±40자.
     'buy stop' 은 브래킷 표(663: 머리행 "(Buy Stop)" → 다음 행 "Buy Entry:")처럼
-    떨어져 쓰이는 일이 있어 ±100자까지 본다. 리테스트 동반이면 예외."""
+    떨어져 쓰이는 일이 있어 ±100자까지 본다. 리테스트 동반이면 예외.
+
+    same_line=True(스펙형 "Entry: 2500" — 2026-09-27 리뷰 RV2-E2): ±40자 창을 **그 숫자가
+    놓인 줄**로 자른다. 스펙형은 한 줄이 한 항목이라, 옆 줄(TP 줄의 "reclaim of the
+    range high", 무효화 줄의 "breakout above")의 트리거 단어가 진입을 기각해 정상 셋업
+    전체가 None 이 됐다. buy stop ±100자 예외는 그대로 둔다(663 브래킷 표)."""
     s = nstart
     while s > 0 and text[s - 1] != "\n" and not (
             text[s - 1] in ".!?" and (s >= len(text) or text[s].isspace())):
@@ -436,7 +454,13 @@ def _is_trigger(text: str, nstart: int, nend: int) -> bool:
     while e < n and text[e] != "\n" and not (
             text[e] in ".!?" and (e + 1 >= n or text[e + 1].isspace())):
         e += 1
-    ctx = text[min(s, max(0, nstart - _TRIGGER_CTX)): max(e, min(n, nend + _TRIGGER_CTX))]
+    cs = min(s, max(0, nstart - _TRIGGER_CTX))
+    ce = max(e, min(n, nend + _TRIGGER_CTX))
+    if same_line:
+        ls = text.rfind("\n", 0, nstart) + 1
+        le = text.find("\n", nend)
+        cs, ce = max(cs, ls), min(ce, n if le < 0 else le)
+    ctx = text[cs:ce]
     wide = text[max(0, nstart - _BUY_STOP_CTX): min(n, nend + _BUY_STOP_CTX)]
     hit = bool(_TRIGGER.search(ctx)) or bool(_BUY_STOP.search(wide))
     if not hit:
@@ -517,7 +541,8 @@ def _grab_after_ex(label_pat, text: str, stop_pat=None, allow_to_range: bool = F
                 # 아니다(754 ARB "entry opportunity before the next push toward
                 # 0.2241 key resistance").
                 return True
-            if reject_trigger and _is_trigger(text, _base + nstart, _base + nend):
+            if reject_trigger and _is_trigger(text, _base + nstart, _base + nend,
+                                              same_line=is_spec):
                 if is_spec:
                     spec_seen = True
                 return True
@@ -887,6 +912,15 @@ _RESULT_REPORT = re.compile(
     re.I)
 # "once TP1 hit, move SL to entry" 처럼 조건절 안의 'TP hit' 은 결과보고가 아니다.
 _CONDITIONAL_BEFORE = re.compile(r"\b(?:if|once|when|after|until|before|as\s+soon\s+as)\b[^.\n]{0,20}$", re.I)
+# 2026-09-27 리뷰 RV2-E3: 운영 플랜 문구 "TP1 hit -> move SL to entry" 는 조건절이다
+# (hit 뒤에 화살표·then·move). 콤마는 "move/then" 이 이어질 때만 인정한다 — "TP1 hit,
+# +10% profit" 같은 진짜 결과보고를 놓치지 않게.
+_CONDITIONAL_AFTER = re.compile(r"[ \t]*,?[ \t]*(?:->|→|=>|➡|\bthen\b|\bmove\w*\b)", re.I)  # .match(text, pos)
+# "+10% profit/gain" 이 TP·Target 라벨 줄에 있으면 목표 수익률 주석이다
+# ("TP1: 0.22 (+10% profit)", "Target: 2.40 for a +20% gain") — 결과보고 아님.
+_PROFIT_PCT = re.compile(r"^\+\s*\d", re.I)
+_TP_LINE_LABEL = re.compile(r"\b(?:tp\s*\d{0,2}|targets?\s*\d{0,2}|take[\s-]*profit|tgt)\b\s*[:=]|목표|익절", re.I)
+_RESULT_WORD = re.compile(r"\b(?:hit|reached|achieved|smashed|done|filled|booked|secured)\b|✅", re.I)
 
 # 본문 티커 — "#COREUSDT", "$ZORA", "BINANCE:ETHUSDT", "CRYPTOCAP:IOST".
 _TICKER_TAG = re.compile(
@@ -896,7 +930,12 @@ _TICKER_SUFFIX = re.compile(r"(?:USDT|USDC|BUSD|USD|PERP|KRW|BTC)$")
 # 시장 지표·지수 등 코인이 아닌 태그는 교차검증에서 빼 준다.
 _TICKER_NEUTRAL = {"TOTAL", "TOTAL2", "TOTAL3", "OTHERS", "USDT", "USDC", "DXY", "SPX",
                    "NDX", "GOLD", "XAU", "XAUUSD", "DYOR", "NFA", "TA", "DCA", "ATH",
-                   "HTF", "LTF", "FOMC", "CPI", "ETF", "USD", "KRW"}
+                   "HTF", "LTF", "FOMC", "CPI", "ETF", "USD", "KRW",
+                   # 흔한 해시태그(RV2-E4 "#CRYPTO #TRADING") — 코인 티커가 아니다.
+                   "CRYPTO", "CRYPTOCURRENCY", "CRYPTOS", "TRADING", "TRADE", "ALTCOIN",
+                   "ALTCOINS", "ALTSEASON", "BLOCKCHAIN", "DEFI", "NFT", "NFTS", "WEB3",
+                   "SIGNAL", "SIGNALS", "TECHNICALANALYSIS", "PRICEACTION", "CHARTS",
+                   "BULLISH", "BEARISH", "LONG", "SHORT", "SPOT", "FUTURES", "SCALP", "SWING"}
 
 
 def _body_tickers(text: str) -> set:
@@ -948,10 +987,27 @@ def nonsetup_reason(text: str, coin_symbol: Optional[str] = None) -> Optional[st
     for m in _RESULT_REPORT.finditer(text):
         if _CONDITIONAL_BEFORE.search(text[max(0, m.start() - 40): m.start()]):
             continue
+        if _CONDITIONAL_AFTER.match(text, m.end()):
+            continue                                  # "TP1 hit -> move SL" (RV2-E3)
+        if _PROFIT_PCT.match(m.group(0)):
+            ls = text.rfind("\n", 0, m.start()) + 1
+            le = text.find("\n", m.end())
+            line = text[ls: len(text) if le < 0 else le]
+            if _TP_LINE_LABEL.search(line) and not _RESULT_WORD.search(line):
+                continue                              # "TP1: 0.22 (+10% profit)" (RV2-E3)
         return "result_report"
     if coin_symbol:
         coin = coin_symbol.upper()
         tags = _body_tickers(text)
         if tags and not any(_ticker_matches(t, coin) for t in tags):
-            return "coin_mismatch"
+            # 2026-09-27 리뷰 RV2-E4: 불일치는 '수집 코인 언급이 없고 **다른 코인 태그가
+            # 머리(첫 두 줄)에 있을 때**'만. 본문 뒤쪽 참조 티커("Watch $BTC for
+            # confirmation")나, 머리에서 수집 코인을 맨 이름으로 적은 글("BINANCE:BTCUSDT
+            # correlation\nETH long")은 불일치가 아니다(665 CRO vs #COREUSDT 는 유지).
+            head = "\n".join(text.split("\n")[:2])
+            head_tags = _body_tickers(head)
+            coin_named = bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(coin) + r"(?![A-Za-z0-9])",
+                                        head))
+            if head_tags and not coin_named:
+                return "coin_mismatch"
     return None

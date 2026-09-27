@@ -713,7 +713,14 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         # (괄호형은 1천원대 사다리부터 34칼럼으로 넘쳤다).
         head = (f"    목표:  {_tp_krw}원 진입{pct:+.1f}%" if _tp_krw
                 else f"    목표:  진입{pct:+.1f}%")
-        lines.extend(_with_suffix(head, " ".join(tail)))
+        suffix = " ".join(tail)
+        # 2026-09-27 리뷰 F1: 1천만원대 목표가(BTC 전부·ETH 일부)는 head 자체가 32칼럼을
+        # 넘는다(129,754,240원 진입+12.3% = 35칼럼). _with_suffix 는 head 폭을 보지 않으므로
+        # 그 경우 '진입+x%' 도 꼬리표로 넘겨 가격만 첫 줄에 남긴다.
+        if _tp_krw and _line_width(head) > _MAX_LINE_COLS:
+            head = f"    목표:  {_tp_krw}원"
+            suffix = " ".join([f"진입{pct:+.1f}%"] + tail)
+        lines.extend(_with_suffix(head, suffix))
     else:
         lines.append("    목표:  데이터 없음")
     if volume_rank:

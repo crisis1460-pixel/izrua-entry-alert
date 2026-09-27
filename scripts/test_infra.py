@@ -1028,6 +1028,11 @@ check("RQ7: 대기 3분(정상 범위) → 종전 문구 유지", "cron-job.org 
 # 여기서는 블록 렌더 함수만 검증한다(build_brief 전체는 test_morning_brief.py).
 from notify import morning_brief as _mb
 
+# MB 블록 픽스처는 원문(summary_en) 없는 **번역문 경로**(종전 렌더) 검증이다. 2026-09-27
+# 리뷰 RV2-N8 부터 v2 스위치가 켜져 있으면 원문 없는 행은 싣지 않고 소비만 하므로,
+# 종전 경로 계약은 스위치 OFF(롤백 경로)에서 검증한다. 블록 끝(_mbc.close)에서 복구.
+_st_cfg.SETTINGS["news_structured_enabled"] = False
+
 _MB_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 db.init_db(_MB_DB)
 _mbc = sqlite3.connect(_MB_DB)
@@ -1495,6 +1500,7 @@ check("MB8c 한도 이내면 무변경", _mb._fit_telegram(list(_mb_small), -1) 
 
 _mbc.close()
 os.unlink(_MB_DB)
+_st_cfg.SETTINGS["news_structured_enabled"] = True
 
 # ═══ NEWS-*: 뉴스 v2 (2026-09-27 사용자 결정 Q1~Q3 + "내용별 문장 길게" + 고아단어) ═══
 # 기획안 plan_2026-09-27_뉴스분석_고도화 추천안 A. 픽스처는 기획 샘플 13건의 **채널
@@ -1911,6 +1917,77 @@ check("NEWS-ORPHAN7 조각 보호가 고아를 만들면 보호를 풀어 균형
 _seg = _mb4._wrap_escaped("💬 차트 의견(4시간봉) · 저항 시험 · 단기", segments=True)
 check("NEWS-ORPHAN6 요약줄은 ' · ' 조각 단위로 접힌다('저항 / 시험' 분리 없음)",
       any("저항 시험" in x for x in _seg) and all(_mb4._display_width(x) <= _W4 for x in _seg))
+
+# ── RV2-N*·W1: 2026-09-27 코드 리뷰 확정 결함 회귀 (뉴스 v2) ──────────────────
+# 원칙: 🟢/🔴/⚪ 칩은 확인된 사실에만 · 원문에 없는 내용을 사실처럼 쓰지 않는다.
+
+
+def _rv2(sym, en, ko="", ctx=None):
+    p = _np.parse(en)
+    c = _np.compose(p, sym, en, ko, ctx or {})
+    return p, c, ((c["summary"] + " " + " ".join(c["detail"]) + " " + c["context"]) if c else "")
+
+
+_CHIPS = ("🟢", "🔴", "⚪")
+_p, _c, _t = _rv2("BTC", "$BTCUSDT Update: 15m\nBTC broke out on the 15m in the morning. Whales bought the dip.")
+check("RV2-N1 소문자 타임프레임 '15m' 은 금액 아님 — '$15M 고래 매수' 사실형 없음",
+      "$15M" not in _t and not any(ch in _t for ch in _CHIPS)
+      and _np.amounts("broke out on the 15m in the morning") == []
+      and _np.amounts("5m ETH chart") == [])
+check("RV2-N2 코인 수량('1.2M ETH'·'1.5M of BTC')은 달러 금액 아님, 달러 표기가 대표 금액",
+      _np.amounts("1.2M ETH moved to Binance") == [] and _np.amounts("whales hold 1.5M of BTC") == []
+      and _np.amounts("A whale moved 1.2M ETH worth $4.1B into Binance")[0][0] == "$4.1B"
+      and _np.amounts("Spot ETFs saw 500M in net inflows")[0][0] == "$500M")
+_p, _c, _t = _rv2("MARKET", "Fed expected to hike rates? Markets price in cut\n"
+                            "Traders expect the Fed decision next week.")
+check("RV2-N3 예상·질문형 연준 기사 → 사실형 아님('인상했습니다' 없음, 🌐 시장 아님)",
+      _p["kind"] != "fact" and "인상했습니다" not in _t and not any(ch in _t for ch in _CHIPS)
+      and not _np.is_market_news(_p)
+      and _np._fed_move("Fed expected to hike rates? Markets price in cut") == ""
+      and _np._fed_move("Fed holds rates steady\nTraders expect a rate cut in December") == "동결"
+      and _np._fed_move("Fed raises rates by 25 bps as inflation persists") == "인상")
+_p, _c, _t = _rv2("SOL", "SEC approves spot Solana ETF\nThe SEC approved the first spot Solana ETF on Tuesday.")
+check("RV2-N4 ETF 승인은 '순유입'이 아니라 'ETF 승인'(원문에 없는 자금 흐름 서술 없음)",
+      "순유입" not in _t and "ETF 승인" in _c["summary"] and "승인했습니다" in _t)
+_p, _c, _t = _rv2("MARKET", "Bitcoin could drop to $50K if ETF inflows stall, analyst warns\nAnalyst opinion.")
+check("RV2-N5 가정·의견 기사(could/if/analyst warns) → 칩 없음 · 🌐 시장 아님",
+      _p["kind"] != "fact" and not any(ch in _t for ch in _CHIPS) and not _np.is_market_news(_p)
+      and "순유입" not in _t)
+_p, _c, _t = _rv2("SOL", _NEWS_FX["cryptosignals0rg/19331"])
+check("RV2-N5b 사실 구절 뒤 수사 질문이 붙은 제목은 사실형 유지(질문 구절만 본다)",
+      _p["kind"] == "fact" and _p["type"] == "partner" and not _p.get("spec"))
+_p1, _c1, _t1 = _rv2("ETH", "ETH sees $1.2B in liquidations as price nears support\nTraders were liquidated.")
+_p2, _c2, _t2 = _rv2("BTC", "Why Bitcoin is heading toward $150K\nAnalyst piece about bitcoin rally.",
+                     ctx={"cur_usd": 80000.0})
+check("RV2-N6 단위 금액을 가격 수준으로 자르지 않음('$1.2' 없음, $150K → $150,000)",
+      "$1.2 " not in _t1 + " " and "지지 $1.2" not in _t1 and "$150 " not in _t2 + " "
+      and "(-99.8%)" not in _t2 and "$150,000" in _t2)
+_p, _c, _t = _rv2("ETH", "$ETHUSDT Update: 4h\nWe expect ETH to go up, bullish momentum. Rise is coming.")
+check("RV2-N9 방향 콜 글 설명은 번역 보조문 없이도 2문장 이상", _c and len(_c["detail"]) >= 2)
+_p, _c, _t = _rv2("ETH", "BREAKING: Trend Research deposits 50,000 ETH into Binance\n"
+                         "Trend Research deposited 50,000 ETH ($120M) into Binance.")
+check("RV2-N10 두 단어 주체명 보존('Trend Research가') · 자산명 중복 없음",
+      "Trend Research가" in _t and "이더리움을" not in _t and "ETH 50,000개" in _t)
+_p1, _c1, _t1 = _rv2("MARKET", "Kraken hack rumors denied\nKraken said no funds were stolen.")
+_p2, _c2, _t2 = _rv2("MARKET", "Hackers target Coinbase users in phishing scam\n"
+                               "No funds were stolen from Coinbase, the exchange said.")
+check("RV2-N11 부인·루머·피싱 기사를 해킹 사실로 쓰지 않음(🔴 해킹·🌐 시장 없음)",
+      "해킹 피해" not in _t1 + _t2 and not _np.is_market_news(_p1) and not _np.is_market_news(_p2)
+      and _np.parse("Bybit hacked for $1.5B\nBybit was exploited for $1.5 billion in ETH.")["type"] == "hack")
+_idx = _np.build_name_index([{"symbol": "FF", "name": "Falcon Finance"},
+                             {"symbol": "NEAR", "name": "NEAR Protocol"}])
+check("RV2-N12 불용어 이름은 접미사 뗀 별칭도 막는다('falcon' → FF 없음)",
+      "falcon" not in _idx and _np.match_coin_name("Falcon Heavy launch delayed\nSpaceX Falcon rocket.",
+                                                   _idx) is None)
+_w1_bad = 0
+for _cur, _up, _dn in [(0.00000583, "0.00000596", "0.00000570"), (81000.0, "82,000", "80,000")]:
+    for _chg in (-12.34, 0.5):
+        _s = _np.context_line({"kind": "scenario", "bull": {"trigger": _up}, "bear": {"trigger": _dn}},
+                              "HBAR", {"chg24": _chg, "cur_usd": _cur})
+        _out = _mb4._wrap_escaped(_s, segments=True, reorder=True)
+        if _mb4.orphan_lines(_out, strict=True) or any(_mb4._display_width(x) > _W4 for x in _out):
+            _w1_bad += 1
+check("RV2-W1 극소가 분기선 맥락줄도 고아 줄 없음(폭 36 유지)", _w1_bad == 0)
 _st_cfg.SETTINGS["news_translate_enabled"] = True
 
 

@@ -511,6 +511,10 @@ _EXTRA_COLUMNS = {
     # 무장 확정 시각(epoch). 터치 판정의 캔들 하한이 max(collected_at, armed_at)
     # 이 되어 **무장 전 캔들 저가로는 터치되지 않는다**. armed=0/NULL 이면 NULL.
     "armed_at": "REAL",
+    # 즉시터치 오염 표본 플래그 (2026-09-27 리뷰 #5). touch_penetration_pct 가 NULL 이라
+    # STALE_TOUCH_COND 를 통과하던 즉시터치 중, 업비트 1분봉으로 수집 시점 가격을 복원해
+    # 관통 >10% 로 확인된 행(12건)을 1회성 백필로 표시한다. 1 = 오염.
+    "touch_stale": "INTEGER",
 }
 
 # ── 오염 터치(즉시터치) 표본 배제 조건 (2026-09-27) ───────────────────────────
@@ -527,8 +531,11 @@ _EXTRA_COLUMNS = {
 # = NULL → **그 행이 조회에서 조용히 사라진다**. 관통 깊이는 억제 터치·백필
 # 대기·구세대 행에서 흔히 NULL 이라, 보강 없이 붙이면 오염 33건을 빼려다
 # 정상 표본 수백 건을 날린다. NULL 은 "오염 아님"(fail-open)으로 읽는다.
-STALE_TOUCH_COND = ("(COALESCE(touch_penetration_pct, 0) > 10 "
-                    "AND (COALESCE(touched_at, 0) - COALESCE(collected_at, 0)) < 600)")
+# 2026-09-27 리뷰 #5: 관통 NULL 즉시터치 중 복원으로 오염 확인된 행은 touch_stale=1
+# (_backfill_touch_stale) — OR 로 함께 배제한다.
+STALE_TOUCH_COND = ("(COALESCE(touch_stale, 0) = 1 OR "
+                    "(COALESCE(touch_penetration_pct, 0) > 10 "
+                    "AND (COALESCE(touched_at, 0) - COALESCE(collected_at, 0)) < 600))")
 NOT_STALE = "NOT " + STALE_TOUCH_COND
 
 
@@ -629,6 +636,28 @@ def _migrate(conn) -> None:
     if get_meta(conn, "mfe_mae_fixed_since") is None:
         set_meta(conn, "mfe_mae_fixed_since", str(time.time()))
     _backfill_best_tp_hit(conn)
+    _backfill_touch_stale(conn)
+
+
+# 리뷰 #5 복원 결과(업비트 1분봉으로 수집 시점 가격 복원, 관통 >10% 확인) —
+# 종결 11건 중 hit 0. scratchpad rv1/rC 재현 스크립트 참고.
+_TOUCH_STALE_IDS_V1 = (76, 77, 136, 140, 142, 145, 205, 220, 280, 344, 572, 656)
+
+
+def _backfill_touch_stale(conn) -> int:
+    """관통 NULL 즉시터치 오염 12건에 touch_stale=1 (2026-09-27 리뷰 #5, 1회성).
+    판정값은 건드리지 않는 표시 플래그라 해시 체인 무영향. meta 가드로 DB 당 1회."""
+    if get_meta(conn, "backfill_touch_stale_v1") is not None:
+        return 0
+    ph = ",".join("?" * len(_TOUCH_STALE_IDS_V1))
+    cur = conn.execute(
+        f"UPDATE levels SET touch_stale=1 WHERE id IN ({ph}) AND touched_at IS NOT NULL",
+        _TOUCH_STALE_IDS_V1)
+    n = cur.rowcount or 0
+    set_meta(conn, "backfill_touch_stale_v1", json.dumps({"at": time.time(), "rows": n}))
+    if n:
+        logger.info("[마이그레이션] 즉시터치 오염 플래그 백필 %d건", n)
+    return n
 
 
 def _backfill_best_tp_hit(conn) -> int:
@@ -699,8 +728,8 @@ def upsert_level(conn, level: dict) -> bool:
                     author_hit_count, author_whitelisted, mcap_rank, mcap_tier_icon,
                     post_url, post_age_minutes, status, collected_at, judgment_window_hours,
                     raw_text, source, tp_ladder_count, tps_usd, grade_ver, timeframe_hours,
-                    score_breakdown)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    score_breakdown, armed, armed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     key, level["coin_symbol"], level["ticker"], level["direction"],
                     level.get("entry_usd"), level.get("sl_usd"), level.get("tp_usd"),
@@ -721,6 +750,9 @@ def upsert_level(conn, level: dict) -> bool:
                     level.get("grade_ver"),
                     level.get("timeframe_hours"),
                     level.get("score_breakdown"),
+                    # 무장 상태 (2026-09-27 리뷰 #1) — 수집 시점 가격으로 판정해 INSERT 때
+                    # 바로 기록(run_collect). 미지정(None)=가격 미상 → price_check 첫 판정.
+                    level.get("armed"), level.get("armed_at"),
                 ),
             )
             return True
@@ -803,7 +835,7 @@ def reparse_all(conn) -> int:
     # DB 무결성을 위해 방향 한정.
     rows = conn.execute(
         "SELECT id, entry_usd, sl_usd, tp_usd, rr, judgment_window_hours, raw_text, "
-        "tp_ladder_count, tps_usd, timeframe_hours "
+        "tp_ladder_count, tps_usd, timeframe_hours, source "
         "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
         "AND direction='long'"
     ).fetchall()
@@ -820,7 +852,13 @@ def reparse_all(conn) -> int:
         # SOL 882 돌파 트리거 등). 이제 만료시킨다(사유 reparse_invalid). 원문은
         # 결정적이라 같은 raw_text 는 매 회차 같은 결과 — 일시 오판 위험 없음.
         # 롤백: reparse_expire_invalid=False (종전처럼 건너뜀).
-        if entry and entry > 0 and (not setup or setup.get("direction") == "short"):
+        # 리뷰 #2: TradingView 행은 수집 때 작성자 방향 태그(long)가 텍스트보다 우선해
+        # 롱으로 저장됐다. 태그는 DB 에 없어 재파싱은 텍스트만 보므로 '숏'이 나올 수 있다 —
+        # 그 행은 만료하지 않는다(태그 없는 TV 글은 수집 때 텍스트 숏이면 애초에 저장 안 됨).
+        _is_short = bool(setup) and setup.get("direction") == "short"
+        if _is_short and (r["source"] or "tradingview") == "tradingview":
+            continue
+        if entry and entry > 0 and (not setup or _is_short):
             if _expire_invalid:
                 _invalid_ids.append(r["id"])
             continue
@@ -1495,7 +1533,7 @@ def get_author_raw_record(conn) -> dict:
              SUM(CASE WHEN outcome IN ('hit','timeboxed_win') THEN 1 ELSE 0 END) AS w,
              SUM(CASE WHEN outcome IN ('miss','timeboxed_loss') THEN 1 ELSE 0 END) AS l
            FROM levels WHERE author IS NOT NULL AND outcome IS NOT NULL
-             AND touched_at IS NOT NULL GROUP BY author"""
+             AND touched_at IS NOT NULL AND """ + NOT_STALE + " GROUP BY author"
     ).fetchall()
     return {r["author"]: {"wins": r["w"] or 0, "losses": r["l"] or 0} for r in rows}
 
@@ -1908,7 +1946,7 @@ def get_author_self_stats(conn, author: str) -> dict:
              SUM(CASE WHEN status='expired' AND touched_at IS NULL
                        AND (expired_reason IS NULL OR expired_reason != 'shadow_touch')
                       THEN 1 ELSE 0 END) AS e
-           FROM levels WHERE author=?""",
+           FROM levels WHERE author=? AND """ + NOT_STALE,
         (author,),
     ).fetchone()
     return {"wins": row["w"] or 0, "losses": row["l"] or 0,
@@ -2916,6 +2954,20 @@ def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
     return {r["day_kst"]: r["n"] for r in rows}
 
 
+def get_entry_alerts_sent_by_day(conn, days: int = 30) -> dict:
+    """일자별 **진입 알림(터치·예고)** 실발송 건수 — 전환율 분자 전용 (2026-09-27 리뷰 F2).
+    전 kind 발송(get_alerts_sent_by_day)은 뉴스·TP 알림까지 세어 '발송 ÷ (터치+예고)'
+    전환율이 540% 같은 값이 됐다. 분모와 같은 사건 종류만 센다."""
+    q = ("SELECT day_kst, COUNT(*) AS n FROM alerts_log "
+         "WHERE kind IN ('touch','preview'){w} GROUP BY day_kst "
+         "ORDER BY day_kst DESC LIMIT ?")
+    try:
+        rows = conn.execute(q.format(w=" AND sent = 1"), (days,)).fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(q.format(w=""), (days,)).fetchall()
+    return {r["day_kst"]: r["n"] for r in rows}
+
+
 def get_alerts_recorded_by_day(conn, days: int = 30) -> dict:
     """일자별 alerts_log **기록** 건수(발송 여부 무관) — 발송(sent=1)과 분리된
     칸(2026-09-27 S2 P2-15). 차이 = 기록만 하고 보내지 않은 억제·OFF 건."""
@@ -3078,6 +3130,7 @@ def get_observation_report(conn, days: int = 30) -> list:
     collected = get_collected_counts_by_day(conn, days)
     sent = get_alerts_sent_by_day(conn, days)
     recorded = get_alerts_recorded_by_day(conn, days)
+    entry_sent = get_entry_alerts_sent_by_day(conn, days)
     stats_rows = get_daily_stats(conn, days)
     by_day = {r["day_kst"]: r for r in stats_rows}
     all_days = sorted(set(collected) | set(sent) | set(recorded) | set(by_day),
@@ -3093,6 +3146,7 @@ def get_observation_report(conn, days: int = 30) -> list:
             "alerts_sent": sent.get(d, 0),
             # 발송·기록 분리 (2026-09-27 S2 P2-15) — 기록 = sent 무관 alerts_log 행
             "alerts_recorded": recorded.get(d, 0),
+            "entry_alerts_sent": entry_sent.get(d, 0),
             "suppressed_grade": s.get("suppressed_grade", 0),
             "suppressed_cap": s.get("suppressed_cap", 0),
             "suppressed_dup": s.get("suppressed_dup", 0),

@@ -893,8 +893,11 @@ def run_once(now: float | None = None) -> dict:
                         #  · 관용 무장(레거시 & 진입가 0~tol% 아래, S1 수리): now.
                         #    현재가가 진입가 아래인 채 무장했으므로 수집 이후 저가를
                         #    인정하면 즉시터치가 재현된다.
+                        # 2026-09-27 리뷰 #1: 신규 행은 수집 때 무장 여부가 기록되므로 여기 오는
+                        # NULL 은 레거시(관용 대상)이거나 수집 시 가격 미상 행이다. 후자는 수집~
+                        # 지금 사이 가격 경로를 모르므로 소급 없이 now 로 무장(오탐 방지).
                         _at = ((_lv.get("collected_at") or now)
-                               if (_first and not _by_tol) else now)
+                               if (_legacy and not _by_tol) else now)
                         _arm_ids.append((_lv["id"], _at))
                         _lv["armed"], _lv["armed_at"] = 1, _at
                         logger.info(
@@ -1087,7 +1090,12 @@ def run_once(now: float | None = None) -> dict:
                 if not _top_entry_usd:
                     continue
                 top_krw = _top_entry_usd * usdt_krw
-                touched = _eff_low(cluster[0]) <= top_krw
+                # 2026-09-27 리뷰 #3: 상단 멤버가 이번 회차에 승격(armed_at=now)하면 그 멤버의
+                # 캔들 하한이 당겨져, 이미 무장된 하단 형제의 진짜 터치를 놓쳤다. 멤버별
+                # 자기 하한·자기 진입가로 도달을 본다(무장 도입 전 동작과 같은 결과).
+                touched = any(
+                    l.get("entry_usd") and _eff_low(l) <= l["entry_usd"] * usdt_krw
+                    for l in cluster)
                 previewing = (not touched) and current <= top_krw * (1 + preview_band)
                 if not (touched or previewing):
                     continue
@@ -1280,7 +1288,7 @@ def run_once(now: float | None = None) -> dict:
                 # TP 가 있으면 그 신호는 timeboxed 가 아니므로 종전대로 나간다.
                 # 터치 기록·판정·MFE 추적은 아래에서 그대로 수행된다 — 알림만 끈다.
                 if send_ok and kind == "touch" and cfg_get("alert_exclude_no_tp") \
-                        and not any(_has_effective_tp(l) for l in cluster):
+                        and not any(_has_effective_tp(l) for l in _rep_pool):
                     logger.info("[체크] %s TP 없는 글(timeboxed) - 알림 억제(no_tp)", coin)
                     send_ok = False
                     summary["suppressed_no_tp"] = summary.get("suppressed_no_tp", 0) + 1

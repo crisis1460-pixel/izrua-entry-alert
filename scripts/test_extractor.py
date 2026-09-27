@@ -941,6 +941,82 @@ for _desc, _passed in [
         ok += 1
 TOTAL_EXTRA += 3
 
+# ── RV2-E1~E6: 2026-09-27 코드 리뷰 확정 결함 회귀 (추출기 P0 수리 후속) ──────────
+import time as _rv2_time
+from collector import extractor as _rv2_ex
+
+
+def _rv2_k(t):
+    r = _rv2_ex.parse_setup(t)
+    return None if not r else (r["direction"], r["entry"], r["sl"], r["tp"])
+
+
+_rv2_rr_t0 = _rv2_time.perf_counter()
+_rv2_ex.parse_setup("RR" + " " * 1600 + ":")
+_rv2_ex.parse_setup("risk reward" + " " * 1600 + "x")
+_rv2_rr_dt = _rv2_time.perf_counter() - _rv2_rr_t0
+_rv2_tf_t0 = _rv2_time.perf_counter()
+_rv2_ex.parse_setup("Target 1" + " " * 4000 + "(")
+_rv2_tf_dt = _rv2_time.perf_counter() - _rv2_tf_t0
+_RV2_EX = [
+    # E1: 1~2자리 가격 뒤 괄호·at 은 서수가 아니다
+    ("RV2-E1a 'Entry 45 (support zone)' 진입가 45 보존",
+     _rv2_k("SOL long setup\nEntry 45 (support zone)\nSL: 40\nTP: 55") == ("long", 45.0, 40.0, 55.0)),
+    ("RV2-E1b 'Target 5 (range high)' TP 5 보존",
+     _rv2_k("ATOM long\nEntry: 4.10\nSL: 3.90\nTarget 5 (range high)\nTarget 6 (ATH)")
+     == ("long", 4.1, 3.9, 5.0)),
+    ("RV2-E1c 'Target 15 at resistance' TP 15 보존",
+     _rv2_k("LINK long\nEntry: 12.5\nStop: 11.9\nTarget 15 at resistance") == ("long", 12.5, 11.9, 15.0)),
+    ("RV2-E1d 'TP 25 (first target)' TP 25 보존",
+     _rv2_k("AVAX long\nEntry: 20.5\nSL: 19\nTP 25 (first target)\nTP 28 (second)")
+     == ("long", 20.5, 19.0, 25.0)),
+    ("RV2-E1e 진짜 서수는 여전히 제거('Take Profit 1 (TP1): 0.7460'·'Target 1 at $2,507.06')",
+     _rv2_k("SUI long\nEntry: 0.70\nSL: 0.66\nTake Profit 1 (TP1): 0.7460")[3] == 0.746
+     and _rv2_k("ETH long\nEntry: 2400\nSL: 2300\nTarget 1 at $2,507.06")[3] == 2507.06
+     and _rv2_k("ETH long\nEntry: 2400\nSL: 2300\nTarget Two (R2): $2,714.10")[3] == 2714.1),
+    # E2: 스펙형 진입가의 트리거 문맥은 같은 줄만
+    ("RV2-E2a 옆 줄(TP 줄)의 'reclaim' 이 스펙형 진입을 기각하지 않는다",
+     _rv2_k("ETH long\nEntry: 2500\nSL: 2400\nTP1: 2700 - reclaim of the range high")
+     == ("long", 2500.0, 2400.0, 2700.0)),
+    ("RV2-E2b 같은 줄 트리거('Entry: 1.4968 Buy Stop'·'Entry: 5.20 after reclaim')는 여전히 기각",
+     _rv2_k("XYZ long\nEntry: 1.4968 Buy Stop\nSL: 1.40\nTP: 1.60") is None
+     and _rv2_k("APT long\nEntry: 5.20 after reclaim\nSL: 4.90\nTP: 6.00") is None),
+    # E3: 목표 수익률 주석·조건절은 결과보고 아님
+    ("RV2-E3a 'TP1: 0.22 (+10% profit)' 은 result_report 아님",
+     _rv2_ex.nonsetup_reason("DOGE long setup\nEntry: 0.20\nSL: 0.19\nTP1: 0.22 (+10% profit)\n"
+                             "TP2: 0.24 (+20% profit)", "DOGE") is None),
+    ("RV2-E3b 'Target: 2.40 for a +20% gain' 은 result_report 아님",
+     _rv2_ex.nonsetup_reason("Long XRP\nEntry: 2.00\nSL: 1.90\nTarget: 2.40 for a +20% gain", "XRP") is None),
+    ("RV2-E3c 'TP1 hit -> move SL to entry' 은 조건절",
+     _rv2_ex.nonsetup_reason("SUI long\nEntry: 3.00\nSL: 2.80\nTP1: 3.30\nTP2: 3.60\n"
+                             "TP1 hit -> move SL to entry", "SUI") is None),
+    ("RV2-E3d 진짜 결과보고('TP1 hit, +10% profit ✅')는 유지",
+     _rv2_ex.nonsetup_reason("BTC long\nTP1 hit, +10% profit ✅", "BTC") == "result_report"),
+    # E4: 흔한 해시태그·본문 참조 티커는 불일치 아님
+    ("RV2-E4a '#CRYPTO #TRADING' 은 coin_mismatch 아님",
+     _rv2_ex.nonsetup_reason("#CRYPTO #TRADING\nETH long\nEntry: 2500\nSL: 2400\nTP: 2700", "ETH") is None),
+    ("RV2-E4b 머리에서 수집 코인을 이름으로 적은 글('Watch $BTC'·'BINANCE:BTCUSDT')은 불일치 아님",
+     _rv2_ex.nonsetup_reason("ETH long idea. Watch $BTC for confirmation.\nEntry: 2500\nSL: 2400\nTP: 2700",
+                             "ETH") is None
+     and _rv2_ex.nonsetup_reason("BINANCE:BTCUSDT correlation\nETH long\nEntry: 2500\nSL: 2400\nTP: 2700",
+                                 "ETH") is None),
+    ("RV2-E4c 665 형태(#COREUSDT 글이 CRO 로 수집)는 여전히 coin_mismatch",
+     _rv2_ex.nonsetup_reason("#COREUSDT / Ready to go up\n#CORE\n\nThe price is moving within a "
+                             "bearish channel.", "CRO") == "coin_mismatch"),
+    # E5: 손익비 라벨 뒤 공백 런 백트래킹
+    (f"RV2-E5 'RR'/'risk reward'+공백 1600자 파싱 < 1s (측정 {_rv2_rr_dt:.3f}s; 수정 전 ≈10s)",
+     _rv2_rr_dt < 1.0),
+    (f"RV2-E5b 숫자+공백 4000자(기간 토큰) 파싱 < 1.5s (측정 {_rv2_tf_dt:.3f}s)", _rv2_tf_dt < 1.5),
+    # E6: "w/" 는 with
+    ("RV2-E6 'TP: 650 w/ trailing stop' TP 650 보존",
+     _rv2_k("BNB long\nEntry: 600\nSL: 580\nTP: 650 w/ trailing stop") == ("long", 600.0, 580.0, 650.0)),
+]
+for _desc, _passed in _RV2_EX:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += len(_RV2_EX)
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
          + len(LADDER_N_CASES) + len(TPSALL_CASES))
