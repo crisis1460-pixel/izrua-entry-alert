@@ -1,0 +1,33 @@
+# 알림 양식 미리보기 발송 — 배포 전 테스트 전용 (2026-09-27 대표 요청).
+#
+# preview/** 브랜치에 push 하면 1회 실행된다. 네트워크 조회 없이 고정 입력으로 최종 양식을
+# 렌더해 텔레그램 그룹에 "🧪 테스트 안내 + 렌더 결과" 2통을 보낸다(scripts/send_alert_preview.py).
+# DB·alerts_log·meta 에는 아무것도 쓰지 않는다 — 운영 통계와 섞이지 않는다.
+# 상태 커밋 백 단계 없음(라이터는 price-check.yml 하나).
+name: alert-preview
+
+on:
+  push:
+    branches: ["preview/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 미리보기 발송
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/send_alert_preview.py --send

@@ -518,6 +518,56 @@ SETTINGS = {
     # 0 이하 = 가드 OFF.
     "kimchi_display_max_abs_pct": 15.0,
 
+    # ── 알림 항목 v3 (2026-09-27 대표 최종 확정, 항목별 표시 스위치) ──
+    # 표시만 가른다 — 데이터 수집·등급 산식·DB 스냅샷 기록은 스위치와 무관하게 유지.
+    # 제외 5행(기본 OFF): 🔴 DEX 매도세 · 💧 DEX 저유동 · ⛓ 활성주소(상위/하위) ·
+    # 📉 워쳐 SL률 · 🪙 알트장(코드 유지 — 대체 소스 교체 후 재활성 대비).
+    "alert_show_dex_sell": False,
+    "alert_show_dex_liq": False,
+    "alert_show_active_addr": False,
+    "alert_show_watcher_sl": False,
+    "alert_show_altseason": False,
+    # 🌍 비트 점유율은 유지(대표 확정 — 제외 아님, 판정 미부착).
+    "alert_show_btc_dom": True,
+    # 🌍 줄 끝 '· 알트 상승 55%'(업비트 BTC 제외 KRW 종목 중 24h 상승 비율, 판정 없음)
+    "alert_show_alt_breadth": True,
+    # 추가 4행(기본 ON, 추가 API 호출 0 — 일봉·4시간봉·market/all 응답 재사용):
+    # 🔊 거래량 N배 · 판정 / 📏 30일 저점 ±N% · 판정 / ⚠️ 업비트 주의종목 · 매수 보류 /
+    # ⏱ 글 이후 ±N% · 판정
+    "alert_show_rvol_d20": True,
+    "alert_show_low30": True,
+    "alert_show_upbit_warning": True,
+    # ⏱ 글 이후: 2026-09-27 v3b 대표 결정으로 표시 OFF(스냅샷은 계속 기록)
+    "alert_show_post_move": False,
+    # 업비트 투자유의(market_event.warning) 코인은 알림 발송 직전 차단(v3b 대표 확정 —
+    # 상장폐지 직전 코인 추천 방지). 터치 기록·판정은 그대로, alerts_log 'touch_warning' sent=0.
+    # 조회 실패 시 fail-open(수집 단계 universe_exclude_upbit_warning·공지 감시가 1차 방어).
+    "alert_block_upbit_warning": True,
+    # 52주 블록 한 줄 병합('📍 52주 위치 23% · 고가 -53%', 5줄→1줄) — 기본 OFF(대표 결정
+    # 대기). 최악 조건(업비트 주의·글 이후 동시 표시)에서도 행 수 감소를 보장하는 옵션.
+    "alert_week52_compact": False,
+    # 판정 기준 (대표 확정, 백테스트 msgitems_R1): 표시 값(반올림) 기준으로 판정.
+    # 거래량(전일÷20일): [lo, hi) 매수 우호 / < lo 관망 / ≥ hi 과열 주의
+    "alert_rvol_favor_band": (1.0, 1.5),
+    # 30일 저점 대비 %: [lo, hi) 매수 우호 / < lo 관망(이탈 포함) / ≥ hi 추격 주의
+    "alert_low30_favor_band": (5.0, 15.0),
+    # 글 이후 가격 이동 %: |x| ≤ ok 매수 가능 / x ≥ chase 추격 주의 / 그 외 관망.
+    # 게시 시각이 이 일수보다 오래됐으면 줄 생략.
+    "alert_post_move_ok_abs_pct": 5.0,
+    "alert_post_move_chase_pct": 10.0,
+    "alert_post_move_max_age_days": 7.0,
+    # 시장심리(공포탐욕) < 이 값이면 매수 우호, 이상이면 관망(운영 DB: 65 미만 강함).
+    "fng_favor_below": 65,
+    # 김프 조건부 표시: |김프| 가 이 값(%) 이상일 때만 행 표시(판정 미부착 — 수준과
+    # 7일 수익률 상관 −0.06). 0 = 항상 표시(종전). 15% 상한 가드(위)와 공존.
+    "kimchi_display_min_abs_pct": 3.0,
+    # 💬 소셜 경고(소스 중립 — 현재 StockTwits): 매수 비중 bull/(bull+bear) 이 이 값
+    # 이하 + 태그 표본 social_warn_min_n 이상일 때만 '💬 소셜 매도 우세 · 주의'.
+    # 0.5 = 문구('매도 우세' = 매수 ≤ 매도)가 사실이 되는 경계이자 운영 DB 147 터치
+    # 분포의 하위 5.4%(중앙값 0.905). '매수 유리' 표시는 폐지.
+    "social_warn_max_ratio": 0.5,
+    "social_warn_min_n": 10,
+
     # 재발송 차단 창 (초) — 같은 코인·종류·레벨 조합의 경합 재발송 방어
     "resend_block_sec": 600.0,
 
@@ -533,6 +583,15 @@ SETTINGS = {
 
     # 네트워크
     "http_timeout_sec": 10.0,
+
+    # 롱숏 3종 OKX 폴백 (2026-09-27, 대표 승인 "OKX 롱숏 DB 축적") — 미국 러너에서
+    # Binance /futures/data/* 가 451 이라 touch_long_short_ratio 등이 사실상 공란.
+    # 값은 스냅샷 컬럼 적재 전용(알림 무노출). 터치 확정건에만 호출.
+    "okx_ratio_fallback_enabled": True,
+    "okx_ratio_timeout_sec": 5.0,        # http_timeout_sec 과 둘 중 작은 값
+    # 업비트와 선물 거래소의 동명 다른 코인 — 2026-09-27 가격 대조(±10% 초과)로 확인
+    # (EDGE: 업비트 Definitive ≠ Binance/OKX EDGE, META: 업비트 Metadium ≠ 선물 META).
+    "derivatives_ratio_symbol_blocklist": ["EDGE", "META"],
 
     # 적중 DB (2026-07-23 확정: ACCURACY_DB_PLAN.md)
     "outcome_window_hours": 168,     # 터치 후 이 시간 내 미종결 시 타임박스 강제 종결

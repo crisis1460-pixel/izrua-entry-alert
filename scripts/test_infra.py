@@ -337,24 +337,25 @@ _kc2.close()
 
 
 # ─── render_alert 김프 화살표 (2026-08-14) ──────────────────────────
+# 2026-09-27 v3: |김프| ≥ 3% 일 때만 표시 → 화살표 검증 값을 2.15 → 3.15 로 올림.
 
 _cluster = [{"coin_symbol": "BTC", "entry_usd": 100.0, "score": 50,
              "grade": "B", "author": "tester"}]
 _txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
-                       kimchi_pct=2.15, kimchi_delta=0.8)
-check("김프화살표: 급변 시 ▲ 표시", "김프 +2.15% ▲" in _txt)
+                       kimchi_pct=3.15, kimchi_delta=0.8)
+check("김프화살표: 급변 시 ▲ 표시", "김프: +3.15% ▲" in _txt)
 
 _txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
-                       kimchi_pct=2.15, kimchi_delta=-0.7)
-check("김프화살표: 급락 시 ▼ 표시", "김프 +2.15% ▼" in _txt)
+                       kimchi_pct=3.15, kimchi_delta=-0.7)
+check("김프화살표: 급락 시 ▼ 표시", "김프: +3.15% ▼" in _txt)
 
 _txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
-                       kimchi_pct=2.15, kimchi_delta=0.3)
-check("김프화살표: 임계 미만 → 없음", "김프 +2.15%\n" in _txt or _txt.rstrip().endswith("김프 +2.15%") or ("김프 +2.15%" in _txt and "▲" not in _txt))
+                       kimchi_pct=3.15, kimchi_delta=0.3)
+check("김프화살표: 임계 미만 → 없음", "김프: +3.15%\n" in _txt or _txt.rstrip().endswith("김프: +3.15%") or ("김프: +3.15%" in _txt and "▲" not in _txt))
 
 _txt = tg.render_alert("touch", "BTC", _cluster, 140000.0, 1400.0,
-                       kimchi_pct=2.15)
-check("김프화살표: 델타 미전달 → 종전 표기", "김프 +2.15%" in _txt and "▲" not in _txt and "▼" not in _txt)
+                       kimchi_pct=3.15)
+check("김프화살표: 델타 미전달 → 종전 표기", "김프: +3.15%" in _txt and "▲" not in _txt and "▼" not in _txt)
 
 
 # ─── derive_supply_verdict 옵션·청산 보정 (2026-08-14) ───────────────
@@ -604,7 +605,20 @@ check("DX3 HTTP 429 → None", _dex.fetch_token_stats("0xabc") is None)
 _dex.requests.get = _orig_dex_get
 
 # DX4: telegram.render_alert 배지 3종 (저유동/매수/매도 임계)
+# 2026-09-27 v3: 💧 저유동·🔴 매도세·⛓ 활성주소는 표시 스위치(기본 OFF) 뒤로 —
+# 종전 렌더 경로는 스위치 ON 으로 계속 검증하고, 기본값 숨김은 ITEMS-X 에서 확인.
 from notify import telegram as _tg
+from config import settings as _set_v3
+_v3_saved = {k: _set_v3.SETTINGS[k] for k in
+             ("alert_show_dex_liq", "alert_show_dex_sell", "alert_show_active_addr")}
+_txt = _tg.render_alert("touch", "TEST", [{"entry_usd": 100.0, "score": 50, "grade": "B",
+                        "author": "x", "tp_usd": 110}], 100000.0, 1300.0,
+                        dex_stats={"liquidity_usd": 50_000, "buy_ratio_24h": 0.30},
+                        active_addr_pctile=12.0)
+check("ITEMS-X1 기본값: DEX 저유동·DEX 매도세·활성주소 줄 없음",
+      "DEX 저유동" not in _txt and "DEX 매도세" not in _txt and "활성주소" not in _txt)
+for _k in _v3_saved:
+    _set_v3.SETTINGS[_k] = True
 _base_cluster = [{"entry_usd": 100.0, "score": 50, "grade": "B", "author": "x",
                   "author_followers": 1000, "tp_usd": 110, "direction": "long"}]
 _base_rep = _base_cluster[0]
@@ -612,17 +626,17 @@ _base_rep = _base_cluster[0]
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 50_000, "buy_ratio_24h": 0.5})
 check("DX4 저유동성 <100k$ 배지 표시(매수 주의 라벨)",
-      "DEX 저유동" in _txt and "50k$" in _txt and "매수 주의" in _txt)
+      "DEX 저유동" in _txt and "50k$" in _txt and "· 주의" in _txt)
 # 매수세 강함
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.70})
 check("DX4b 매수세 ≥65% 배지 표시(매수 유리 라벨)",
-      "DEX 매수세" in _txt and "70%" in _txt and "매수 유리" in _txt)
+      "DEX 매수세" in _txt and "70%" in _txt and "· 매수 우호" in _txt)
 # 매도세 강함
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.30})
 check("DX4c 매도세 (buy_ratio ≤35%) 배지 표시(매수 부담 라벨)",
-      "DEX 매도세" in _txt and "70%" in _txt and "매수 부담" in _txt)  # (1-0.30)*100 = 70
+      "DEX 매도세" in _txt and "70%" in _txt and "· 주의" in _txt)  # (1-0.30)*100 = 70
 # 중립 = 배지 없음
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        dex_stats={"liquidity_usd": 500_000, "buy_ratio_24h": 0.50})
@@ -687,16 +701,16 @@ check("CM6 활성주소 백분위 ≥80 +1 / ≤20 -1 / 중간·None 0",
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=85.5)
 check("CM7 활발(≥80) 배지 표시(매수 유리)",
-      "활성주소 상위 14%" in _txt and "매수 유리" in _txt)
+      "활성주소 상위 14%" in _txt and "· 매수 우호" in _txt)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=12.0)
 check("CM7b 저조(≤20) 배지 표시(매수 부담)",
-      "활성주소 하위 12%" in _txt and "매수 부담" in _txt)
+      "활성주소 하위 12%" in _txt and "· 주의" in _txt)
 
 # 2026-09-27 사용자 제보: 백분위를 "7위"(순위)로 표기하던 오류 → "하위 7%"·"상위 12%", 32칼럼 이내
 from notify import telegram as _tg_onc
-for _p, _want in ((6.7, "⛓ 활성주소 하위 7% (매수 부담)"), (0.0, "하위 1%"),
-                  (88.0, "⛓ 활성주소 상위 12% (매수 유리)"), (100.0, "상위 1%")):
+for _p, _want in ((6.7, "⛓ 활성주소 하위 7% · 주의"), (0.0, "하위 1%"),
+                  (88.0, "⛓ 활성주소 상위 12% · 매수 우호"), (100.0, "상위 1%")):
     _m_onc = _tg_onc.render_alert("touch", "XRP", [dict(coin_symbol="XRP", entry_usd=1.5225,
                                    tp_usd=1.6149, tps_usd="[1.6149, 1.7704]", grade="A",
                                    score=56, author="a", author_followers=2)],
@@ -708,6 +722,8 @@ for _p, _want in ((6.7, "⛓ 활성주소 하위 7% (매수 부담)"), (0.0, "�
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=50.0)
 check("CM7c 중립(20~80) → 배지 없음", "온체인" not in _txt)
+for _k, _v in _v3_saved.items():
+    _set_v3.SETTINGS[_k] = _v
 
 _cm.requests.get = _orig_cm_get
 
@@ -755,15 +771,16 @@ _none = _gr._social_sentiment_points(None)
 check("ST5 소셜 극단 ±1 (≥0.75 +1 / ≤0.30 -1 / 중간·None 0)",
       _hi == 1.0 and _lo == -1.0 and _mid == 0.0 and _none == 0.0)
 
-# ST6: telegram 배지 극단만 노출
+# ST6: telegram 소셜 배지 (2026-09-27 v3 재보정: '매수 유리' 폐지, 평소보다 크게
+# 낮을 때만 경고 — stwits_warn_max_ratio 0.65·표본 10 이상)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
-                       stwits_bullish_ratio=0.85)
-check("ST6 매수세 강함(≥0.75) 배지 표시(매수 유리)",
-      "소셜 매수세" in _txt and "매수 유리" in _txt)
+                       stwits_bullish_ratio=0.85, stwits_n=20)
+check("ST6 매수 비중 높음(0.85) → 배지 없음('매수 유리' 폐지)",
+      "소셜" not in _txt and "매수 유리" not in _txt)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
-                       stwits_bullish_ratio=0.20)
-check("ST6b 매도세 강함(≤0.30) 배지 표시(매수 부담)",
-      "소셜 매도세" in _txt and "매수 부담" in _txt)
+                       stwits_bullish_ratio=0.20, stwits_n=10)
+check("ST6b 매수 비중 낮음(0.20, n=10) → 경고 배지 '💬 소셜: 매도 우세 · 주의'",
+      "💬 소셜: 매도 우세 · 주의" in _txt and "매수 부담" not in _txt)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        stwits_bullish_ratio=0.50)
 check("ST6c 중립(0.30~0.75) → 배지 없음", "소셜" not in _txt)
@@ -2011,6 +2028,663 @@ check("GG1b D 등급은 게이트 탈락(최하위 승률 22.7% · TP1 도달 0�
       not _mmg("D", _st_cfg.get("alert_min_grade")))
 check("GG1c C 이상은 그대로 통과(상위 표본 무손상)",
       all(_mmg(g, _st_cfg.get("alert_min_grade")) for g in ("C", "B", "A", "S")))
+
+# ─── ITEMS: 알림 항목 v3 (2026-09-27 대표 최종 확정) ──────────────────────
+# 제외 5행(표시 스위치 OFF) · 추가 4행(판정 병기) · 판정 어휘 통일 · 소셜/김프 재보정.
+# 캔들 테스트는 **고정 픽스처 + 인자 now** — 현재 시각에 의존하지 않는다.
+from datetime import datetime as _dt_i, timezone as _tz_i
+import itertools as _it_i
+from monitor import upbit as _up_i
+from monitor import stocktwits as _st_i
+from notify import telegram as _tg_i
+from config import settings as _cfg_i
+from storage import db as _db_i
+
+_D0 = _dt_i(2026, 9, 27, tzinfo=_tz_i.utc).timestamp()   # 09-27 00:00 UTC = KST 09:00
+_DAY = 86400
+
+
+def _day_candle(k, high=100.0, low=80.0, close=90.0, acc=100.0):
+    """k = 09-27 기준 일수 오프셋(0 = 09-27 봉, -1 = 09-26 봉)."""
+    return (high, low, close, acc, _D0 + k * _DAY)
+
+
+# 09-27 봉(k=0)은 진행 중(거래대금 999·저가 10 — 쓰이면 값이 튄다), 09-26(k=-1) 거래대금 120·
+# 저가 50, 09-25(k=-2) 거래대금 150, 나머지 100/80.
+_FIX = []
+for _k in range(-40, 1):
+    if _k == 0:
+        _FIX.append(_day_candle(_k, low=10.0, acc=999.0))
+    elif _k == -1:
+        _FIX.append(_day_candle(_k, low=50.0, acc=120.0))
+    elif _k == -2:
+        _FIX.append(_day_candle(_k, acc=150.0))
+    else:
+        _FIX.append(_day_candle(_k))
+
+_t_before = _D0 - 60      # 09-27 KST 08:59 — 09-26 봉 진행 중, 전일 완성봉 = 09-25
+_t_edge = _D0             # KST 09:00 정각 — 09-26 봉 완성(시작+24h == now)
+_t_after = _D0 + 60       # KST 09:01
+_rv_b = _up_i.rvol_d20(_FIX, _t_before)
+_rv_e = _up_i.rvol_d20(_FIX, _t_edge)
+_rv_a = _up_i.rvol_d20(_FIX, _t_after)
+check("ITEMS-C1 경계 전(KST 08:59): 전일 완성봉=09-25(150) ÷ 20일 평균 100 = 1.5, 진행봉 제외",
+      _rv_b is not None and abs(_rv_b - 1.5) < 1e-9
+      and _up_i.completed_daily(_FIX, _t_before)[-1][4] == _D0 - 2 * _DAY)
+check("ITEMS-C2 경계 정각(KST 09:00): 09-26 봉 완성 → 120 ÷ (19×100+150)/20 = 1.1707",
+      _rv_e is not None and abs(_rv_e - 120 / 102.5) < 1e-9
+      and _up_i.completed_daily(_FIX, _t_edge)[-1][4] == _D0 - _DAY)
+check("ITEMS-C3 경계 후(KST 09:01): 정각과 동일, 09-27 진행봉(999) 미사용",
+      _rv_a is not None and abs(_rv_a - _rv_e) < 1e-12)
+check("ITEMS-C4 30일 저점: 경계 전 저점 80(+10%) / 정각·후 09-26 저가 50 반영(+76%) / 진행봉 저가 10 미사용",
+      abs(_up_i.low30_pct(_FIX, _t_before, 88.0) - 10.0) < 1e-9
+      and abs(_up_i.low30_pct(_FIX, _t_edge, 88.0) - 76.0) < 1e-9
+      and abs(_up_i.low30_pct(_FIX, _t_after, 88.0) - 76.0) < 1e-9)
+check("ITEMS-C5 표본 부족(완성봉 20개) → rvol None / 29개 → low30 None / 3-튜플(구 스텁) → None",
+      _up_i.rvol_d20(_FIX[-21:], _t_after) is None
+      and _up_i.low30_pct(_FIX[-30:], _t_after, 88.0) is None
+      and _up_i.rvol_d20([c[:3] for c in _FIX], _t_after) is None
+      and _up_i.daily_items(None, _t_after, 88.0) == {"rvol_d20": None, "low30_pct": None})
+
+# _fetch_ohlc 튜플 끝 확장 — 앞 3원소·ATR·ADX 불변
+_raw_days = [{"high_price": 100 + i % 7, "low_price": 90 - i % 5, "trade_price": 95 + i % 3,
+              "candle_acc_trade_price": 1000.0 + i,
+              "candle_date_time_utc": _dt_i.fromtimestamp(_D0 - i * _DAY, _tz_i.utc)
+              .strftime("%Y-%m-%dT%H:%M:%S")} for i in range(60)]   # 최신→과거(업비트 순)
+_orig_up_get = _up_i.requests.get
+_orig_up_sleep = _up_i.time.sleep
+_up_i.time.sleep = lambda s: None
+
+
+class _RU:
+    def __init__(self, body, status=200):
+        self._b = body; self.status_code = status
+    def json(self): return self._b
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+_up_i.requests.get = lambda *a, **k: _RU(_raw_days)
+_oh = _up_i._fetch_ohlc("KRW-T", "days", 60, 5.0)
+_oh3 = [c[:3] for c in _oh]
+check("ITEMS-C6 _fetch_ohlc = (고,저,종,거래대금,시작epoch) 끝 확장 · 과거→최신 · 시작시각 파싱",
+      len(_oh[0]) == 5 and _oh[-1][4] == _D0 and _oh[-1][3] == 1000.0
+      and _oh[0][4] == _D0 - 59 * _DAY)
+check("ITEMS-C7 ATR20·ADX14 는 5-튜플/3-튜플 결과 동일(인덱스 보존)",
+      _up_i.atr20_pct(_oh) == _up_i.atr20_pct(_oh3)
+      and _up_i.adx14(_oh) == _up_i.adx14(_oh3) and _up_i.adx14(_oh) is not None)
+
+# 업비트 시장경보 — market/all?isDetails=true 실측 형태(2026-09-27)
+_CK = _up_i.UPBIT_CAUTION_KEYS
+
+
+def _mk(market, warning=False, **caution):
+    return {"market": market, "korean_name": "x", "english_name": "x",
+            "market_event": {"warning": warning,
+                             "caution": {k: bool(caution.get(k)) for k in _CK}}}
+
+
+_mall = [_mk("KRW-BTC"), _mk("KRW-EGLD", warning=True),
+         _mk("KRW-FIL", TRADING_VOLUME_SOARING=True),
+         _mk("KRW-2Z", TRADING_VOLUME_SOARING=True, DEPOSIT_AMOUNT_SOARING=True),
+         _mk("BTC-FIL", TRADING_VOLUME_SOARING=True)]
+_seen_params = {}
+
+
+def _fake_get(url, params=None, timeout=None, **k):
+    if "market/all" in url:
+        _seen_params.update(params or {})
+        return _RU(_mall)
+    return _RU([{"market": m["market"], "acc_trade_price_24h": 1.0,
+                 "signed_change_rate": _rates_i.get(m["market"])}
+                for m in _mall if m["market"].startswith("KRW-")])
+
+
+# BTC +5%(제외) · EGLD +1% · FIL 0%(상승 아님) · 2Z -2% → 알트 3종 중 1종 상승 = 33.3%
+_rates_i = {"KRW-BTC": 0.05, "KRW-EGLD": 0.01, "KRW-FIL": 0.0, "KRW-2Z": -0.02}
+
+
+_up_i.requests.get = _fake_get
+_ranks = _up_i.fetch_volume_ranks(5.0)
+_warn = _up_i.last_market_warnings()
+check("ITEMS-W1 market/all 은 isDetails=true 1콜 재사용 — 순위 반환 형태 불변 + 경보 부산물",
+      _seen_params.get("isDetails") == "true" and set(_ranks) == {"KRW-BTC", "KRW-EGLD", "KRW-FIL", "KRW-2Z"}
+      and _warn == {"KRW-EGLD": ["WARNING"], "KRW-FIL": ["TRADING_VOLUME_SOARING"],
+                    "KRW-2Z": ["TRADING_VOLUME_SOARING", "DEPOSIT_AMOUNT_SOARING"]})
+
+
+def _boom(*a, **k):
+    raise RuntimeError("down")
+
+
+check("ITEMS-B1 알트 상승 비율 = 같은 ticker 응답에서 BTC 제외·등락률>0 비율(0% 는 상승 아님)",
+      abs(_up_i.last_alt_breadth() - 100 / 3) < 1e-9
+      and _up_i.alt_breadth([{"market": "BTC-ETH", "signed_change_rate": 0.1}]) is None)
+_up_i.requests.get = _boom
+check("ITEMS-B2 조회 실패 → 알트 상승 비율 None(꼬리 생략, fail-open)",
+      _up_i.fetch_volume_ranks(5.0) == {} and _up_i.last_alt_breadth() is None)
+check("ITEMS-W2 조회 실패 → 순위 {} · 경보 None('경고 없음' [] 과 구분)",
+      _up_i.fetch_volume_ranks(5.0) == {} and _up_i.last_market_warnings() is None)
+check("ITEMS-W3 구 필드 market_warning='CAUTION' 도 유의로 인정",
+      _up_i.parse_market_warning({"market": "KRW-X", "market_warning": "CAUTION"}) == ["WARNING"])
+_up_i.requests.get = _orig_up_get
+_up_i.time.sleep = _orig_up_sleep
+
+# 업비트 투자주의 → 헤더 끝 꼬리표 (v3b): 전 사유 조합 × 코인명 1~12자 × 접근/터치
+_hdr_cases = 0
+_hdr_ok = True
+_hdr_extra = 0
+for _r in range(1, len(_CK) + 1):
+    for _combo in _it_i.combinations(_CK, _r):
+        for _len in range(1, 13):
+            for _kind in ("touch", "preview"):
+                _sym = "Q" * _len
+                _m = _tg_i.render_alert(_kind, _sym, [dict(coin_symbol=_sym, entry_usd=1.5,
+                                        tp_usd=1.65, score=50, grade="B", author="a")],
+                                        2050.0, 1360.0,
+                                        items={"upbit_warning": list(_combo)})
+                _ls = _m.split(chr(10))
+                _hdr_cases += 1
+                _hdr_ok = _hdr_ok and all(_tg_i._line_width(x) <= 32 for x in _ls
+                                          if x != _tg_i._SEP and not x.startswith("🔗"))
+                _hdr_ok = _hdr_ok and "⚠️" in (_ls[1] + (_ls[2] if len(_ls) > 2 else ""))
+                if _len <= 8 and "⚠️" not in _ls[1]:
+                    _hdr_extra += 1
+check(f"ITEMS-H1 주의 꼬리표 {_hdr_cases}케이스(31조합×코인명 1~12자×터치/접근) 전 줄 32칼럼 · "
+      f"업비트 최장(8자)까지 새 줄 0",
+      _hdr_ok and _hdr_extra == 0)
+_H = _tg_i.upbit_caution_header
+_hx = "🎯 <b>[진입가 터치]</b> <b>XRP</b>"
+check("ITEMS-H2 사유 우선순위: 위험(입금급증>소수계정집중>해외가괴리) 우선 1개 · 관심(거래량급등·가격급등락)",
+      _tg_i.upbit_caution_pick(["TRADING_VOLUME_SOARING", "DEPOSIT_AMOUNT_SOARING"])
+      == ("입금급증", "입금", "주의")
+      and _tg_i.upbit_caution_pick(["PRICE_FLUCTUATIONS", "GLOBAL_PRICE_DIFFERENCES"])[2] == "주의"
+      and _tg_i.upbit_caution_pick(["CONCENTRATION_OF_SMALL_ACCOUNTS",
+                                    "GLOBAL_PRICE_DIFFERENCES"])[0] == "소수계정집중"
+      and _tg_i.upbit_caution_pick(["TRADING_VOLUME_SOARING"])[2] == "관심"
+      and _tg_i.upbit_caution_pick(["PRICE_FLUCTUATIONS"])[2] == "관심"
+      and _tg_i.upbit_caution_pick([]) is None)
+check("ITEMS-H3 축약 단계: 짧은 헤더 전체 문구 · XRP 거래량 '⚠️급증·관심' · 입금 '⚠️입금·주의' · 긴 코인 '⚠️관심'",
+      _H("🎯 X", ["TRADING_VOLUME_SOARING"]) == ("🎯 X · ⚠️주의 거래량급증 · 관심", None)
+      and _H(_hx, ["TRADING_VOLUME_SOARING"])[0].endswith("XRP</b> ⚠️급증·관심")
+      and _H(_hx, ["DEPOSIT_AMOUNT_SOARING"])[0].endswith("XRP</b> ⚠️입금·주의")
+      and _H(_hx, ["CONCENTRATION_OF_SMALL_ACCOUNTS"])[0].endswith("XRP</b> ⚠️집중·주의")
+      and _H("🎯 <b>[진입가 터치]</b> <b>PIEVERSE</b>", ["PRICE_FLUCTUATIONS"])[0]
+      .endswith("PIEVERSE</b> ⚠️관심")
+      and _H(_hx, None) == (_hx, None))
+_m_nw = _tg_i.render_alert("touch", "XRP", [dict(coin_symbol="XRP", entry_usd=1.5, tp_usd=1.65,
+                           score=50, grade="B", author="a")], 2050.0, 1360.0)
+_m_cw = _tg_i.render_alert("touch", "XRP", [dict(coin_symbol="XRP", entry_usd=1.5, tp_usd=1.65,
+                           score=50, grade="B", author="a")], 2050.0, 1360.0,
+                           items={"upbit_warning": ["TRADING_VOLUME_SOARING"]})
+check("ITEMS-H4 주의 표시는 헤더 끝 — 줄 수 불변 · 구 '⚠️ 업비트 주의종목 · 매수 보류' 줄 없음",
+      len(_m_nw.split(chr(10))) == len(_m_cw.split(chr(10)))
+      and "업비트 주의종목" not in _m_cw and "매수 보류" not in _m_cw)
+
+# 판정 경계 (표시 반올림 값 기준)
+_F = _tg_i
+check("ITEMS-R1 거래량: 0.94→0.9 관망 · 0.96→1.0 매수 우호 · 1.44→1.4 매수 우호 · 1.46→1.5 과열 주의",
+      _F.format_rvol_d20(0.94) == "🔊 거래량: 0.9배 · 관망"
+      and _F.format_rvol_d20(0.96) == "🔊 거래량: 1.0배 · 매수 우호"
+      and _F.format_rvol_d20(1.44) == "🔊 거래량: 1.4배 · 매수 우호"
+      and _F.format_rvol_d20(1.46) == "🔊 거래량: 1.5배 · 과열 주의"
+      and _F.format_rvol_d20(None) is None)
+check("ITEMS-R2 30일 저점: +4 관망 · +5 매수 우호 · +14 매수 우호 · +15 추격 주의 · -3 관망",
+      _F.format_low30(4.4) == "📏 30일 저점: +4% · 관망"
+      and _F.format_low30(4.6) == "📏 30일 저점: +5% · 매수 우호"
+      and _F.format_low30(14.4) == "📏 30일 저점: +14% · 매수 우호"
+      and _F.format_low30(14.6) == "📏 30일 저점: +15% · 추격 주의"
+      and _F.format_low30(-3.2) == "📏 30일 저점: -3% · 관망")
+check("ITEMS-R3 글 이후: +5 매수 가능 · -5 매수 가능 · -6 관망 · +7 관망 · +10 추격 주의",
+      _F.format_post_move(5.4) == "⏱ 글 이후: +5% · 매수 가능"
+      and _F.format_post_move(-5.4) == "⏱ 글 이후: -5% · 매수 가능"
+      and _F.format_post_move(-5.6) == "⏱ 글 이후: -6% · 관망"
+      and _F.format_post_move(7.0) == "⏱ 글 이후: +7% · 관망"
+      and _F.format_post_move(9.6) == "⏱ 글 이후: +10% · 추격 주의")
+check("ITEMS-R4 시장심리: 64 매수 우호 · 65 관망 (판정 병기, 괄호 라벨 대체)",
+      _F.format_fng(64).endswith("시장심리: 64 · 매수 우호")
+      and _F.format_fng(65).endswith("시장심리: 65 · 관망") and _F.format_fng(None) is None)
+_wide = ([_F.format_rvol_d20(x / 10) for x in range(0, 1000)]
+         + [_F.format_low30(x) for x in range(-99, 1000)]
+         + [_F.format_post_move(x) for x in range(-99, 1000)]
+         + [_F.format_fng(x) for x in range(0, 101)])
+check(f"ITEMS-L1 새 행 {len(_wide)}개 값 전수(거래량 0~99.9배·저점 -99~+999%·글 이후·심리) 32칼럼 이내",
+      all(_F._line_width(x) <= 32 for x in _wide))
+_reasons = ["추격 위험", "반등 여지", "자금 유입", "속임 반등", "투매 진행", "롱 청산 위험",
+            "숏 청산 연료", "변동성 위기", "채굴자 항복", "장기바닥·주RSI28", "장기과열·주RSI75",
+            "20일지지·상승세", "120일지지·RSI47", "역배열·RSI37", "상승세·RSI64·4h과열"]
+_vl = ([_F.format_supply(v, r) for v in ("우호", "중립", "주의") for r in _reasons]
+       + [_F.format_position(v, r) for v in ("최적", "우호", "중립", "주의", "위험")
+          for r in _reasons])
+check("ITEMS-L2 돈 흐름·자리 판정 줄 — 긴 근거도 32칼럼 이내(근거부터 축약), 판정은 항상 남음",
+      all(_F._line_width(x) <= 32 for x in _vl)
+      # '{항목}: {근거} · {판정}' 또는 넘치면 '{항목}: {판정}' — 판정은 항상 줄 끝
+      and all(x.endswith((" 매수 우호", " 관망", " 주의", " 매수 보류")) and ": " in x
+              for x in _vl))
+check("ITEMS-L3 판정 어휘 매핑: 우호→매수 우호 / 중립→관망 / 주의→주의 / 위험→매수 보류",
+      _F.format_supply("중립", None) == "🧭 돈 흐름: 중립 · 관망"
+      and _F.format_position("위험", "장기과열·주RSI75") == "🌡️ 자리: 장기과열 · 매수 보류"
+      and _F.format_position("중립", "상승세·RSI64") == "🌡️ 자리: 상승세·RSI64 · 관망")
+
+# 렌더 통합 — 제외 5행 없음(기본값), 비트 점유율 유지, 새 행 표시·그룹
+_cl_i = [{"coin_symbol": "XRP", "entry_usd": 1.50, "tp_usd": 1.65, "score": 50, "grade": "B",
+          "author": "a", "author_followers": 10}]
+_m_i = _tg_i.render_alert(
+    "touch", "XRP", _cl_i, 2050.0, 1360.0,
+    sentiment={"btc_dominance": 58.5, "fear_greed": 60, "altcoin_season_index": 30},
+    dex_stats={"liquidity_usd": 50_000, "buy_ratio_24h": 0.30},
+    active_addr_pctile=5.0, watcher_coin_sl={"total": 5, "misses": 4, "sl_rate": 0.8},
+    kimchi_pct=1.0,
+    items={"rvol_d20": 1.2, "low30_pct": 8.0, "upbit_warning": ["TRADING_VOLUME_SOARING"],
+           "post_move_pct": 3.0})
+_ml_i = _m_i.split("\n")
+check("ITEMS-X2 기본값: 🔴 DEX 매도세·💧 DEX 저유동·⛓ 활성주소·📉 워쳐 SL률·🪙 알트장 없음",
+      all(t not in _m_i for t in ("DEX 매도세", "DEX 저유동", "활성주소", "워쳐 SL률", "알트장")))
+check("ITEMS-X3 🌍 비트 점유율 유지(판정 없음) · 시장심리 판정 · 김프 1% 숨김",
+      "🌍 비트 점유율: 58.5%" in _ml_i and any(ln.endswith("시장심리: 60 · 매수 우호") for ln in _ml_i)
+      and "김프" not in _m_i)
+check("ITEMS-X4 헤더 주의 꼬리표·거래량·30일 저점 표시 / ⏱ 글 이후 기본 OFF (전부 32칼럼)",
+      _ml_i[1].endswith("⚠️급증·관심") and "🔊 거래량: 1.2배 · 매수 우호" in _ml_i
+      and "📏 30일 저점: +8% · 매수 우호" in _ml_i and "글 이후" not in _m_i
+      and _cfg_i.get("alert_show_post_move") is False
+      and all(_tg_i._line_width(ln) <= 32 for ln in _ml_i
+              if ln != _tg_i._SEP and not ln.startswith("🔗")))
+_saved_sw = {k: _cfg_i.SETTINGS[k] for k in ("alert_show_rvol_d20", "alert_show_low30",
+                                              "alert_show_upbit_warning", "alert_show_post_move",
+                                              "alert_show_btc_dom", "alert_show_altseason",
+                                              "alert_show_watcher_sl")}
+for _k in ("alert_show_rvol_d20", "alert_show_low30", "alert_show_upbit_warning",
+           "alert_show_post_move", "alert_show_btc_dom"):
+    _cfg_i.SETTINGS[_k] = False
+_cfg_i.SETTINGS["alert_show_altseason"] = True
+_cfg_i.SETTINGS["alert_show_watcher_sl"] = True
+_m_off = _tg_i.render_alert(
+    "touch", "XRP", _cl_i, 2050.0, 1360.0,
+    sentiment={"btc_dominance": 58.5, "fear_greed": 60, "altcoin_season_index": 30},
+    watcher_coin_sl={"total": 5, "misses": 4, "sl_rate": 0.8},
+    items={"rvol_d20": 1.2, "low30_pct": 8.0, "upbit_warning": ["WARNING"], "post_move_pct": 3.0})
+check("ITEMS-X5 행별 스위치: 새 4행·비트 점유율 OFF 가능 / 알트장·워쳐 SL률 ON 복귀 가능",
+      all(t not in _m_off for t in ("업비트", "거래량", "30일 저점", "글 이후", "비트 점유율"))
+      and "🪙 알트장: 30" in _m_off and "워쳐 SL률 80%" in _m_off)
+check("ITEMS-X6 알트장 렌더는 값·판정 인자 구조(소스 교체 대비)",
+      _tg_i.format_altseason(72, "매수 우호") == "🪙 알트장: 72 · 매수 우호"
+      and _tg_i.format_altseason(None) is None)
+for _k, _v in _saved_sw.items():
+    _cfg_i.SETTINGS[_k] = _v
+
+# 🌍 비트 점유율 + 알트 상승 꼬리(새 줄 없음, 판정 없음)
+_bd = [_tg_i.format_btc_dom(b, a) for b in (58.3, 100.0, 9.99, 58.33) for a in range(0, 101)]
+check("ITEMS-B3 '🌍 비트 점유율 58.3% · 알트↑55%'(전체 문구 36칼럼 → 축약) · 전 조합 32칼럼 · 판정 없음",
+      _tg_i.format_btc_dom(58.3, 55.2) == "🌍 비트 점유율: 58.3% · 알트↑55%"
+      and _tg_i.format_btc_dom(58.3, None) == "🌍 비트 점유율: 58.3%"
+      and all(_tg_i._line_width(x) <= 32 for x in _bd)
+      and not any(v in x for x in _bd for v in ("우호", "관망", "주의", "보류")))
+check("ITEMS-B4 점유율 소수 1자리 고정(58.33→58.3) · 알트↑99% 까지 꼬리 유지 · 100%(33칼럼)는 꼬리만 생략",
+      _tg_i.format_btc_dom(58.33, 99) == "🌍 비트 점유율: 58.3% · 알트↑99%"
+      and _tg_i.format_btc_dom(58.33, 100) == "🌍 비트 점유율: 58.3%"
+      and _tg_i.format_btc_dom(99.9, 100) == "🌍 비트 점유율: 99.9%")
+_mb_on = _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0,
+                            sentiment={"btc_dominance": 58.3}, items={"alt_breadth": 55.0})
+_cfg_i.SETTINGS["alert_show_alt_breadth"] = False
+_mb_off = _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0,
+                             sentiment={"btc_dominance": 58.3}, items={"alt_breadth": 55.0})
+_cfg_i.SETTINGS["alert_show_alt_breadth"] = True
+check("ITEMS-B5 렌더: 🌍 줄 끝에 붙고 새 줄 없음 / 스위치 OFF 면 꼬리만 생략",
+      "🌍 비트 점유율: 58.3% · 알트↑55%" in _mb_on.split(chr(10))
+      and "🌍 비트 점유율: 58.3%" in _mb_off.split(chr(10))
+      and len(_mb_on.split(chr(10))) == len(_mb_off.split(chr(10))))
+
+# 52주 한 줄 병합 옵션(기본 OFF)
+_w52_off = _tg_i.render_alert("touch", "XRP", _cl_i, 2071.0, 1360.0, week52=(4379.0, 1392.0, 52))
+_cfg_i.SETTINGS["alert_week52_compact"] = True
+_w52_on = _tg_i.render_alert("touch", "XRP", _cl_i, 2071.0, 1360.0, week52=(4379.0, 1392.0, 52))
+_w52_x = [_tg_i.render_alert("touch", "XRP", _cl_i, _c, 1360.0, week52=(_h, _l, _n))
+          for _c, _h, _l, _n in ((2071.0, 4379.0, 1392.0, 20), (1.0, 999999.0, 0.5, 52),
+                                 (5000.0, 4379.0, 1392.0, 52))]
+_cfg_i.SETTINGS["alert_week52_compact"] = False
+check("ITEMS-X7 52주 병합 스위치: 기본 OFF(5줄 블록 유지) / ON 이면 '📍 52주 위치 23% · 고가 -53%' 1줄",
+      "  └ 52주 범위 중 23% 위치" in _w52_off.split(chr(10))
+      and "📍 52주 위치 23% · 고가 -53%" in _w52_on.split(chr(10))
+      and "  고가: " not in _w52_on and "🟩" not in _w52_on
+      and all(_tg_i._line_width(ln) <= 32 for _m in _w52_x for ln in _m.split(chr(10))
+              if ln.startswith("📍"))
+      and "📍 상장후 위치" in _w52_x[0])
+
+# ITEMS-W6 줄넘김 0 격자 (v3c 대표 확정): 가격대 0.00001원~2억원 × 사다리(없음/1/2/12)
+# × 장기(≥+50%) 여부 × 이탈(현재 -18%) 여부 × 진입 범위 여부 × 헤더 주의(8자·12자 코인).
+_wg_n = 0
+_wg_bad = []
+for _px in (0.00001, 0.0123, 0.5, 1, 9.9, 123, 1234, 12345, 123456, 1234567,
+            12345678, 123456789, 200000000):
+    _e = _px / 1360.0
+    for _lad in (0, 1, 2, 12):
+        for _long in (False, True):
+            for _gap in (False, True):
+                for _rng in (False, True):
+                    _tps = [_e * (1.9 if _long else 1.12) * (1 + 0.01 * _i)
+                            for _i in range(max(_lad, 1))]
+                    _cl = [dict(coin_symbol="PIEVERSE", entry_usd=_e, tp_usd=_tps[0],
+                                tps_usd=str(_tps) if _lad else None, score=50, grade="B",
+                                author="a")]
+                    if _rng:
+                        _cl.append(dict(_cl[0], entry_usd=_e * 0.992, score=40))
+                    for _sym, _codes in (("PIEVERSE", ["CONCENTRATION_OF_SMALL_ACCOUNTS"]),
+                                         ("ABCDEFGHIJKL", ["TRADING_VOLUME_SOARING"])):
+                        _mw = _tg_i.render_alert("touch", _sym, _cl, _px * (0.82 if _gap else 1.0),
+                                                 1360.0, week52=(_px * 3, _px / 3, 52),
+                                                 volume_rank=123, rep=_cl[0],
+                                                 items={"upbit_warning": _codes})
+                        _wg_n += 1
+                        for _ln in _mw.split(chr(10)):
+                            if _ln == _tg_i._SEP or _ln.startswith("🔗"):
+                                continue
+                            if (_tg_i._line_width(_ln) > 32 or _ln.startswith(" " * 11)
+                                    or _ln.startswith("⚠️주의")):
+                                _wg_bad.append((_px, _lad, _long, _gap, _rng, _sym, _ln))
+check(f"ITEMS-W6 줄넘김 0 격자 {_wg_n}개 알림(가격 13단×사다리 4×장기×이탈×범위×코인 2) — 전 줄 ≤32 · 연속 줄 0",
+      _wg_n == 13 * 4 * 2 * 2 * 2 * 2 and not _wg_bad)
+_w12 = _tg_i.render_alert("touch", "ABCDEFGHIJKL", _cl_i, 2050.0, 1360.0,
+                          items={"upbit_warning": ["TRADING_VOLUME_SOARING"]}).split(chr(10))[1]
+check("ITEMS-W7 헤더 주의 꼬리 한 줄 유지 — 사유 보존 우선(PIEVERSE·12자는 '[터치]' 축약, XRP 는 원 라벨)",
+      "[터치]" in _w12 and "⚠️" in _w12 and _tg_i._line_width(_w12) <= 32
+      and _tg_i._TAG_RE.sub("", _tg_i.render_alert("touch", "PIEVERSE", _cl_i, 2050.0, 1360.0,
+          items={"upbit_warning": ["TRADING_VOLUME_SOARING"]}).split(chr(10))[1])
+      == "🎯 [터치] PIEVERSE ⚠️급증·관심"
+      and _tg_i._TAG_RE.sub("", _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0,
+          items={"upbit_warning": ["DEPOSIT_AMOUNT_SOARING"]}).split(chr(10))[1])
+      == "🎯 [진입가 터치] XRP ⚠️입금·주의")
+_wl = _tg_i.render_alert("touch", "SUI", [dict(coin_symbol="SUI", entry_usd=1.42, tp_usd=2.65,
+                         tps_usd="[2.65, 5.36]", score=50, grade="B", author="a")],
+                         1590.0, 1361.0).split(chr(10))
+check("ITEMS-W8 '(장기)' 꼬리 폐지 → '  목표: 3,607원 장기+86.6% 1/2' · 가격 줄 값 칼럼 정렬(8)",
+      "  목표: 3,607원 장기+86.6% 1/2" in _wl and "(장기)" not in chr(10).join(_wl)
+      and "  진입: 1,933원 (현재 -17.7%)" in _wl and "  현재: 1,590원" in _wl)
+check("ITEMS-W9 30일 저점 극단값(+632059%)도 32칼럼 — '+999%↑' 상한 표기",
+      _tg_i.format_low30(632059.0) == "📏 30일 저점: +999%↑ · 추격 주의")
+
+# 김프 경계
+def _kim(v):
+    return _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0, kimchi_pct=v)
+
+
+check("ITEMS-K1 김프 |x|<3 숨김(2.99/-2.99) · 3.0/-3.0 표시 · 판정 미부착",
+      "김프" not in _kim(2.99) and "김프" not in _kim(-2.99)
+      and "🌶️ 김프: +3.00%" in _kim(3.0).split("\n")
+      and "❄️ 김프: -3.00%" in _kim(-3.0).split("\n"))
+check("ITEMS-K2 15% 상한 가드와 공존 — -97% 숨김",
+      "김프" not in _kim(-97.4))
+
+# 소셜 — 소스 중립 표시부 + 새 기준
+def _soc_i(r, n, via_items=False):
+    if via_items:
+        return _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0,
+                                  items={"social": {"bull_ratio": r, "n": n, "source": "other"}})
+    return _tg_i.render_alert("touch", "XRP", _cl_i, 2050.0, 1360.0,
+                              stwits_bullish_ratio=r, stwits_n=n)
+
+
+check("ITEMS-S1 소셜 평소(0.9·n=20) 숨김 · '매수 유리' 폐지",
+      "소셜" not in _soc_i(0.9, 20) and "소셜" not in _soc_i(1.0, 30))
+check("ITEMS-S2 소셜 경계: 0.50·n=10 경고 / 0.51 숨김 / 0.2·n=9 숨김(표본 부족)",
+      "💬 소셜: 매도 우세 · 주의" in _soc_i(0.5, 10).split("\n")
+      and "소셜" not in _soc_i(0.51, 10) and "소셜" not in _soc_i(0.2, 9))
+check("ITEMS-S3 소스 중립 dict(items.social) 로도 같은 판정 — 수집부 교체 가능",
+      "💬 소셜: 매도 우세 · 주의" in _soc_i(0.3, 12, via_items=True).split("\n")
+      and "소셜" not in _soc_i(0.9, 12, via_items=True))
+
+# XRP 별칭
+check("ITEMS-A1 XRP↔Ripple 별칭 일치 · 심볼 미지정/다른 코인엔 미적용 · Sky/Skycoin 여전히 거부",
+      _st_i._names_match("XRP", "Ripple", symbol="XRP")
+      and not _st_i._names_match("XRP", "Ripple")
+      and not _st_i._names_match("Bitcoin", "Ripple", symbol="BTC")
+      and not _st_i._names_match("Sky", "Skycoin", symbol="SKY")
+      and not _st_i._names_match("GMT", "Mercury Protocol", symbol="GMT"))
+_orig_st_get_i = _st_i.requests.get
+_st_i.requests.get = lambda *a, **k: _R(200, {
+    "symbol": {"title": "Ripple"},
+    "messages": [{"entities": {"sentiment": {"basic": "Bullish"}}}] * 8
+    + [{"entities": {"sentiment": {"basic": "Bearish"}}}] * 4})
+_xr = _st_i.fetch_sentiment_stats("XRP", expected_name="XRP")
+_st_i.requests.get = _orig_st_get_i
+check("ITEMS-A2 XRP 조회(CG 'XRP' vs ST 'Ripple') 더 이상 폐기 안 됨 → 8/12",
+      _xr is not None and _xr["bullish"] == 8 and _xr["bearish"] == 4)
+
+# 글 이후 가격 이동 — 4시간봉 근사
+_H4 = 4 * 3600
+_h4 = [(0, 0, 100.0 + i, None, _D0 - (50 - i) * _H4) for i in range(51)]  # 마지막 봉 시작 = _D0
+_pub = _D0 - 10 * _H4 + 3600       # 09-25 16:00 UTC 봉(시작 _D0-10*4h) 안 1시간 지점
+_base_i = _up_i.price_at_post(_h4, _pub)
+check("ITEMS-P1 게시 시각 가격 = 직전 완성 4시간봉 종가(=게시 봉 시가)",
+      _base_i == 100.0 + 39)
+check("ITEMS-P2 글 이후 % = 현재가/기준-1 · 7일 초과·미래·커버리지 밖 → None",
+      abs(_up_i.post_move_pct(_h4, _pub, _D0 + 60, 139.0 * 1.03) - 3.0) < 1e-9
+      and _up_i.post_move_pct(_h4, _D0 - 8 * _DAY, _D0, 100.0) is None
+      and _up_i.post_move_pct(_h4, _D0 + 999, _D0, 100.0) is None
+      and _up_i.post_move_pct(_h4[-3:], _pub, _D0 + 60, 100.0) is None
+      and _up_i.post_move_pct(None, _pub, _D0, 100.0) is None)
+
+# 스냅샷 컬럼 — 마이그레이션 + 최초 기록 우선 + '' = 경보 없음
+_items_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+try:
+    _db_i.init_db(_items_db)
+    with _db_i.connect(_items_db) as conn:
+        _cols = {r["name"] for r in conn.execute("PRAGMA table_info(levels)").fetchall()}
+        check("ITEMS-D1 마이그레이션: touch_rvol_d20·touch_low30_pct·touch_upbit_warning·"
+              "touch_post_move_pct·touch_stwits_n 컬럼",
+              {"touch_rvol_d20", "touch_low30_pct", "touch_upbit_warning",
+               "touch_post_move_pct", "touch_stwits_n", "touch_alt_breadth"} <= _cols)
+        _ids = []
+        for _sk in ("i1", "i2"):
+            _ids.append(conn.execute(
+                "INSERT INTO levels (coin_symbol, ticker, entry_usd, direction, status, "
+                "signal_key, collected_at) VALUES ('X','KRW-X',1.0,'long','touched',?,900)",
+                (_sk,)).lastrowid)
+        _db_i.record_touch_snapshot(conn, [(_ids[0], None, None, None, None, None, None)],
+                                    rvol_d20=1.23, low30_pct=8.5,
+                                    upbit_warning="WARNING,TRADING_VOLUME_SOARING",
+                                    post_move_pct=-2.5, stwits_n=12, alt_breadth=55.5)
+        _db_i.record_touch_snapshot(conn, [(_ids[1], None, None, None, None, None, None)],
+                                    upbit_warning="")
+        _db_i.record_touch_snapshot(conn, [(_ids[0], None, None, None, None, None, None)],
+                                    rvol_d20=9.9, upbit_warning="")
+        _r0 = dict(conn.execute("SELECT * FROM levels WHERE id=?", (_ids[0],)).fetchone())
+        _r1 = dict(conn.execute("SELECT * FROM levels WHERE id=?", (_ids[1],)).fetchone())
+        check("ITEMS-D2 스냅샷 기록·최초 기록 우선·'' = 경보 없음(NULL = 미조회와 구분)",
+              _r0["touch_rvol_d20"] == 1.23 and _r0["touch_low30_pct"] == 8.5
+              and _r0["touch_upbit_warning"] == "WARNING,TRADING_VOLUME_SOARING"
+              and _r0["touch_post_move_pct"] == -2.5 and _r0["touch_stwits_n"] == 12
+              and _r0["touch_alt_breadth"] == 55.5
+              and _r1["touch_upbit_warning"] == "" and _r1["touch_rvol_d20"] is None)
+finally:
+    try:
+        os.remove(_items_db)
+    except OSError:
+        pass
+
+
+# ─── OKX 롱숏 3종 폴백 (2026-09-27, 대표 승인 "OKX 롱숏 DB 축적") ───────────
+# 미국 러너 Binance /futures/data/* 451 → OKX rubik 폴백. 네트워크는 전부 목.
+from monitor import binance as _okb
+
+
+class _OkR:
+    def __init__(self, status, body):
+        self.status_code = status; self._body = body
+    def json(self): return self._body
+
+
+def _ok_reset():
+    _okb._RATIO_WARNED.clear(); _okb._RATIO_BLOCKED.clear()
+
+
+def _ok_router(okx_status=200, okx_body=None, bin_status=451, bin_body=None, calls=None):
+    def _get(url, params=None, timeout=None, **k):
+        if calls is not None:
+            calls.append((url, dict(params or {}), timeout))
+        if "fapi.binance.com" in url:
+            return _OkR(bin_status, bin_body if bin_body is not None else {})
+        if "okx.com" in url:
+            if isinstance(okx_status, Exception):
+                raise okx_status
+            return _OkR(okx_status, okx_body)
+        raise AssertionError(url)
+    return _get
+
+
+_now_ms = int(time.time() * 1000)
+_cur4h = _now_ms - 3600 * 1000          # 진행 중 버킷(시작 1h 전)
+_prev4h = _cur4h - 4 * 3600 * 1000      # 완결 버킷
+# 진행 중 구간(cur)은 1.4, 완성 구간(prev)은 1.5615 — 완성 구간을 써야 한다(09-27 디버깅).
+_ok_ls_body = {"code": "0", "msg": "", "data": [[str(_cur4h), "1.4"], [str(_prev4h), "1.5615"]]}
+_ok_tk_body = {"code": "0", "msg": "", "data": [[str(_cur4h), "100", "300"],
+                                                [str(_prev4h), "729492.21", "942633.70"]]}
+
+# OKX-1: 451 → OKX 계정 롱/숏 비율 1.5615 → 롱 비중 0.6096 (바이낸스 longAccount 와 같은 의미)
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(okx_body=_ok_ls_body, calls=_calls)):
+    _v = _okb.fetch_long_short_ratio("SOL", 10.0)
+check("OKX-1 Binance 451 → OKX 폴백 롱 비중 r/(1+r)", _v is not None and abs(_v - 0.6096) < 1e-3)
+check("OKX-1b OKX 계정 롱숏 엔드포인트·instId·4H·짧은 타임아웃",
+      any("long-short-account-ratio-contract" in u and p.get("instId") == "SOL-USDT-SWAP"
+          and p.get("period") == "4H" and t <= 5.0 for u, p, t in _calls))
+
+# OKX-2: 451 이 확인되면 같은 회차 나머지 호출은 Binance 생략(헛콜 방지)
+_calls = []
+with patch("requests.get", side_effect=_ok_router(okx_body=_ok_ls_body, calls=_calls)):
+    _v2 = _okb.fetch_top_trader_position_ratio("SOL", 10.0)
+check("OKX-2 상위 트레이더도 OKX 포지션 비율로 폴백",
+      _v2 is not None and abs(_v2 - 0.6096) < 1e-3
+      and any("long-short-position-ratio-contract-top-trader" in u for u, _, _ in _calls))
+check("OKX-2b 차단 확인 후 Binance 재호출 없음",
+      not any("fapi.binance.com" in u for u, _, _ in _calls))
+
+# OKX-3: 테이커 — [ts, sellVol, buyVol], 진행 중 버킷 건너뛰고 완결 버킷 buy/sell
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(okx_body=_ok_tk_body)):
+    _v3 = _okb.fetch_taker_buy_sell_ratio("SOL", 10.0)
+check("OKX-3 테이커 완결 버킷 buyVol/sellVol", _v3 is not None and abs(_v3 - 942633.70 / 729492.21) < 1e-6)
+
+# OKX-4: OKX 실패(500) → None + 경고는 소스별 1회
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(okx_status=500, okx_body={})), \
+        patch.object(_okb.logger, "warning") as _w:
+    _r4 = [_okb.fetch_long_short_ratio("SOL", 10.0),
+           _okb.fetch_top_trader_position_ratio("SOL", 10.0),
+           _okb.fetch_taker_buy_sell_ratio("ETH", 10.0)]
+    _okx_warns = [c for c in _w.call_args_list if "[okx]" in str(c.args[0])]
+    _bin_warns = [c for c in _w.call_args_list if "[binance]" in str(c.args[0])]
+check("OKX-4 OKX 실패 → 전부 None(fail-open)", _r4 == [None, None, None])
+check("OKX-4b 경고 로그 소스별 1줄(okx 1 · binance 1)", len(_okx_warns) == 1 and len(_bin_warns) == 1)
+
+# OKX-5: OKX 예외(타임아웃) → None
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(okx_status=TimeoutError("t/o"))):
+    check("OKX-5 OKX 타임아웃 → None", _okb.fetch_long_short_ratio("SOL", 10.0) is None)
+_ok_reset(); _calls = []
+import requests as _okreq
+with patch("requests.get", side_effect=_ok_router(okx_status=_okreq.Timeout("t/o"), calls=_calls)):
+    _v5b = [_okb.fetch_long_short_ratio("SOL", 10.0), _okb.fetch_taker_buy_sell_ratio("SOL", 10.0)]
+check("OKX-5b requests 타임아웃 → 회차 내 OKX 재호출 생략(지연 누적 방지)",
+      _v5b == [None, None] and sum("okx.com" in u for u, _, _ in _calls) == 1)
+
+# OKX-6: 미상장(code 51001, HTTP 200) → 조용히 None
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(
+        okx_body={"code": "51001", "data": [], "msg": "Instrument ID doesn't exist."})), \
+        patch.object(_okb.logger, "warning") as _w6:
+    _v6 = _okb.fetch_long_short_ratio("FOO", 10.0)
+    _okx_w6 = [c for c in _w6.call_args_list if "[okx]" in str(c.args[0])]
+check("OKX-6 OKX 미상장 51001 → None, okx 경고 없음", _v6 is None and not _okx_w6)
+
+# OKX-7: 1000배수 계약 매핑 — Binance 는 1000PEPEUSDT, OKX 는 PEPE-USDT-SWAP
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(
+        bin_status=200, bin_body=[{"longAccount": "0.6728"}], calls=_calls)):
+    _v7 = _okb.fetch_long_short_ratio("pepe", 10.0)
+check("OKX-7 Binance 1000배수 매핑(PEPE → 1000PEPEUSDT)",
+      abs(_v7 - 0.6728) < 1e-9 and _calls[0][1].get("symbol") == "1000PEPEUSDT")
+check("OKX-7b 매핑 표(SHIB·XEC·BONK 1000, BABYDOGE 1M, 일반 SOL 그대로)",
+      _okb._binance_futures_pair("SHIB") == "1000SHIBUSDT"
+      and _okb._binance_futures_pair("XEC") == "1000XECUSDT"
+      and _okb._binance_futures_pair("BONK") == "1000BONKUSDT"
+      and _okb._binance_futures_pair("BABYDOGE") == "1MBABYDOGEUSDT"
+      and _okb._binance_futures_pair("SOL") == "SOLUSDT")
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(okx_body=_ok_ls_body, calls=_calls)):
+    _okb.fetch_long_short_ratio("PEPE", 10.0)
+check("OKX-7c OKX 는 접두사 없이 PEPE-USDT-SWAP",
+      any("okx.com" in u and p.get("instId") == "PEPE-USDT-SWAP" for u, p, _ in _calls))
+
+# OKX-8: Binance 200 + [](미상장) → OKX 폴백, Binance 정상값은 OKX 호출 없음
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(bin_status=200, bin_body=[], okx_body=_ok_ls_body,
+                                                  calls=_calls)):
+    _v8 = _okb.fetch_long_short_ratio("SOL", 10.0)
+check("OKX-8 Binance 미상장([]) → OKX 폴백", _v8 is not None and abs(_v8 - 0.6096) < 1e-3)
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(bin_status=200, bin_body=[{"buySellRatio": "1.2051"}],
+                                                  calls=_calls)):
+    _v8b = _okb.fetch_taker_buy_sell_ratio("SOL", 10.0)
+check("OKX-8b Binance 정상 → 그 값, OKX 호출 0", abs(_v8b - 1.2051) < 1e-9
+      and not any("okx.com" in u for u, _, _ in _calls))
+
+# OKX-9: 동명 다른 코인 차단(EDGE·META) → 호출 자체 없음
+_ok_reset(); _calls = []
+with patch("requests.get", side_effect=_ok_router(okx_body=_ok_ls_body, calls=_calls)):
+    _v9 = [_okb.fetch_long_short_ratio("EDGE", 10.0), _okb.fetch_taker_buy_sell_ratio("META", 10.0)]
+check("OKX-9 동명 다른 코인 차단 목록 → None·호출 0", _v9 == [None, None] and not _calls)
+
+# OKX-10: 파싱 방어 — 이상 응답(code 50011 레이트리밋, 행 형식 깨짐) → None
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(okx_body={"code": "50011", "msg": "Too Many Requests"})):
+    _v10a = _okb.fetch_long_short_ratio("SOL", 10.0)
+_ok_reset()
+with patch("requests.get", side_effect=_ok_router(okx_body={"code": "0", "data": [["123"]]})):
+    _v10b = _okb.fetch_taker_buy_sell_ratio("SOL", 10.0)
+check("OKX-10 레이트리밋 코드·깨진 행 → None", _v10a is None and _v10b is None)
+
+# OKX-11: 설정 끔 → OKX 호출 없음
+_ok_reset(); _calls = []
+_cfg_arm.SETTINGS["okx_ratio_fallback_enabled"] = False
+try:
+    with patch("requests.get", side_effect=_ok_router(okx_body=_ok_ls_body, calls=_calls)):
+        _v11 = _okb.fetch_long_short_ratio("SOL", 10.0)
+finally:
+    _cfg_arm.SETTINGS["okx_ratio_fallback_enabled"] = True
+check("OKX-11 okx_ratio_fallback_enabled=False → None·OKX 호출 0",
+      _v11 is None and not any("okx.com" in u for u, _, _ in _calls))
+_ok_reset()
+
+# ── 2026-09-27 금일 개발분 디버깅 회귀 (DBG-*) ──
+from collector.extractor import parse_setup as _dbg_ps
+from notify import news_parse as _dbg_np
+_r = _dbg_ps("Entry: 2.10\nSL: 1.95\nTarget 1 (2.40)\nTarget 2 (2.60)", current_price=None)
+check("DBG-1 'Target 1 (2.40)' 괄호 가격 → long·SL 유지·TP 2.40",
+      _r and _r["direction"] == "long" and _r["sl"] == 1.95 and _r["tp"] == 2.4)
+_r = _dbg_ps("Entry 45 (support zone)\nTarget 60", current_price=None)
+check("DBG-1b 'Entry 45 (support zone)' 가격 보존(RV2-E1 회귀 없음)", _r and _r["entry"] == 45.0)
+check("DBG-2 연준 결정 = 가장 앞 동사(holds … cuts → 동결)",
+      _dbg_np._fed_move("Fed holds rates steady, signals two cuts later this year") == "동결"
+      and _dbg_np._fed_move("Fed holds rates, rules out hikes for now") == "동결"
+      and _dbg_np._fed_move("Fed cuts rates by 25 bps") == "인하")
+_e = _dbg_np.classify_event("Hackers drain $12M from DeFi protocol using fake token contract")
+check("DBG-3 공격 수법 'fake token' 이 있어도 실제 해킹은 해킹", _e and _e.get("label") == "해킹")
+_e = _dbg_np.classify_event("Spot Bitcoin ETFs log $1B inflows, analysts say rally could extend")
+check("DBG-4 ', analysts say' 뒤 논평은 사실 구절과 분리 → ETF 호재 유지",
+      _e and _e.get("pol") == 1 and _e.get("kind") != "call")
+_e = _dbg_np.classify_event("Bitcoin ETFs see $500M in inflows as SEC approves in-kind redemptions")
+check("DBG-4b 'in-kind redemptions' 는 유출 아님 → 호재", _e and _e.get("pol") == 1)
+_txt = tg.render_alert("touch", "ETH", [
+    {"direction": "long", "entry_usd": 1234.5, "entry_low_usd": 1230.0, "entry_high_usd": 1234.5,
+     "tp_usd": 1400.0, "score": 60, "grade": "A", "author": "x", "collected_at": 0},
+    {"direction": "long", "entry_usd": 1230.0, "tp_usd": 1400.0, "score": 50, "grade": "B",
+     "author": "y", "collected_at": 0}],
+    1234.5 * 0.8 * 1360.0, 1360.0)
+_gap_line = [l for l in _txt.split("\n") if "진입:" in l]
+check("DBG-5 범위 진입(고가 코인)도 '(현재 -x%)' 꼬리 유지·32칸 이내",
+      _gap_line and "~" in _gap_line[0] and "(현재-20%)" in _gap_line[0]
+      and tg._line_width(_gap_line[0]) <= 32)
 
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")

@@ -600,6 +600,262 @@ def _author_block(rep: dict) -> list:
     return lines
 
 
+# ── 알림 항목 v3 (2026-09-27 대표 최종 확정) ──────────────────────────────
+# ① 항목별 표시 스위치(settings.alert_show_*) — 데이터 수집·등급·DB 기록은 스위치와
+#    무관하게 유지되고 렌더 표시만 가른다. 설정 키가 없으면(구 설정·스텁) default.
+# ② 판정 어휘 통일(대표: "초보는 이 지표가 사라는 건지 아닌지만 알면 됨"):
+#    줄 끝 " · 판정" — 매수 우호 / 매수 가능 / 관망 / 주의(과열·추격 주의) / 매수 보류.
+#    판정 근거가 없는 줄(비트 점유율·김프·추세 강도)에는 판정을 붙이지 않는다.
+# ③ 모든 줄 32칼럼 이내 — 넘치면 근거 문구부터 축약(_verdict_line).
+V_FAVOR = "매수 우호"
+V_OK = "매수 가능"
+V_WAIT = "관망"
+V_CAUTION = "주의"
+V_HOLD = "매수 보류"
+
+
+def _show(key: str, default: bool) -> bool:
+    try:
+        return bool(settings.get(key))
+    except KeyError:
+        return default
+
+
+def _cfg(key: str, default):
+    try:
+        v = settings.get(key)
+    except KeyError:
+        return default
+    return default if v is None else v
+
+
+def _verdict_line(head: str, reason, verdict: str, value=None) -> str:
+    """'{head}: {값} · {verdict}' 를 32칼럼 안에 맞춘다 (2026-09-27 대표 지적: 개발 전처럼
+    **'항목: 값' 형식 통일** — 콜론이 빠져 줄마다 모양이 달랐다).
+    값 = 근거(reason, '·' 토큰) 우선, 근거가 없으면 value(저장 라벨 — 예: 돈 흐름 '중립').
+    넘치면 근거의 마지막 '·' 토큰부터 덜어내고, 그래도 넘치면 '{head}: {verdict}'(판정은 항상 남김)."""
+    tail = f" · {verdict}"
+    toks = [t.strip() for t in (reason or "").split("·") if t.strip()]
+    if not toks and value:
+        cand = f"{head}: {value}{tail}"
+        if _line_width(cand) <= _MAX_LINE_COLS:
+            return cand
+    while toks:
+        cand = f"{head}: {'·'.join(toks)}{tail}"
+        if _line_width(cand) <= _MAX_LINE_COLS:
+            return cand
+        toks = toks[:-1]
+    return f"{head}: {verdict}"
+
+
+# 기존 판정(저장값은 그대로)의 표시 어휘 매핑 — DB touch_*_verdict 는 불변.
+_SUPPLY_VERDICT = {"우호": V_FAVOR, "중립": V_WAIT, "주의": V_CAUTION}
+_POSITION_VERDICT = {"최적": V_FAVOR, "우호": V_FAVOR, "중립": V_WAIT,
+                     "주의": V_CAUTION, "위험": V_HOLD}
+
+
+def format_supply(verdict, reason) -> Optional[str]:
+    if not verdict:
+        return None
+    return _verdict_line("🧭 돈 흐름", reason, _SUPPLY_VERDICT.get(verdict, V_WAIT),
+                         value=verdict)
+
+
+def format_position(verdict, reason) -> Optional[str]:
+    if not verdict:
+        return None
+    return _verdict_line("🌡️ 자리", reason, _POSITION_VERDICT.get(verdict, V_WAIT),
+                         value=verdict)
+
+
+def format_fng(fng) -> Optional[str]:
+    """시장심리(공포·탐욕): < fng_favor_below(65) 매수 우호, 이상 관망(운영 DB 근거)."""
+    if fng is None:
+        return None
+    try:
+        v = float(fng)
+    except (TypeError, ValueError):
+        return None
+    verdict = V_FAVOR if v < float(_cfg("fng_favor_below", 65)) else V_WAIT
+    return f"{fng_emoji(fng)} 시장심리: {fng} · {verdict}"
+
+
+def format_btc_dom(btc_d, alt_breadth=None) -> str:
+    """'🌍 비트 점유율 58.3% · 알트 상승 55%' — 넘치면 '알트↑55%', 값 없으면 꼬리 생략.
+    실측: 헤드(20칼럼)+'· 알트 상승 55%'(16) = 36 이라 사실상 항상 '알트↑55%'(31칼럼)로 나간다.
+    점유율은 소수 1자리 고정(58.33 → 58.3) — 알트↑100% 까지 32칼럼 이내."""
+    try:
+        head = f"🌍 비트 점유율: {float(btc_d):.1f}%"
+    except (TypeError, ValueError):
+        head = f"🌍 비트 점유율: {btc_d}%"
+    if alt_breadth is None:
+        return head
+    for tail in (f" · 알트 상승 {alt_breadth:.0f}%", f" · 알트↑{alt_breadth:.0f}%"):
+        if _line_width(head + tail) <= _MAX_LINE_COLS:
+            return head + tail
+    return head
+
+
+def format_altseason(value, verdict=None) -> Optional[str]:
+    """알트장 줄 — 값·판정을 인자로 받는다(2026-09-27 CTO: 소스 교체 후 재활성 대비).
+    verdict 미지정이면 종전 라벨(altseason_label)을 괄호로. 스위치 기본 OFF."""
+    if value is None:
+        return None
+    if verdict:
+        return _verdict_line("🪙 알트장", str(value), verdict)
+    return f"🪙 알트장: {value} ({altseason_label(value)})"
+
+
+# 업비트 투자주의(caution) → **헤더 첫 줄 끝** 꼬리표 (2026-09-27 대표 확정 v3b, 새 줄 없음).
+# 사유별 판정: 관심 신호(거래량급등·가격급등락) → '관심' / 위험 신호(입금급증·소수계정집중·
+# 해외가괴리) → '주의'. 사유가 여럿이면 위험 신호 우선 1개. 투자유의(WARNING)는 발송 직전
+# 게이트가 차단하므로 여기 오지 않는다 — 게이트를 끈 경우만 '유의 · 주의' 로 최우선 표기.
+# (사유 키 = monitor.upbit.UPBIT_CAUTION_KEYS, 약어는 [정식, 축약] 2단)
+UPBIT_CAUTION_RULES = (   # 우선순위 순: (코드, 정식 약어, 축약, 판정)
+    ("WARNING", "유의종목", "유의", "주의"),
+    ("DEPOSIT_AMOUNT_SOARING", "입금급증", "입금", "주의"),
+    ("CONCENTRATION_OF_SMALL_ACCOUNTS", "소수계정집중", "집중", "주의"),
+    ("GLOBAL_PRICE_DIFFERENCES", "해외가괴리", "괴리", "주의"),
+    ("TRADING_VOLUME_SOARING", "거래량급증", "급증", "관심"),
+    ("PRICE_FLUCTUATIONS", "가격급등락", "변동", "관심"),
+)
+
+
+def upbit_caution_pick(codes):
+    """경보 코드 목록 → (정식 약어, 축약, 판정) 1개(위험 신호 우선) 또는 None."""
+    if not codes:
+        return None
+    for code, full, short, verdict in UPBIT_CAUTION_RULES:
+        if code in codes:
+            return full, short, verdict
+    return ("기타", "기타", "주의")
+
+
+def upbit_caution_header(head: str, codes, short_head: str = None):
+    """헤더 첫 줄에 주의 꼬리표를 32칼럼 안에서 붙인다 → (헤더, 넘친 꼬리표|None).
+    축약 순서: '· ⚠️주의 거래량급등 · 관심' → 사유 축약 → '· ⚠️거래량 · 관심' →
+    ' ⚠️입금·주의' → ' ⚠️급증·관심'(2글자 사유 — 2026-09-27 대표 확인: 사유가 보여야 함) → ' ⚠️관심'. 그래도 넘치면(9자+ 코인명 — 현 업비트 KRW 최장 8자) 헤더는
+    v3c: 다음 줄 넘김 없음 — 헤더 라벨 축약('[터치]'/'[접근]') → ' ⚠️' 만. 두 번째 반환값은
+    호환용(항상 None)."""
+    pick = upbit_caution_pick(codes)
+    if not pick:
+        return head, None
+    full, short, verdict = pick
+    tails = (f" · ⚠️주의 {full} · {verdict}", f" · ⚠️주의 {short} · {verdict}",
+             f" · ⚠️{short} · {verdict}", f" ⚠️{short}·{verdict}",
+             f" ⚠️주의·{verdict}" if verdict != "주의" else " ⚠️주의",
+             f" ⚠️{verdict}")
+    # v3c (2026-09-27 대표 확정 — 줄넘김 0): 다음 줄로 넘기지 않는다. 안 들어가면
+    # '[진입가 터치]'→'[터치]'(short_head)로 줄여 다시 시도, 그래도 넘치면 ' ⚠️' 만.
+    # 사유가 보이는 꼬리(앞 4단계)를 먼저: 긴 헤더 → '[터치]' 헤더 순. 그다음 사유 없는 꼬리.
+    heads = [head] + ([short_head] if short_head else [])
+    for grp in (tails[:4], tails[4:]):
+        for h in heads:
+            for tail in grp:
+                if _line_width(h + tail) <= _MAX_LINE_COLS:
+                    return h + tail, None
+    h = short_head or head
+    if _line_width(h + " ⚠️") <= _MAX_LINE_COLS:
+        return h + " ⚠️", None
+    return h, None
+
+
+def _band(v: float, lo: float, hi: float, below: str, inside: str, above: str) -> str:
+    if v < lo:
+        return below
+    if v < hi:
+        return inside
+    return above
+
+
+def format_rvol_d20(rv) -> Optional[str]:
+    """전일 완성봉 거래대금 ÷ 20일 평균. 1.0~1.5배 매수 우호 / <1.0 관망 / ≥1.5 과열 주의
+    (백테스트: 1.0~1.5x 구간만 두 판정 방식 모두 우위). 판정은 **표시 값(소수 1자리)**
+    기준 — '1.0배 · 관망' 같은 겉보기 모순 방지."""
+    if rv is None or rv < 0:
+        return None
+    shown = round(rv, 1)
+    lo, hi = _cfg("alert_rvol_favor_band", (1.0, 1.5))
+    verdict = _band(shown, lo, hi, V_WAIT, V_FAVOR, "과열 " + V_CAUTION)
+    return f"🔊 거래량: {shown:.1f}배 · {verdict}"
+
+
+def format_low30(pct) -> Optional[str]:
+    """30일 저점 대비 %. +5~15% 매수 우호 / <+5%(이탈 포함) 관망 / ≥+15% 추격 주의."""
+    if pct is None:
+        return None
+    shown = round(pct)
+    lo, hi = _cfg("alert_low30_favor_band", (5.0, 15.0))
+    verdict = _band(shown, lo, hi, V_WAIT, V_FAVOR, "추격 " + V_CAUTION)
+    line = f"📏 30일 저점: {shown:+d}% · {verdict}"
+    # v3c: 4자리+ % (오염 캔들 등 극단값)로 32칼럼을 넘으면 값을 '+999%↑'로 상한 표기.
+    if _line_width(line) > _MAX_LINE_COLS:
+        line = f"📏 30일 저점: {'+999%↑' if shown > 0 else '-99%↓'} · {verdict}"
+    return line
+
+
+def format_post_move(pct) -> Optional[str]:
+    """원글 게시 시각 가격 대비 현재가 %. |x|≤5 매수 가능 / ≥+10 추격 주의 /
+    +5~10 관망 / ≤−5 초과 하락 관망."""
+    if pct is None:
+        return None
+    shown = round(pct)
+    ok_abs = float(_cfg("alert_post_move_ok_abs_pct", 5.0))
+    chase = float(_cfg("alert_post_move_chase_pct", 10.0))
+    if abs(shown) <= ok_abs:
+        verdict = V_OK
+    elif shown >= chase:
+        verdict = "추격 " + V_CAUTION
+    else:
+        verdict = V_WAIT
+    return f"⏱ 글 이후: {shown:+d}% · {verdict}"
+
+
+def format_social(social: Optional[dict]) -> Optional[str]:
+    """소셜 심리 줄 — **소스 중립** 입력 {"bull_ratio": 0~1, "n": 태그 표본 수}.
+    (2026-09-27 CTO: 수집부(StockTwits 등)와 표시부 분리 — 소스 교체 시 이 dict 만 채운다.)
+    '매수 유리' 표시는 폐지. 매수 비중이 social_warn_max_ratio 이하(평소보다 크게 낮음)
+    이고 표본이 social_warn_min_n 이상일 때만 '💬 소셜 매도 우세 · 주의'."""
+    if not social:
+        return None
+    ratio, n = social.get("bull_ratio"), social.get("n")
+    if ratio is None or not n:
+        return None
+    if n < int(_cfg("social_warn_min_n", 10)):
+        return None
+    if ratio > float(_cfg("social_warn_max_ratio", 0.5)) + 1e-9:
+        return None
+    return f"💬 소셜: 매도 우세 · {V_CAUTION}"
+
+
+def _krw_short(v: float) -> str:
+    """진입 범위가 32칼럼을 넘을 때만 쓰는 짧은 원화 표기(1.30억·1,234만·1,234)."""
+    if v >= 1e8:
+        return f"{v / 1e8:.2f}억"
+    if v >= 1e5:
+        return f"{v / 1e4:,.0f}만"
+    return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+
+
+def _fit_price(base: str, tails: list, fallback: str = None, allow_bare: bool = True) -> str:
+    """가격 줄 한 줄 맞춤(v3c — 줄넘김 0). base+tails[i] 중 32칼럼 이내 첫 후보,
+    없으면 base(꼬리 생략) → fallback(짧은 표기) 순. 다음 줄 넘김 경로는 없다."""
+    for t in tails:
+        if _line_width(base + t) <= _MAX_LINE_COLS:
+            return base + t
+    # 짧은 표기에 꼬리를 붙인 후보가 맨 base 보다 우선 — 범위 진입(고가 코인)에서
+    # '(현재 -x%)' 경고가 통째로 사라지던 문제(09-27 디버깅).
+    if fallback:
+        for t in tails:
+            if _line_width(fallback + t) <= _MAX_LINE_COLS:
+                return fallback + t
+    if allow_bare and _line_width(base) <= _MAX_LINE_COLS:
+        return base
+    if fallback and _line_width(fallback) <= _MAX_LINE_COLS:
+        return fallback
+    return base if allow_bare or not tails else base + tails[-1]
+
+
 def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  usdt_krw: float, sentiment: dict = None, week52: tuple = None,
                  kimchi_pct: float = None, volume_rank: int = None,
@@ -610,7 +866,8 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  active_addr_pctile: float = None,
                  stwits_bullish_ratio: float = None,
                  watcher_coin_sl: dict = None,
-                 stwits_n: int = None) -> str:
+                 stwits_n: int = None,
+                 items: dict = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
@@ -619,7 +876,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     표시 대표(작성자·등급)와 필터·밴드 대표가 갈릴 수 있다. 미전달 시(직접 호출·
     구버전 경로) 종전대로 score 최대 멤버 폴백.
     stwits_n: StockTwits 태그 표본 수(bullish+bearish)|None — 소셜 배지 표본 병기용.
-    week52: (고가, 저가) 또는 (고가, 저가, 주봉 개수) — 개수 < 52 면 '상장후' 표기."""
+    week52: (고가, 저가) 또는 (고가, 저가, 주봉 개수) — 개수 < 52 면 '상장후' 표기.
+    items (2026-09-27 알림 항목 v3, 개별 kwarg 비대 방지용 dict): rvol_d20,
+    low30_pct, upbit_warning(경보 코드 list|None), post_move_pct, alt_breadth(%),
+    social({"bull_ratio","n"} — 주면 stwits_* 인자보다 우선). 키 없으면 줄 생략."""
+    items = items or {}
     if rep is None:
         rep = max(cluster, key=lambda l: l.get("score") or 0)
     current_usd = (current_krw / usdt_krw) if (current_krw and usdt_krw) else None
@@ -645,11 +906,14 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     if _line_width(head_meta) > _MAX_LINE_COLS:
         head_meta = "·".join(_hm)
 
-    lines = [
-        _SEP,
-        f"{kind_kr} <b>{html.escape(coin_symbol)}</b>",
-        head_meta,
-    ]
+    # 업비트 투자주의 → 헤더 끝 꼬리표(v3b, 새 줄 없음). 넘치면(현실엔 없음) 다음 줄.
+    _head = f"{kind_kr} <b>{html.escape(coin_symbol)}</b>"
+    if _show("alert_show_upbit_warning", True):
+        _short_kr = "🎯 <b>[터치]</b>" if kind == "touch" else "⚠️ <b>[접근]</b>"
+        _head, _ = upbit_caution_header(
+            _head, items.get("upbit_warning"),
+            short_head=f"{_short_kr} <b>{html.escape(coin_symbol)}</b>")
+    lines = [_SEP, _head, head_meta]
     # TP 도달 훈장 (2026-09-27 S2 D12·D13·W3 재정의): 작성자의 **실제 TP 적중**
     # (outcome='hit', 판정 방식 무관) 건수. 종전 값(author_self_wins)은 만료·수익
     # (timeboxed_win)까지 셌고 SL 미기재 작성자의 적중은 빠졌다. 게이트는 승률 줄과
@@ -669,63 +933,56 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         v = usd_value * usdt_krw
         return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
 
-    # 들여쓰기 4칸 = 52주 블록의 고가/저가 행과 시작 위치 정렬 (2026-07-23 사용자 지시).
-    # R:R 행은 삭제(사용자가 직접 판단) — 그 자리에 거래량 순위.
+    # 가격 블록 v3c (2026-09-27 대표 확정 — 줄넘김 0, '오와 열'): 라벨 앞 2칸·콜론 뒤 1칸
+    # ('  현재: ') — 현재·진입·목표 값이 같은 칼럼(8)에서 시작하고 52주 하위 줄
+    # ('  고가: ')도 같은 칼럼. 32칼럼을 넘을 때만 _fit_price 가 단계 축약한다(다음 줄
+    # 넘김 경로 없음). R:R 행은 삭제(사용자가 직접 판단) — 그 자리에 거래대금 순위.
     lines.append("타점")
     if current_usd and _krw(current_usd):
-        lines.append(f"    현재:  {_krw(current_usd)}원")
+        lines.append(_fit_price(f"  현재: {_krw(current_usd)}원", []))
     # 대표 **자신의** 진입가 (2026-09-27 S2 D3/T9). 목표 %·이탈 병기의 기준.
     # 종전엔 클러스터 상단(hi)이라 대표의 TP 를 다른 멤버 진입가로 나눴다.
     own_entry = rep.get("entry_usd") or entry_rep
-    # 진입가 이탈 병기 (2026-09-27 사용자 결정 — 병기만, 헤더 불변): 터치는 캔들
-    # 저가로, '현재'는 실시간가로 재서 급락 중 발송이면 "진입가 터치"인데 현재가가
-    # 한참 아래였다(감사 D1 45/150). 대표 진입가보다 1% 초과 아래면 진입 행에 붙인다.
-    gap_txt = ""
+    # 진입가 이탈 병기 (2026-09-27 사용자 결정 — 병기만, 헤더 불변): 대표 진입가보다
+    # 1% 초과 아래면 진입 행에 붙인다. 넘치면 '(현재 -17.7%)'→'(현재 -18%)'→'(현재-18%)'
+    # →'(-18%)'→생략.
+    gap_tails = []
     if current_usd and own_entry and own_entry > 0:
         _gap = (current_usd - own_entry) / own_entry * 100
         if _gap < -_ENTRY_GAP_SHOW_PCT:
-            gap_txt = f"(현재 {_gap:+.1f}%)"
+            gap_tails = [f" (현재 {_gap:+.1f}%)", f" (현재 {_gap:+.0f}%)",
+                         f" (현재{_gap:+.0f}%)", f" ({_gap:+.0f}%)"]
     if lo is not None and hi is not None and hi > lo and _krw(lo):
-        lines.extend(_with_suffix(f"    진입:  {_krw(lo)}~{_krw(hi)}원", gap_txt))
+        lines.append(_fit_price(f"  진입: {_krw(lo)}~{_krw(hi)}원", gap_tails,
+                                fallback=f"  진입: {_krw_short(lo * usdt_krw)}"
+                                         f"~{_krw_short(hi * usdt_krw)}원"))
     elif entry_rep and _krw(entry_rep):
-        lines.extend(_with_suffix(f"    진입:  {_krw(entry_rep)}원", gap_txt))
+        lines.append(_fit_price(f"  진입: {_krw(entry_rep)}원", gap_tails))
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)
     # 목표 = 판정용 유효 TP 목록의 첫 값 (2026-09-27 S2 D4/T5 — 단일 출처).
-    # 오염값 가드(entry < tp <= entry*4)도 그 목록이 이미 건다 — 종전 표시 직전
-    # 가드(0.25~4배, 2026-07-23 SOL 사고)는 이 출처로 흡수됐다.
     tps = _display_tps(rep)
     tp = tps[0] if tps else None
     if tp and own_entry:
         pct = (tp - own_entry) / own_entry * 100
-        # 다단계 목표 표기 (2026-07-27 사용자 승인, A안): 사다리면 **첫 목표(TP1)만**
-        # 보이고 "1/N" 으로 위가 더 있음을 알린다. N = 같은 유효 TP 목록 길이(D4).
-        # 2026-08-15 표시 상한 12(13단+ 는 산문 오염 가능성 — 무표기) 유지.
+        # 다단계 목표: TP1 만 보이고 "1/N"(2~12단, 2026-08-15 상한 유지).
         n_tp = len(tps)
-        tail = []
-        if 1 < n_tp <= 12:
-            tail.append(f"1/{n_tp}")
-        # 비현실 목표 (2026-09-27 사용자 결정 T6): 억제하지 않고 "(장기)" 라벨만.
-        if pct >= _LONG_TARGET_PCT:
-            tail.append("(장기)")
+        ladder = f" 1/{n_tp}" if 1 < n_tp <= 12 else ""
+        # v3c: '(장기)' 꼬리 폐지 — TP1 ≥ +50% 면 '진입+86.6%' 자리를 '장기+86.6%' 로.
+        lab = "장기" if pct >= _LONG_TARGET_PCT else "진입"
         _tp_krw = _krw(tp)
-        # D2: % 기준을 라벨로 명시 — "진입+86.6%" (현재가 기준으로 오독 방지).
-        # 괄호 없이 한 칸 띄움 — "1,322원 진입+5.5% 1/3" 이 32칼럼에 들어간다
-        # (괄호형은 1천원대 사다리부터 34칼럼으로 넘쳤다).
-        head = (f"    목표:  {_tp_krw}원 진입{pct:+.1f}%" if _tp_krw
-                else f"    목표:  진입{pct:+.1f}%")
-        suffix = " ".join(tail)
-        # 2026-09-27 리뷰 F1: 1천만원대 목표가(BTC 전부·ETH 일부)는 head 자체가 32칼럼을
-        # 넘는다(129,754,240원 진입+12.3% = 35칼럼). _with_suffix 는 head 폭을 보지 않으므로
-        # 그 경우 '진입+x%' 도 꼬리표로 넘겨 가격만 첫 줄에 남긴다.
-        if _tp_krw and _line_width(head) > _MAX_LINE_COLS:
-            head = f"    목표:  {_tp_krw}원"
-            suffix = " ".join([f"진입{pct:+.1f}%"] + tail)
-        lines.extend(_with_suffix(head, suffix))
+        base = f"  목표: {_tp_krw}원" if _tp_krw else "  목표:"
+        # 축약 단계: 1) % 소수점 생략 2) '진입' 글자 생략('장기'는 정보라 유지) 3) 1/N 생략
+        # 4) % 꼬리 생략(이론상 극단). 절대 다음 줄로 넘기지 않는다.
+        p1, p0 = f"{pct:+.1f}%", f"{pct:+.0f}%"
+        lab2 = lab if lab == "장기" else ""
+        cands = [f" {lab}{p1}{ladder}", f" {lab}{p0}{ladder}", f" {lab2}{p0}{ladder}",
+                 f" {lab2}{p0}"]
+        lines.append(_fit_price(base, cands, allow_bare=bool(_tp_krw)))
     else:
-        lines.append("    목표:  데이터 없음")
+        lines.append("  목표: 데이터 없음")
     if volume_rank:
         # D17: 주간 리포트 '거래대금' 어휘와 통일 (시총 순위와 혼동 방지).
-        lines.append(f"    거래대금:  {volume_rank}위")
+        lines.append(f"  거래대금: {volume_rank}위")
 
     # ── 52주 고저 + 현재 위치 바 (워쳐 notifier.py 표기 그대로, 2026-07-23 #9) ──
     # 2026-09-27 S2 D5: 08-17 UX 때 저가↔바 사이에 넣은 _SEP 를 **뺐다** — 구분선이
@@ -739,14 +996,26 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         if high52 and low52 and high52 > 0 and low52 > 0:
             from_high = (current_krw - high52) / high52 * 100
             from_low = (current_krw - low52) / low52 * 100
+            # 한 줄 병합 옵션 (2026-09-27 v3, 스위치 기본 OFF — 대표 결정 대기):
+            # 보고서 §2 의 4인 합의 문구 '📍 52주 위치 23% · 고가 -53%'. 5줄 → 1줄.
+            # 대표 원칙('새 양식은 최악 조건에서도 행 수가 줄어야')을 켜기 하나로 충족.
+            if _show("alert_week52_compact", False):
+                if high52 > low52:
+                    pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
+                    lines.append(f"📍 {blk} 위치 {pos:.0f}% · 고가 {from_high:+.0f}%")
+                else:
+                    lines.append(f"📍 {blk} 고가 {from_high:+.0f}%")
+                high52 = None   # 아래 5줄 블록 생략
+        if week52 and high52 and low52 and high52 > 0 and low52 > 0:
             lines.append(blk)
-            lines.append(f"    고가  {from_high:+.1f}% ({_fmt_krw(high52)}원)")
-            lines.append(f"    저가  {from_low:+.1f}% ({_fmt_krw(low52)}원)")
+            # v3c: 가격 블록과 같은 들여쓰기('  고가: ') — 값 시작 칼럼 8 로 정렬.
+            lines.append(f"  고가: {from_high:+.1f}% ({_fmt_krw(high52)}원)")
+            lines.append(f"  저가: {from_low:+.1f}% ({_fmt_krw(low52)}원)")
             if high52 > low52:
                 pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
                 filled = max(0, min(10, round(pos / 10)))
-                lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
-                lines.append(f"    └ {blk} 범위 중 {pos:.0f}% 위치")
+                lines.append("  " + "🟩" * filled + "⬜" * (10 - filled))
+                lines.append(f"  └ {blk} 범위 중 {pos:.0f}% 위치")
 
     # Zone 1 배지 재배치 (2026-08-17 E1, 사용자 결정 — 리스크 우선):
     # 세 그룹으로 버퍼링 후 순서대로 렌더 (라인 수 불변, 순서만 변경).
@@ -756,71 +1025,77 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 각 그룹 내 순서는 데이터 소스별 자연 순서(DEX → 온체인 등) 유지.
     risk_badges, info_badges, positive_badges = [], [], []
 
+    # (업비트 주의종목 별도 줄은 v3b 에서 제거 — 헤더 끝 꼬리표로 이동, 유의는 발송 차단)
+
     # DEX 저유동 (매수 주의) — 러그·exit 위험. 임계 <100k$ (grading._dex_points 와 동일).
+    # 2026-09-27 v3: 💧 저유동·🔴 매도세 표시 제외(스위치 기본 OFF) — 등급·DB 기록은 유지.
     if dex_stats:
         _liq = dex_stats.get("liquidity_usd")
         _bratio = dex_stats.get("buy_ratio_24h")
-        if _liq is not None and _liq < 100_000:
-            risk_badges.append(f"💧 DEX 저유동 {_liq/1000:.0f}k$ (매수 주의)")
+        if (_liq is not None and _liq < 100_000
+                and _show("alert_show_dex_liq", False)):
+            risk_badges.append(f"💧 DEX 저유동 {_liq/1000:.0f}k$ · {V_CAUTION}")
         # DEX 매수세/매도세 — 배타적 임계 (≥0.65 / ≤0.35). 사이(중립)는 무표기.
         if _bratio is not None:
             if _bratio >= 0.65:
-                positive_badges.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% (매수 유리)")
-            elif _bratio <= 0.35:
-                risk_badges.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% (매수 부담)")
+                positive_badges.append(f"🟢 DEX 매수세 {_bratio*100:.0f}% · {V_FAVOR}")
+            elif _bratio <= 0.35 and _show("alert_show_dex_sell", False):
+                risk_badges.append(f"🔴 DEX 매도세 {(1-_bratio)*100:.0f}% · {V_CAUTION}")
 
     # Coin Metrics 활성주소 30d 백분위 (2026-08-17). 무료 커버 138종만 값.
-    # ≥80 활발 (매수 유리) / ≤20 저조 (매수 부담) / 중립 무표기.
-    # 2026-09-27 사용자 제보(XRP 888): 값은 **자기 코인 30일 대비 백분위**인데 "저조 7위"로
-    # 표기돼 순위(시총·거래대금 7위)로 읽혔다 → "하위 7%" / "상위 12%" 로 표기.
-    # 0·100 백분위도 '하위 0%'가 되지 않게 최소 1%.
-    if active_addr_pctile is not None:
+    # ≥80 활발 / ≤20 저조 / 중립 무표기. "하위 7%"/"상위 12%" 표기(09-27 XRP 888 제보).
+    # 2026-09-27 v3: 표시 제외(스위치 기본 OFF) — 등급·DB 기록은 유지.
+    if active_addr_pctile is not None and _show("alert_show_active_addr", False):
         if active_addr_pctile >= 80:
             _top = max(1, round(100 - active_addr_pctile))
-            positive_badges.append(f"⛓ 활성주소 상위 {_top}% (매수 유리)")
+            positive_badges.append(f"⛓ 활성주소 상위 {_top}% · {V_FAVOR}")
         elif active_addr_pctile <= 20:
             _bot = max(1, round(active_addr_pctile))
-            risk_badges.append(f"⛓ 활성주소 하위 {_bot}% (매수 부담)")
+            risk_badges.append(f"⛓ 활성주소 하위 {_bot}% · {V_CAUTION}")
 
-    # StockTwits 소셜 심리 (2026-08-17). SOL/SUI/APT/TAO/WLD/TIA 등 최근 유행 알트
-    # 커버 (Coin Metrics 미커버 자산 상당수 보완). 태그된 표본 <5는 이미 fetch
-    # 단계에서 None 반환. ≥0.75 강한 매수 심리 / ≤0.30 강한 매도 심리.
-    # 2026-09-27 S2 D10: 표본 수 병기 + 소표본 극단값 숨김. 100%(또는 0%)인데
-    # 태그 표본이 10건 미만이면 배지를 내지 않는다(감사: 36/150 이 '100%' 였다).
-    # 표기는 "매수 7/8" 분수형 — 분모가 곧 n 이다. "(n=7)" 괄호형은 이 배지 줄을
-    # 32칼럼 밖으로 밀어 잘린다(실측 34~36칼럼). n 미상(구 호출부)이면 종전 % 표기.
-    if stwits_bullish_ratio is not None:
-        _sn = stwits_n if (stwits_n or 0) > 0 else None
-        _extreme = stwits_bullish_ratio >= 0.999 or stwits_bullish_ratio <= 0.001
-        _hide = _extreme and _sn is not None and _sn < _SOCIAL_EXTREME_MIN_N
-        if not _hide and stwits_bullish_ratio >= 0.75:
-            if _sn:
-                _k = round(stwits_bullish_ratio * _sn)
-                positive_badges.append(f"💬 소셜 매수 {_k}/{_sn} (매수 유리)")
-            else:
-                positive_badges.append(
-                    f"💬 소셜 매수세 {stwits_bullish_ratio*100:.0f}% (매수 유리)")
-        elif not _hide and stwits_bullish_ratio <= 0.30:
-            if _sn:
-                _k = round((1 - stwits_bullish_ratio) * _sn)
-                risk_badges.append(f"💬 소셜 매도 {_k}/{_sn} (매수 부담)")
-            else:
-                risk_badges.append(
-                    f"💬 소셜 매도세 {(1-stwits_bullish_ratio)*100:.0f}% (매수 부담)")
+    # 소셜 (2026-09-27 v3 재보정): 종전 '≥75% 매수 유리'는 폐지 — 크립토 스트림은
+    # 평소 매수 비중이 높아(운영 DB 147건 중앙값 90%) 표시된 38건이 전부 '매수 유리'
+    # 였다(정보 0). 평소보다 크게 낮을 때만 경고(risk 그룹), 평소엔 줄 없음.
+    # 표시부는 소스 중립 dict 를 받는다 — 지금 소스는 StockTwits(stwits_* 인자).
+    _social = items.get("social")
+    if _social is None and stwits_bullish_ratio is not None:
+        _social = {"bull_ratio": stwits_bullish_ratio, "n": stwits_n}
+    _soc = format_social(_social)
+    if _soc:
+        risk_badges.append(_soc)
 
     # 추세 강도 (2026-08-17 F3): ADX(14) ≥25 일 때만 표시. 라벨 없는 정보 배지.
     # 2026-09-27 S2 D9: ADX 에는 방향이 없는데 📈 가 상승을 암시해 '하락세'와
-    # 같이 뜨는 모순(14/150)이 났다 — 방향 중립 아이콘·문구로 교체.
+    # 같이 뜨는 모순(14/150)이 났다 — 방향 중립 아이콘·문구로 교체. 방향이 없으니
+    # v3 판정도 붙이지 않는다.
     if adx14 is not None and adx14 >= 25:
-        info_badges.append(f"〰️ 추세 강함 (ADX {adx14:.0f})")
+        info_badges.append(f"〰️ 추세: 강함 (ADX {adx14:.0f})")
 
-    # RSI 자리 판정 (2026-08-07). 라벨 없는 정보 배지.
+    # RSI 자리 판정 (2026-08-07) — v3 어휘 통일: '🌡️ 자리 {근거} · {판정}'.
     if position and position[0]:
-        _pv, _pr = position
-        info_badges.append(f"🌡️ 자리: {_pv} ({_pr})" if _pr else f"🌡️ 자리: {_pv}")
+        _pl = format_position(position[0], position[1])
+        if _pl:
+            info_badges.append(_pl)
+
+    # 알림 항목 v3 (2026-09-27) — 일봉·4시간봉 재사용(추가 API 호출 0).
+    if _show("alert_show_rvol_d20", True):
+        _rv = format_rvol_d20(items.get("rvol_d20"))
+        if _rv:
+            info_badges.append(_rv)
+    if _show("alert_show_low30", True):
+        _lw = format_low30(items.get("low30_pct"))
+        if _lw:
+            info_badges.append(_lw)
+    # ⏱ 글 이후: v3b 대표 결정으로 표시 기본 OFF(스냅샷 touch_post_move_pct 는 계속 기록).
+    if _show("alert_show_post_move", False):
+        _pm = format_post_move(items.get("post_move_pct"))
+        if _pm:
+            info_badges.append(_pm)
 
     # 워쳐 코인별 SL률 (최근 7일, 표본 2건 이상일 때만 표시)
-    if watcher_coin_sl and watcher_coin_sl.get("total", 0) >= 2:
+    # 2026-09-27 v3: 표시 제외(스위치 기본 OFF) — 데이터·조회는 유지.
+    if (watcher_coin_sl and watcher_coin_sl.get("total", 0) >= 2
+            and _show("alert_show_watcher_sl", False)):
         _sl_r = watcher_coin_sl["sl_rate"]
         _sl_t = watcher_coin_sl["total"]
         _sl_m = watcher_coin_sl["misses"]
@@ -853,10 +1128,15 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
             logger.warning("[텔레그램] %s 김프 %.2f%% 비정상(심볼 충돌 의심) - 표시 생략",
                            coin_symbol, kimchi_pct)
             kimchi_pct = None
-    if (sentiment or kimchi_pct is not None or funding_rate is not None
-            or (funding_regime_flip and funding_regime_flip.get("flipped"))
-            or supply):
-        lines.append(_SEP)
+    # 김프 조건부 표시 (2026-09-27 v3): |김프| ≥ kimchi_display_min_abs_pct(3.0) 일 때만.
+    # 값의 89%가 ±0.5% 안이라 평소엔 정보가 없다. 위 15% 상한 가드와 공존.
+    # 기록(touch_kimchi_pct)·이력(김프 화살표 델타)은 표시와 무관하게 그대로.
+    if kimchi_pct is not None:
+        if abs(kimchi_pct) < float(_cfg("kimchi_display_min_abs_pct", 0.0)) - 1e-9:
+            kimchi_pct = None
+    # 시장 블록은 줄을 먼저 모은 뒤 비어 있지 않을 때만 구분선을 붙인다
+    # (2026-09-27 v3 — 비트 점유율·알트장 숨김으로 sentiment 가 있어도 줄이 0일 수 있다).
+    mkt = []
     # 수급 판정 한 줄 (2026-08-07 사용자 결정): 종전 "💰 펀딩 수치+라벨" 줄을
     # 펀딩×OI 합성 결론으로 대체 — 원시 수치 대신 매수 관점 판정만 짧게.
     # supply 미전달(구 호출부·테스트)이면 funding_rate 단독으로 같은 형식을
@@ -866,17 +1146,16 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         from monitor.binance import derive_supply_verdict
         _supply = derive_supply_verdict(funding_rate, None, None)
     # 헤더 어휘 개편 (2026-08-14 사용자 확정): 수급→돈 흐름 — 초보자 직관.
+    # v3 어휘 통일: '🧭 돈 흐름 {근거} · {판정}' (저장값 우호/중립/주의 → 표시 매핑).
     if _supply and _supply[0]:
-        _sv, _sr = _supply
-        lines.append(f"🧭 돈 흐름: {_sv} ({_sr})" if _sr else f"🧭 돈 흐름: {_sv}")
+        _sl = format_supply(_supply[0], _supply[1])
+        if _sl:
+            mkt.append(_sl)
     # 펀딩 레짐 전환 (2026-08-03 스프린트08 사용자 결정): 30일+ 지속 음수 → 양수
     # 플립 감지 시 🔥 강조 배지. 등급 산식엔 영향 없음(배지만).
-    # 표기 개편 (2026-08-14 사용자 확정 A안): "N일 음수→양수"는 방향성이
-    # 안 읽힌다는 피드백 → 펀딩이 실제로 말해주는 사실(매수 수요 복귀)을
-    # 그대로 — 과장("바닥 탈출") 없이 호재로 읽히는 표현.
     if funding_regime_flip and funding_regime_flip.get("flipped"):
         _nd = funding_regime_flip.get("neg_days") or 0
-        lines.append(f"🔥 {_nd:.0f}일만에 매수세 복귀")
+        mkt.append(f"🔥 {_nd:.0f}일만에 매수세 복귀")
     if kimchi_pct is not None:
         # 급변 화살표 (2026-08-14 사용자 확정): ~6h 대비 ±0.5%p 이상 움직였을
         # 때만 화살표 1글자 — 평시 표기는 종전과 완전 동일(행 폭 유지).
@@ -884,29 +1163,39 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         if kimchi_delta is not None and abs(kimchi_delta) >= _KIMCHI_DELTA_TH:
             _arrow = " ▲" if kimchi_delta > 0 else " ▼"
         if abs(kimchi_pct) < 0.01:
-            lines.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%){_arrow}")
+            mkt.append(f"⚖️ 김프 거의 0% ({kimchi_pct:+.3f}%){_arrow}")
         elif kimchi_pct > 0:
-            lines.append(f"🌶️ 김프 {kimchi_pct:+.2f}%{_arrow}")
+            mkt.append(f"🌶️ 김프: {kimchi_pct:+.2f}%{_arrow}")
         else:
-            lines.append(f"❄️ 김프 {kimchi_pct:+.2f}%{_arrow}")
+            mkt.append(f"❄️ 김프: {kimchi_pct:+.2f}%{_arrow}")
     if sentiment:
         btc_d = sentiment.get("btc_dominance")
         alt_s = sentiment.get("altcoin_season_index")
         fng = sentiment.get("fear_greed")
         # 헤더 어휘 개편 (2026-08-14 사용자 확정): BTC.D→비트 점유율,
         # ALT.S→알트장, F&G→시장심리 — 영문 약어를 우리말로.
-        if btc_d is not None:
-            lines.append(f"🌍 비트 점유율: {btc_d}%")
-        if alt_s is not None:
-            lines.append(f"🪙 알트장: {alt_s} ({altseason_label(alt_s)})")
+        # 2026-09-27 v3: 알트장 표시 제외(스위치 기본 OFF) — DB 기록 유지.
+        # 비트 점유율: 유지(대표 확정) — 판정 근거 없음 → 판정 미부착.
+        # 알트 상승 비율(2026-09-27 대표 확정): 새 줄 없이 이 줄 끝에 붙인다 — 판정 꼬리표
+        # 없음(시장 전체 지표는 기간 교란). 32칼럼 넘으면 '알트↑55%' 로 축약, 값 없으면 생략.
+        if btc_d is not None and _show("alert_show_btc_dom", True):
+            _ab = (items.get("alt_breadth")
+                   if _show("alert_show_alt_breadth", True) else None)
+            mkt.append(format_btc_dom(btc_d, _ab))
+        # 알트장: 코드 유지·스위치 OFF(2026-09-27 CTO — 대체 소스 교체 후 재활성 대비).
+        if alt_s is not None and _show("alert_show_altseason", False):
+            _al = format_altseason(alt_s, sentiment.get("altseason_verdict"))
+            if _al:
+                mkt.append(_al)
+        # 시장심리 v3: '😀 시장심리 70 · 관망' (<65 매수 우호 — 운영 DB 근거).
+        # D18 값 구간별 이모지 유지. 영문 라벨(공포/탐욕) 괄호는 판정으로 대체.
         if fng is not None:
-            label_kr = _FNG_KR.get(sentiment.get("fear_greed_label", ""),
-                                   sentiment.get("fear_greed_label", ""))
-            _fe = fng_emoji(fng)  # D18: 값 구간별 이모지(종전 😨 고정)
-            if label_kr:
-                lines.append(f"{_fe} 시장심리: {fng} ({label_kr})")
-            else:
-                lines.append(f"{_fe} 시장심리: {fng}")
+            _fl = format_fng(fng)
+            if _fl:
+                mkt.append(_fl)
+    if mkt:
+        lines.append(_SEP)
+        lines.extend(mkt)
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)

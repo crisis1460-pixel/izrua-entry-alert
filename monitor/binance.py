@@ -581,12 +581,60 @@ def fetch_cvd_ratio(symbol: str, timeout: float, hours: int = 4) -> Optional[flo
 
 
 _FAPI_BASE = "https://fapi.binance.com"
+_OKX_RUBIK_BASE = "https://www.okx.com/api/v5/rubik/stat"
+
+# Binance USDⓈ-M 선물의 배수 계약 — 현물 심볼과 계약 심볼이 다르다(2026-09-27 exchangeInfo
+# 실측). 매핑 없이는 PEPEUSDT 가 200 + [] 로 조용히 None. OKX 는 배수 접두사 없이
+# PEPE-USDT-SWAP 이라(계약 크기만 ctVal 로 다름) 매핑 불필요 — 비율은 단위 무관.
+_BINANCE_FUTURES_PREFIX = {
+    "PEPE": "1000", "SHIB": "1000", "XEC": "1000", "BONK": "1000",
+    "FLOKI": "1000", "LUNC": "1000", "SATS": "1000", "RATS": "1000",
+    "CAT": "1000", "CHEEMS": "1000", "BABYDOGE": "1M",
+    "MOG": "1000000", "BOB": "1000000",
+}
+
+# 롱숏 3종 경고 억제 — 회차(=프로세스, run_cycle.py 1회 실행)당 소스별 1줄.
+_RATIO_WARNED: set = set()
+# 지역 차단(451/403)이 한 번 확인된 소스 — 같은 회차의 나머지 터치에서는 호출 생략.
+_RATIO_BLOCKED: set = set()
+
+
+def _ratio_cfg(key: str, default):
+    """config/settings 조회(지연 임포트 — 이 모듈은 설정 의존이 없던 파일). 실패 시 기본값."""
+    try:
+        from config import settings as _s
+        v = _s.SETTINGS.get(key, default)
+        return default if v is None else v
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _ratio_warn_once(source: str, msg: str, *args) -> None:
+    if source in _RATIO_WARNED:
+        return
+    _RATIO_WARNED.add(source)
+    logger.warning(msg + " (이번 회차 %s 경고는 이후 생략)", *args, source)
+
+
+def _ratio_symbol_ok(symbol: str) -> bool:
+    """동명 다른 코인(업비트 ≠ 선물 거래소) 차단 목록. 2026-09-27 가격 대조로 확인."""
+    bl = _ratio_cfg("derivatives_ratio_symbol_blocklist", ())
+    return symbol.upper() not in {str(s).upper() for s in bl}
+
+
+def _binance_futures_pair(symbol: str) -> str:
+    sym = symbol.upper()
+    return f"{_BINANCE_FUTURES_PREFIX.get(sym, '')}{sym}USDT"
 
 
 def _fetch_fapi_ratio(endpoint: str, symbol: str, field: str,
                       timeout: float, label: str) -> Optional[float]:
-    """Binance FAPI ratio 공통 헬퍼. 미상장/실패 → None."""
-    pair = f"{symbol.upper()}USDT"
+    """Binance FAPI ratio 공통 헬퍼. 미상장/실패 → None.
+    2026-09-27: 비-200 무음 None 이던 것을 경고(회차당 1줄)로, 451/403 은 회차 내
+    재호출 생략(미국 러너 상시 차단 — 터치마다 헛콜 방지). 배수 계약 심볼 매핑."""
+    pair = _binance_futures_pair(symbol)
+    if "binance" in _RATIO_BLOCKED:
+        return None
     try:
         r = requests.get(
             f"{_FAPI_BASE}/futures/data/{endpoint}",
@@ -594,30 +642,122 @@ def _fetch_fapi_ratio(endpoint: str, symbol: str, field: str,
             timeout=timeout,
         )
         if r.status_code != 200:
+            if r.status_code in (451, 403):
+                _RATIO_BLOCKED.add("binance")
+            _ratio_warn_once("binance", "[binance] %s %s HTTP %s → OKX 폴백",
+                             label, pair, r.status_code)
             return None
         data = r.json()
         return float(data[0][field]) if data else None
     except Exception as e:  # noqa: BLE001
-        logger.warning("[binance] %s %s 실패: %s", label, pair, e)
+        _ratio_warn_once("binance", "[binance] %s %s 실패: %s", label, pair, e)
+        return None
+
+
+def _fetch_okx_ratio(path: str, symbol: str, kind: str,
+                     timeout: float, label: str) -> Optional[float]:
+    """OKX rubik 공개 통계(무인증) → 바이낸스와 같은 의미로 변환해 반환. 실패 → None.
+
+    응답(2026-09-27 실측): {"code":"0","data":[[ts, ...], ...]} 최신→과거 순.
+      kind="long_share": data 행 = [ts, 롱/숏 비율] → 롱 비중 r/(1+r)
+                        (바이낸스 longAccount 와 같은 0~1 값. SOL 1.5615 → 0.6096 검산).
+      kind="taker": data 행 = [ts, sellVol, buyVol] → buyVol/sellVol
+                    (바이낸스 buySellRatio 와 같은 >1 매수 우위). 첫 행은 진행 중 4H 버킷이라
+                    바이낸스처럼 완결 버킷(ts+4h ≤ 지금)을 쓴다.
+    미상장은 code 51001(HTTP 200) → 조용히 None."""
+    if not _ratio_cfg("okx_ratio_fallback_enabled", True):
+        return None
+    if "okx" in _RATIO_BLOCKED or not _ratio_symbol_ok(symbol):
+        return None
+    inst = f"{symbol.upper()}-USDT-SWAP"
+    try:
+        t = min(float(timeout), float(_ratio_cfg("okx_ratio_timeout_sec", 5.0)))
+    except (TypeError, ValueError):
+        t = 5.0
+    try:
+        r = requests.get(
+            f"{_OKX_RUBIK_BASE}/{path}",
+            params={"instId": inst, "period": "4H", "limit": 2},
+            timeout=t,
+        )
+        if r.status_code != 200:
+            if r.status_code in (451, 403):
+                _RATIO_BLOCKED.add("okx")
+            _ratio_warn_once("okx", "[okx] %s %s HTTP %s", label, inst, r.status_code)
+            return None
+        body = r.json() or {}
+        code = str(body.get("code", ""))
+        if code == "51001":  # 미상장 — 정상 경로
+            return None
+        if code != "0":
+            _ratio_warn_once("okx", "[okx] %s %s code %s %s", label, inst,
+                             code, body.get("msg", ""))
+            return None
+        rows = body.get("data") or []
+        import time as _t
+        now_ms = _t.time() * 1000
+        if kind == "long_share":
+            # 진행 중 4h 구간(rows[0])은 건너뛰고 완성 구간 — 바이낸스 값과 같은 창(09-27 디버깅).
+            for row in rows:
+                if float(row[0]) + 4 * 3600 * 1000 <= now_ms:
+                    ratio = float(row[1])
+                    return ratio / (1.0 + ratio) if ratio >= 0 else None
+            return None
+        if kind == "taker":
+            for row in rows:
+                if float(row[0]) + 4 * 3600 * 1000 <= now_ms:
+                    sell, buy = float(row[1]), float(row[2])
+                    return buy / sell if sell > 0 else None
+            return None
+        return None
+    except (requests.Timeout, requests.ConnectionError) as e:
+        # 연결·타임아웃은 회차 내 재시도 무의미 — 터치마다 5초×3 지연 누적 방지
+        _RATIO_BLOCKED.add("okx")
+        _ratio_warn_once("okx", "[okx] %s %s 연결 실패(이번 회차 OKX 생략): %s",
+                         label, inst, e)
+        return None
+    except Exception as e:  # noqa: BLE001
+        _ratio_warn_once("okx", "[okx] %s %s 실패: %s", label, inst, e)
         return None
 
 
 def fetch_long_short_ratio(symbol: str, timeout: float) -> Optional[float]:
-    """전체 계정 롱/숏 비율 — 최근 4h 평균. 미상장/실패 → None."""
-    return _fetch_fapi_ratio("globalLongShortAccountRatio", symbol,
-                             "longAccount", timeout, "longShort")
+    """전체 계정 **롱 비중**(0~1, 바이낸스 longAccount) — 최근 4h. 미상장/실패 → None.
+    Binance → OKX(계정 롱/숏 비율 → r/(1+r)) 폴백(2026-09-27, 미국 러너 451)."""
+    if not _ratio_symbol_ok(symbol):
+        return None
+    v = _fetch_fapi_ratio("globalLongShortAccountRatio", symbol,
+                          "longAccount", timeout, "longShort")
+    if v is not None:
+        return v
+    return _fetch_okx_ratio("contracts/long-short-account-ratio-contract",
+                            symbol, "long_share", timeout, "longShort")
 
 
 def fetch_top_trader_position_ratio(symbol: str, timeout: float) -> Optional[float]:
-    """상위 트레이더 롱 비율 — 최근 4h. 미상장/실패 → None."""
-    return _fetch_fapi_ratio("topLongShortPositionRatio", symbol,
-                             "longAccount", timeout, "topTrader")
+    """상위 트레이더 **포지션 롱 비중**(0~1) — 최근 4h. 미상장/실패 → None.
+    Binance → OKX(상위 트레이더 포지션 롱/숏 비율 → r/(1+r)) 폴백."""
+    if not _ratio_symbol_ok(symbol):
+        return None
+    v = _fetch_fapi_ratio("topLongShortPositionRatio", symbol,
+                          "longAccount", timeout, "topTrader")
+    if v is not None:
+        return v
+    return _fetch_okx_ratio("contracts/long-short-position-ratio-contract-top-trader",
+                            symbol, "long_share", timeout, "topTrader")
 
 
 def fetch_taker_buy_sell_ratio(symbol: str, timeout: float) -> Optional[float]:
-    """선물 테이커 매수/매도 비율 — 최근 4h. >1 매수 우위, <1 매도 우위. 미상장/실패 → None."""
-    return _fetch_fapi_ratio("takerlongshortRatio", symbol,
-                             "buySellRatio", timeout, "takerRatio")
+    """선물 테이커 매수/매도 비율 — 최근 완결 4h. >1 매수 우위, <1 매도 우위. 미상장/실패 → None.
+    Binance → OKX(taker-volume-contract buyVol/sellVol) 폴백."""
+    if not _ratio_symbol_ok(symbol):
+        return None
+    v = _fetch_fapi_ratio("takerlongshortRatio", symbol,
+                          "buySellRatio", timeout, "takerRatio")
+    if v is not None:
+        return v
+    return _fetch_okx_ratio("taker-volume-contract", symbol, "taker",
+                            timeout, "takerRatio")
 
 
 def fetch_usdt_price(symbol: str, timeout: float) -> Optional[float]:

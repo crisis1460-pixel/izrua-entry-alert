@@ -1010,7 +1010,32 @@ def run_once(now: float | None = None) -> dict:
             if not vol_cache["loaded"]:
                 vol_cache["loaded"] = True
                 vol_cache["ranks"] = upbit.fetch_volume_ranks(cfg_get("http_timeout_sec"))
+                # 업비트 시장경보 (2026-09-27 알림 항목 v3) — 같은 market/all 응답의
+                # 부산물(추가 콜 0). None = 조회 실패/스텁(= '경고 없음'과 구분).
+                try:
+                    vol_cache["warnings"] = upbit.last_market_warnings()
+                except Exception:  # noqa: BLE001
+                    vol_cache["warnings"] = None
+                # 알트 상승 비율(같은 배치 ticker 응답, 추가 콜 0) — 🌍 줄 꼬리 + 스냅샷.
+                try:
+                    vol_cache["alt_breadth"] = upbit.last_alt_breadth()
+                except Exception:  # noqa: BLE001
+                    vol_cache["alt_breadth"] = None
+                if vol_cache.get("warnings") is None:
+                    logger.info("[체크] 업비트 시장경보 조회 불가(경고 없음과 구분) - 표시·기록 생략")
             return vol_cache["ranks"]
+
+        def _alt_breadth():
+            _volume_ranks()
+            return vol_cache.get("alt_breadth")
+
+        def _upbit_warning_codes(ticker):
+            """이 마켓의 경보 코드 list([] = 경보 없음) 또는 None(조회 불가)."""
+            _volume_ranks()
+            _w = vol_cache.get("warnings")
+            if _w is None:
+                return None
+            return list(_w.get(ticker) or [])
 
         # 워쳐 코인별 SL률 — 발송 시 1회 조회, 전 코인 공유 (4h 인프로세스 캐시)
         _watcher_ctx = {"loaded": False, "coin_sl": {}}
@@ -1331,6 +1356,30 @@ def run_once(now: float | None = None) -> dict:
                             logger.warning("[체크] %s touch_deep 무음 기록 실패(무시): %s",
                                            coin, e)
 
+                # 업비트 투자유의 차단 게이트 (2026-09-27 v3b 대표 확정): 상장폐지 직전
+                # 코인 추천은 큰 문제 — market/all(isDetails=true) 회차 캐시 재사용(추가
+                # 콜 0). 억제 관례는 no_tp·touch_deep 와 동일(send_ok=False + 무음 기록
+                # kind='touch_warning'/'preview_warning', sent=0). 터치 기록·판정은 아래에서
+                # 그대로. 조회 실패(None)는 fail-open — 수집 단계 제외·공지 감시가 1차 방어.
+                if send_ok and cfg_get("alert_block_upbit_warning") and \
+                        (kind == "touch" or cfg_get("preview_alert_enabled")):
+                    try:
+                        _gate_codes = _upbit_warning_codes(ticker)
+                    except Exception as e:  # noqa: BLE001 - fail-open
+                        logger.warning("[체크] %s 업비트 유의 조회 실패(fail-open): %s", coin, e)
+                        _gate_codes = None
+                    if _gate_codes and "WARNING" in _gate_codes:
+                        logger.info("[체크] %s 업비트 투자유의 종목 - 알림 차단(%s_warning)",
+                                    coin, kind)
+                        send_ok = False
+                        summary["suppressed_upbit_warning"] = \
+                            summary.get("suppressed_upbit_warning", 0) + 1
+                        try:
+                            db.record_alert(conn, coin, f"{kind}_warning", ids, day, now, sent=0)
+                        except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
+                            logger.warning("[체크] %s %s_warning 무음 기록 실패(무시): %s",
+                                           coin, kind, e)
+
                 if send_ok and kind == "touch" and \
                         db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
                     logger.info("[체크] %s 일일 본알림 상한 도달 - 억제", coin)
@@ -1402,6 +1451,12 @@ def run_once(now: float | None = None) -> dict:
                                           # 5건 미만·심볼 미존재 시 None (자연 스킵). 무등록
                                           # 200 req/hr, 발송당 1콜.
                 _snap_stwits_n = None     # 위 태그 표본 수 — 알림 배지 표기 전용(S2 D10)
+                # 알림 항목 v3 (2026-09-27) — 표시 + 소급 불가 스냅샷. 일봉 기반 두 값은
+                # 발송 경로 fetch_position_data 공유(억제 터치 None), 경보는 회차 캐시.
+                _snap_daily = {}          # {"rvol_d20", "low30_pct"}
+                _snap_upbit_warn = None   # 경보 코드 list | None(조회 불가)
+                _snap_post_move = None    # 글 게시 시각 가격 대비 현재가 %(4시간봉 근사)
+                _snap_alt_breadth = None  # BTC 제외 KRW 종목 중 24h 상승 비율(%) — 회차 캐시
                 _snap_addr_pct = None     # Coin Metrics 활성주소 30d 백분위 (2026-08-17) —
                                           # 무료 티어 커버 자산(BTC/ETH/XRP 등 18종)만 값,
                                           # 미커버는 None (자연 스킵). 24h DB 캐시로 알림당
@@ -1477,6 +1532,19 @@ def run_once(now: float | None = None) -> dict:
                         # ATR20% (2026-08-16 Tier2) — 같은 일봉 응답 공유(추가 콜 0),
                         # 터치 스냅샷 기록 전용. 조회 실패 시 위 except 가 잡아 None.
                         _snap_atr = _pd.get("atr20_pct")
+                        # 알림 항목 v3 (2026-09-27): 거래량 배율(전일÷20일)·30일 저점 —
+                        # 같은 일봉 응답(d_ohlc) 재사용, 완성봉만(now 기준).
+                        _snap_daily = upbit.daily_items(_pd.get("d_ohlc"), now, current)
+                        # 글 이후 가격 이동 — 대표 글 게시 시각(수집 시각 − 수집 당시
+                        # 글나이) 가격을 같은 4시간봉 응답으로 근사(추가 콜 0).
+                        _pub_ts = None
+                        if (rep.get("collected_at") is not None
+                                and rep.get("post_age_minutes") is not None):
+                            _pub_ts = (float(rep["collected_at"])
+                                       - float(rep["post_age_minutes"]) * 60.0)
+                        _snap_post_move = upbit.post_move_pct(
+                            _pd.get("h4_ohlc"), _pub_ts, now, current,
+                            max_age_days=cfg_get("alert_post_move_max_age_days"))
                         # F3 (2026-08-17): ADX + BB Width 백분위 — 알림 배지 및
                         # rep 표시 등급 재채점 입력. 필터(min_grade)는 위 재채점
                         # (line 820)에서 이미 통과 판정 완료 — 여기서는 표시 등급만
@@ -1675,6 +1743,28 @@ def run_once(now: float | None = None) -> dict:
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s rep 재채점(F3/DEX/온체인/소셜) 실패(무시): %s",
                                            coin, e)
+                    # 알림 항목 v3 (2026-09-27): 업비트 시장경보(회차 캐시, 추가 콜 0).
+                    try:
+                        _snap_upbit_warn = _upbit_warning_codes(ticker)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[체크] %s 업비트 경보 조회 실패(무시): %s", coin, e)
+                        _snap_upbit_warn = None
+                    try:
+                        _snap_alt_breadth = _alt_breadth()
+                    except Exception:  # noqa: BLE001
+                        _snap_alt_breadth = None
+                    _items = {
+                        "alt_breadth": _snap_alt_breadth,
+                        "rvol_d20": (_snap_daily or {}).get("rvol_d20"),
+                        "low30_pct": (_snap_daily or {}).get("low30_pct"),
+                        "upbit_warning": _snap_upbit_warn,
+                        "post_move_pct": _snap_post_move,
+                        # 소셜 — 수집부(StockTwits)와 표시부(format_social) 분리: 소스를
+                        # 바꾸면 이 dict 만 새 소스 값으로 채운다(2026-09-27 CTO).
+                        "social": ({"bull_ratio": _snap_stwits, "n": _snap_stwits_n,
+                                    "source": "stocktwits"}
+                                   if _snap_stwits is not None else None),
+                    }
                     text = telegram.render_alert(kind, coin, cluster, current, usdt_krw,
                                                  sentiment=_snap_sentiment, week52=week52,
                                                  kimchi_pct=_snap_kimchi,
@@ -1690,7 +1780,8 @@ def run_once(now: float | None = None) -> dict:
                                                  active_addr_pctile=_snap_addr_pct,
                                                  stwits_bullish_ratio=_snap_stwits,
                                                  stwits_n=_snap_stwits_n,
-                                                 watcher_coin_sl=_watcher_coin_sl().get(coin))
+                                                 watcher_coin_sl=_watcher_coin_sl().get(coin),
+                                                 items=_items)
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한
                     # 신호이기 때문. 예고(+1% 접근)는 아직 행동할 시점이 아니라 무음으로
@@ -1839,6 +1930,17 @@ def run_once(now: float | None = None) -> dict:
                         _snap_sentiment = _sentiment()
                     if _snap_volume_rank is None:
                         _snap_volume_rank = _volume_ranks().get(ticker)
+                    if _snap_alt_breadth is None:
+                        try:
+                            _snap_alt_breadth = _alt_breadth()
+                        except Exception:  # noqa: BLE001
+                            _snap_alt_breadth = None
+                    # 업비트 경보도 회차 캐시라 억제 터치에 추가 콜 0 (v3 스냅샷).
+                    if _snap_upbit_warn is None:
+                        try:
+                            _snap_upbit_warn = _upbit_warning_codes(ticker)
+                        except Exception:  # noqa: BLE001
+                            _snap_upbit_warn = None
                     if _snap_kimchi is None:
                         try:
                             _usd_g = binance.fetch_usdt_price(coin, cfg_get("http_timeout_sec"))
@@ -1960,7 +2062,15 @@ def run_once(now: float | None = None) -> dict:
                             dex_volume_24h_usd=(_snap_dex or {}).get("volume_24h_usd"),
                             dex_buy_ratio=(_snap_dex or {}).get("buy_ratio_24h"),
                             active_addr_pctile=_snap_addr_pct,
-                            stwits_bullish_ratio=_snap_stwits)
+                            stwits_bullish_ratio=_snap_stwits,
+                            # 알림 항목 v3 (2026-09-27) — 소급 불가, 표시 스위치 무관 기록
+                            rvol_d20=(_snap_daily or {}).get("rvol_d20"),
+                            low30_pct=(_snap_daily or {}).get("low30_pct"),
+                            upbit_warning=(",".join(_snap_upbit_warn)
+                                           if _snap_upbit_warn is not None else None),
+                            post_move_pct=_snap_post_move,
+                            alt_breadth=_snap_alt_breadth,
+                            stwits_n=_snap_stwits_n)
                     except Exception as e:  # noqa: BLE001 - 기록 실패 격리
                         logger.warning("[체크] %s 터치 스냅샷 기록 실패(무시): %s",
                                        coin, e)

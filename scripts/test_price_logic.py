@@ -299,8 +299,9 @@ check("T4 출처 링크형(URL 비노출)", touch_msg.count("출처1") == 1 and 
       and 'href="https://tv.com' in touch_msg and "🔗 https://" not in touch_msg)
 # 2026-08-08 최종 결정: 화이트리스트 ⭐⭐ 표시 숨김(거추장스럽다 - 다른 지표로 판단)
 check("T4 적중률 표시", "적중률: 67%" in touch_msg and "⭐⭐" not in touch_msg)
-check("T4 시장심리 행", "비트 점유율: 56.6%" in touch_msg and "알트장: 32 (BTC 매수 고려)" in touch_msg
-      and "시장심리: 31 (공포)" in touch_msg)
+# 2026-09-27 v3: 알트장 표시 제외(스위치 기본 OFF), 비트 점유율 유지, 시장심리 판정 병기.
+check("T4 시장심리 행", "🌍 비트 점유율: 56.6%" in touch_msg and "알트장" not in touch_msg
+      and "시장심리: 31 · 매수 우호" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
 check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not in touch_msg
       and "워쳐 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg)
@@ -308,10 +309,12 @@ check("T4 표기수정 최종(워쳐식 타점+원화단독)", "타점" in touch
       and "진입:" in touch_msg and "목표:" in touch_msg and "$" not in touch_msg
       and "엔트리" not in touch_msg and "~" in touch_msg)
 # 2026-08-03 사용자 결정: 📐 SL 행 삭제. SL 은 판정 엔진 내부에서만 사용.
-check("T4 거래순위+4칸정렬+SL행 삭제", "    거래대금:  5위" in touch_msg
-      and "\n    현재:" in touch_msg and "\n    고가" in touch_msg
+# v3c: 가격 블록 들여쓰기 '  라벨: 값'(라벨 앞 2칸) — 현재·진입·목표·52주 하위 값 칼럼 정렬
+check("T4 거래순위+2칸정렬+SL행 삭제", "  거래대금: 5위" in touch_msg
+      and "\n  현재: " in touch_msg and "\n  고가: " in touch_msg
       and "📐 SL" not in touch_msg and "R:R 1:" not in touch_msg)
-check("T4 김프+52주", "김프" in touch_msg and "52주" in touch_msg
+# 2026-09-27 v3: 김프 +0.3%대는 |김프|<3% 라 줄 생략(조건부 표시).
+check("T4 김프(3% 미만 숨김)+52주", "김프" not in touch_msg and "52주" in touch_msg
       and "고가" in touch_msg and "52주 범위 중" in touch_msg and "위치" in touch_msg)
 
 # T5: 터치된 클러스터는 재알림 없음, 7.50 별개 레벨은 아직 활성
@@ -500,14 +503,15 @@ msg_cold = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KR
 msg_neutral = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                               funding_rate=0.001)
 check("T14O 수급 폴백: 롱과열→주의(추격 위험) / 숏과열→우호(반등 여지) / 그 외→중립",
-      "🧭 돈 흐름: 주의 (추격 위험)" in msg_hot
-      and "🧭 돈 흐름: 우호 (반등 여지)" in msg_cold
-      and "🧭 돈 흐름: 중립" in msg_neutral and "💰 펀딩" not in msg_neutral)
+      # 2026-09-27 v3c 형식: '🧭 돈 흐름: {근거} · {판정}', 넘치면 '🧭 돈 흐름: {판정}'
+      "🧭 돈 흐름: 추격 위험 · 주의" in msg_hot
+      and "🧭 돈 흐름: 매수 우호" in msg_cold
+      and "🧭 돈 흐름: 중립 · 관망" in msg_neutral and "💰 펀딩" not in msg_neutral)
 # T14O2: supply 명시 전달 시 그대로 렌더 + 원시 펀딩 수치는 미노출.
 msg_sup = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                           funding_rate=-0.05, supply=("우호", "반등 연료"))
 check("T14O2 수급 명시 전달 - 합성 판정 렌더·펀딩 수치 미노출",
-      "🧭 돈 흐름: 우호 (반등 연료)" in msg_sup and "-0.05" not in msg_sup)
+      "🧭 돈 흐름: 매수 우호" in msg_sup and "-0.05" not in msg_sup)
 
 # ── SV1~SV5: derive_supply_verdict 판정 매트릭스 (2026-08-07) ──────────────
 from monitor.binance import derive_supply_verdict as _sv
@@ -614,7 +618,7 @@ _msg_pos = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KR
                            week52=(200.0 * USDT_KRW, 50.0 * USDT_KRW),
                            position=("우호", "조정중·RSI38"))
 check("RPV4 렌더: 🌡️ 자리 줄이 52주 블록 뒤에 표시",
-      "🌡️ 자리: 우호 (조정중·RSI38)" in _msg_pos
+      "🌡️ 자리: 조정중 · 매수 우호" in _msg_pos
       and _msg_pos.find("현재") < _msg_pos.find("🌡️"))
 
 # ── VR1~VR3: 판정 로깅 + 자가검증 집계 (2026-08-07) ─────────────────────────
@@ -5115,6 +5119,44 @@ check("DEEP3 억제돼도 터치 기록·재채점 판정은 그대로 진행 (�
 check("DEEP4 무음 기록은 'touch' 가 아니다 — 일일 상한·재발송·TP 게이트 무손상",
       all(k != "touch" for k, _ in _d1_logs))
 
+# ── ITEMS-G1~G3: 업비트 투자유의 발송 차단 게이트 (2026-09-27 v3b) ─────────
+# market/all 회차 캐시(last_market_warnings) 재사용. 억제 관례는 DEEP 과 동일.
+_orig_lmw = upbit.last_market_warnings
+upbit.last_market_warnings = lambda: {"KRW-ARMC": ["WARNING"]}
+_g1_path = _arm_open("uwarn")
+_g1_id = _arm_seed(_g1_path, "uwarn", _ARM_T0 - 120, armed=1)
+_g1_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.99)
+_g1_row = _arm_row(_g1_path, _g1_id)
+_g1_logs = _arm_logs(_g1_path)
+with db.connect(_g1_path) as conn:
+    _g1_warn = conn.execute("SELECT touch_upbit_warning FROM levels WHERE id=?",
+                            (_g1_id,)).fetchone()[0]
+_arm_close(_g1_path)
+upbit.last_market_warnings = lambda: {"KRW-ARMC": ["TRADING_VOLUME_SOARING"]}
+_g2_path = _arm_open("ucaut")
+_g2_id = _arm_seed(_g2_path, "ucaut", _ARM_T0 - 120, armed=1)
+_g2_before = len(sent_messages)
+_g2_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.99)
+_g2_msg = sent_messages[-1] if len(sent_messages) > _g2_before else ""
+_g2_logs = _arm_logs(_g2_path)
+_arm_close(_g2_path)
+upbit.last_market_warnings = lambda: None      # 조회 실패
+_g3_path = _arm_open("ufail")
+_g3_id = _arm_seed(_g3_path, "ufail", _ARM_T0 - 120, armed=1)
+_g3_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.99)
+_g3_logs = _arm_logs(_g3_path)
+_arm_close(_g3_path)
+upbit.last_market_warnings = _orig_lmw
+check("ITEMS-G1 투자유의 → 발송 차단 + alerts_log 'touch_warning' sent=0 · 터치 기록·스냅샷은 그대로",
+      _g1_sent == 0 and _g1_logs == [("touch_warning", 0)]
+      and _g1_row["status"] == "touched" and _g1_row["touch_score"] is not None
+      and _g1_warn == "WARNING")
+check("ITEMS-G2 투자주의(거래량급등)는 차단 안 함 — 발송 + 헤더 끝 '⚠️…관심'",
+      _g2_sent == 1 and _g2_logs == [("touch", 1)]
+      and "관심" in _g2_msg.split(chr(10))[1])
+check("ITEMS-G3 경보 조회 실패(None) → fail-open 발송",
+      _g3_sent == 1 and _g3_logs == [("touch", 1)])
+
 # ── STALE1~3: 오염 표본 배제 조건이 분석 조회에 실제로 걸려 있는가 (③) ────
 # 소급 수정은 하지 않는다 — 조회에서만 뺀다. NULL 관통(억제 터치·백필 대기·
 # 구세대 행)이 SQL 3값 논리로 조용히 사라지지 않는 것까지 함께 못박는다.
@@ -5175,47 +5217,47 @@ _sui_kw = dict(sentiment={"btc_dominance": 58.3, "fear_greed": 70.0},
 _m_sui = _dtg.render_alert("touch", "SUI", [dict(_sui)], 1590.0, _D_USDT,
                            rep=None, **_sui_kw)
 _sui_lines = _m_sui.split("\n")
-_i_low = next(i for i, ln in enumerate(_sui_lines) if ln.startswith("    저가"))
+_i_low = next(i for i, ln in enumerate(_sui_lines) if ln.startswith("  저가: "))
 check("DSP1 SUI 884 재현 - 진입 행 병기(현재 -17.7%) + 헤더는 [진입가 터치] 그대로",
-      "    진입:  1,933원 (현재 -17.7%)" in _sui_lines and "[진입가 터치]" in _m_sui
+      "  진입: 1,933원 (현재 -17.7%)" in _sui_lines and "[진입가 터치]" in _m_sui
       and "이탈" not in _m_sui)
-check("DSP1b 목표 = 판정 TP1 · 대표 자기 진입 기준 · '진입+' 라벨 · (장기) 라벨만(억제 없음)",
-      "    목표:  3,607원 진입+86.6%" in _sui_lines
-      and any(ln.strip() == "1/2 (장기)" for ln in _sui_lines))
+# v3c: '(장기)' 꼬리 폐지 → TP1 ≥ +50% 면 '진입' 자리를 '장기'로, 1/N 과 한 줄(넘김 없음)
+check("DSP1b 목표 = 판정 TP1 · 대표 자기 진입 기준 · '장기+86.6%' 라벨 · 1/2 한 줄(억제 없음)",
+      "  목표: 3,607원 장기+86.6% 1/2" in _sui_lines
+      and "(장기)" not in _m_sui and "진입+86.6%" not in _m_sui)
 check("DSP1c 진행바는 52주 블록 안(구분선 없음) + '52주 범위 중 16% 위치'",
       _sui_lines[_i_low + 1].strip().startswith("🟩")
-      and "    └ 52주 범위 중 16% 위치" in _sui_lines and "지점" not in _m_sui)
+      and "  └ 52주 범위 중 16% 위치" in _sui_lines and "지점" not in _m_sui)
 check("DSP1d 워쳐 소표본(5건) 적중률 숨김 · 소셜 100%(n=7) 숨김 · 추세 아이콘 중립 · 😀",
       "20%" not in _m_sui and "적중률 소표본" in _m_sui and "소셜" not in _m_sui
-      and "〰️ 추세 강함 (ADX 38)" in _m_sui and "📈" not in _m_sui
-      and "😀 시장심리: 70.0" in _m_sui and "😨" not in _m_sui)
+      and "〰️ 추세: 강함 (ADX 38)" in _m_sui and "📈" not in _m_sui
+      and "😀 시장심리: 70.0 · 관망" in _m_sui and "😨" not in _m_sui)
 check("DSP1e 헤더 '글 14시간 전' · 거래대금 11위 · 과열·일RSI75 · 손절 행 없음",
-      "글 14시간 전" in _sui_lines[2] and "    거래대금:  11위" in _sui_lines
-      and "과열·일RSI75" in _m_sui and "손절" not in _m_sui)
+      "글 14시간 전" in _sui_lines[2] and "  거래대금: 11위" in _sui_lines
+      and "🌡️ 자리: 과열·일RSI75 · 주의" in _m_sui and "손절" not in _m_sui)
 check("DSP1f 모순 없는 렌더 - 가격행 외 전 행 32칼럼 이내(잘림 없음)",
       all(_dtg._line_width(ln) <= _dtg._MAX_LINE_COLS for ln in _sui_lines
           if ln != _dtg._SEP and not ln.startswith("🔗")))
 
-# FIX-F1 (2026-09-27 리뷰): 1천만원대 목표가(BTC)는 '원 진입+x%' head 자체가 32칼럼 초과 →
-# '진입+x%' 도 다음 줄로. 가격대별(10원대~1억원대) 목표 행 전부 32칼럼 이내.
+# FIX-F1 (2026-09-27 리뷰 → v3c 개정): 1억원대 목표가(BTC)는 한 줄 32칼럼 초과 →
+# v3c 는 다음 줄로 넘기지 않고 단계 축약(소수점 → '진입' 글자 → 1/N → % 꼬리).
 _btc = dict(_sui, id=990, coin_symbol="BTC", entry_usd=85000.0, tp_usd=95400.0,
             tps_usd="[95400.0, 99000.0]", tp_ladder_count=2)
 _m_btc = _dtg.render_alert("touch", "BTC", [dict(_btc)], 85000.0 * _D_USDT, _D_USDT)
 _btc_lines = _m_btc.split("\n")
-_tgt = [i for i, ln in enumerate(_btc_lines) if ln.startswith("    목표:")]
-check("FIX-F1 BTC 목표 행 32칼럼 이내 + '진입+x%'·1/N 은 다음 줄(값 칼럼 정렬)",
-      _tgt and _dtg._line_width(_btc_lines[_tgt[0]]) <= _dtg._MAX_LINE_COLS
-      and "진입+" not in _btc_lines[_tgt[0]]
-      and _btc_lines[_tgt[0] + 1].strip().startswith("진입+")
-      and "1/2" in _btc_lines[_tgt[0] + 1])
+_tgt = [i for i, ln in enumerate(_btc_lines) if ln.startswith("  목표: ")]
+check("FIX-F1 BTC 목표 행 한 줄 32칼럼 이내 — '129,839,400원 +12% 1/2'(소수점·'진입' 축약), 넘김 없음",
+      _tgt and _btc_lines[_tgt[0]] == "  목표: 129,839,400원 +12% 1/2"
+      and not any(ln.startswith(" " * 11) for ln in _btc_lines))
 _widths_ok = True
 for _e in (0.012, 0.9, 13.0, 250.0, 4200.0, 85000.0):
     _lv = dict(_sui, entry_usd=_e, tp_usd=_e * 1.3, tps_usd=f"[{_e * 1.3}, {_e * 1.6}]")
     _mm = _dtg.render_alert("touch", "SUI", [_lv], _e * _D_USDT, _D_USDT)
     for _ln in _mm.split("\n"):
-        if _ln.startswith("    목표:") or _ln.startswith(_dtg._VALUE_INDENT):
+        if _ln.startswith("  목표: "):
             _widths_ok &= _dtg._line_width(_ln) <= _dtg._MAX_LINE_COLS
-check("FIX-F1b 가격대 6단계(0.01~85,000 USD) 목표 행·꼬리표 줄 전부 32칼럼 이내", _widths_ok)
+        _widths_ok &= not _ln.startswith(_dtg._VALUE_INDENT)
+check("FIX-F1b 가격대 6단계(0.01~85,000 USD) 목표 행 32칼럼 이내 · 연속 줄 0", _widths_ok)
 
 # D1 경계: 1% 이내면 병기 없음
 _m_d1 = _dtg.render_alert("touch", "SUI", [dict(_sui)], 1.42 * _D_USDT * 0.995, _D_USDT)
@@ -5266,17 +5308,18 @@ check("DSP6 🏅 배지: 만료·수익만 있는 작성자(TP 적중 0) 무배�
 def _soc(r, n):
     return _dtg.render_alert("touch", "SUI", [dict(_sui)], 1933.0, _D_USDT,
                              stwits_bullish_ratio=r, stwits_n=n)
-check("DSP7 소셜: 100%·n=12 → '매수 12/12' / 87.5%·n=8 → '매수 7/8' / 0%·n=9 숨김",
-      "💬 소셜 매수 12/12 (매수 유리)" in _soc(1.0, 12)
-      and "💬 소셜 매수 7/8 (매수 유리)" in _soc(0.875, 8)
+# 2026-09-27 v3 재보정: '매수 유리' 폐지, 매수 비중 ≤0.65·표본 ≥10 일 때만 경고.
+check("DSP7 소셜 v3: 100%·n=12 숨김 / 87.5%·n=8 숨김 / 0%·n=9 숨김(표본<10) / 0%·n=10 경고",
+      "소셜" not in _soc(1.0, 12)
+      and "소셜" not in _soc(0.875, 8)
       and "소셜" not in _soc(0.0, 9)
-      and "💬 소셜 매도 10/10 (매수 부담)" in _soc(0.0, 10))
+      and "💬 소셜: 매도 우세 · 주의" in _soc(0.0, 10))
 
 # T7: 김프 표시 가드
 _m_k1 = _dtg.render_alert("touch", "BEAM", [dict(_sui)], 1933.0, _D_USDT, kimchi_pct=-97.43)
 _m_k2 = _dtg.render_alert("touch", "LSK", [dict(_sui)], 1933.0, _D_USDT, kimchi_pct=-11.4)
 check("DSP8 김프 |값|>15% 생략(BEAM -97%) · 정상 역프(-11.4%)는 표시",
-      "김프" not in _m_k1 and "❄️ 김프 -11.40%" in _m_k2
+      "김프" not in _m_k1 and "❄️ 김프: -11.40%" in _m_k2
       and _dbn.kimchi_display_ok(15.0) and not _dbn.kimchi_display_ok(-15.01))
 
 # D6: 52주 미만 이력

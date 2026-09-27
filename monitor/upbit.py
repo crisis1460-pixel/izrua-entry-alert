@@ -93,16 +93,105 @@ def fetch_change_rate(market: str, timeout: float) -> Optional[float]:
     return None
 
 
+# ── 업비트 시장경보 (2026-09-27 알림 항목 v3: ⚠️ 업비트 주의) ──────────────
+# /v1/market/all?isDetails=true 실측(2026-09-27) 응답 필드:
+#   market_event.warning  (bool)  — 투자유의 종목 지정
+#   market_event.caution  (dict)  — 투자주의 종목 사유별 bool 5종(아래 순서 고정)
+# 구 필드 market_warning("NONE"|"CAUTION")은 현재 응답에 없다(KRW 289마켓 전부
+# 부재) — 되살아날 경우를 대비해 "CAUTION" 이면 유의로 함께 인정한다.
+UPBIT_CAUTION_KEYS = (
+    "PRICE_FLUCTUATIONS",               # 가격 급등락
+    "TRADING_VOLUME_SOARING",           # 거래량 급등
+    "DEPOSIT_AMOUNT_SOARING",           # 입금량 급등
+    "GLOBAL_PRICE_DIFFERENCES",         # 글로벌 시세 차이
+    "CONCENTRATION_OF_SMALL_ACCOUNTS",  # 소수 계정 거래 집중
+)
+UPBIT_WARNING_CODE = "WARNING"          # 투자유의 지정
+
+# 직전 fetch_volume_ranks 호출이 함께 얻은 경보 목록 {market: [코드...]}.
+# None = 이번 조회 실패/미조회(= "경고 없음"과 구분). 호출부는 fetch_volume_ranks
+# 직후에 last_market_warnings() 로 읽는다 — 같은 1콜 응답의 부산물이라 추가 콜 0.
+_last_warnings: Optional[dict] = None
+
+
+def parse_market_warning(entry: dict) -> list:
+    """market/all(isDetails=true) 한 항목 → 경보 코드 목록(없으면 []).
+    순서: WARNING(유의) 먼저, 이어서 UPBIT_CAUTION_KEYS 순서의 참인 사유."""
+    codes = []
+    ev = (entry or {}).get("market_event") or {}
+    if ev.get("warning") is True or (entry or {}).get("market_warning") == "CAUTION":
+        codes.append(UPBIT_WARNING_CODE)
+    caution = ev.get("caution") or {}
+    for k in UPBIT_CAUTION_KEYS:
+        if caution.get(k) is True:
+            codes.append(k)
+    return codes
+
+
+# 알트 상승 비율(시장 폭, 2026-09-27 대표 확정) — 같은 배치 ticker 응답에서 BTC 를 뺀
+# KRW 종목 중 signed_change_rate > 0 비율(%). 추가 콜 0. None = 조회 실패/미조회.
+_last_alt_breadth: Optional[float] = None
+
+
+def alt_breadth(tickers: list) -> Optional[float]:
+    """배치 ticker 응답 → BTC 제외 KRW 종목 중 24h 등락률 > 0 비율(%). 표본 없으면 None."""
+    rates = []
+    for t in tickers or []:
+        m = t.get("market") or ""
+        if not m.startswith("KRW-") or m == "KRW-BTC":
+            continue
+        r = t.get("signed_change_rate")
+        if r is None:
+            continue
+        rates.append(float(r))
+    if not rates:
+        return None
+    return sum(1 for r in rates if r > 0) / len(rates) * 100.0
+
+
+def last_alt_breadth() -> Optional[float]:
+    """직전 fetch_volume_ranks 가 같은 응답에서 계산한 알트 상승 비율(%) 또는 None."""
+    return _last_alt_breadth
+
+
+def last_market_warnings() -> Optional[dict]:
+    """직전 fetch_volume_ranks 가 얻은 {market: [경보코드]} (경보 없는 마켓은 키 없음).
+    조회 실패·미조회면 None."""
+    return _last_warnings
+
+
 def fetch_volume_ranks(timeout: float) -> dict:
     """업비트 KRW 전 마켓의 24h 거래대금 순위. 반환 {market: rank(1부터)}. 실패 시 {}.
-    알림 발송 시점에만 호출(2콜: 마켓목록 + 배치 ticker) — 조회 시점 기준 순위."""
+    알림 발송 시점에만 호출(2콜: 마켓목록 + 배치 ticker) — 조회 시점 기준 순위.
+
+    2026-09-27: 마켓목록을 isDetails=true 로 받아 시장경보(유의·주의)를 같은 응답에서
+    얻는다(추가 콜 0). 결과는 last_market_warnings() 로 노출 — 반환 형태는 불변."""
+    global _last_warnings, _last_alt_breadth
+    _last_warnings = None
+    _last_alt_breadth = None
     try:
-        resp = requests.get(f"{_BASE}/market/all", params={"isDetails": "false"}, timeout=timeout)
+        resp = requests.get(f"{_BASE}/market/all", params={"isDetails": "true"}, timeout=timeout)
         resp.raise_for_status()
-        markets = [m["market"] for m in resp.json() if m["market"].startswith("KRW-")]
+        _all = resp.json()
+        markets = [m["market"] for m in _all if m["market"].startswith("KRW-")]
+        try:
+            _w = {}
+            for m in _all:
+                if m["market"].startswith("KRW-"):
+                    codes = parse_market_warning(m)
+                    if codes:
+                        _w[m["market"]] = codes
+            _last_warnings = _w
+        except Exception as e:  # noqa: BLE001 - 경보는 부가 정보, 순위는 계속
+            logger.warning("[upbit] 시장경보 파싱 실패(무시): %s", e)
         resp = requests.get(f"{_BASE}/ticker", params={"markets": ",".join(markets)}, timeout=timeout)
         resp.raise_for_status()
-        vols = [(t["market"], float(t.get("acc_trade_price_24h") or 0)) for t in resp.json()]
+        _tk = resp.json()
+        try:
+            _last_alt_breadth = alt_breadth(_tk)
+        except Exception as e:  # noqa: BLE001 - 부가 정보, 순위는 계속
+            logger.warning("[upbit] 알트 상승 비율 계산 실패(무시): %s", e)
+        vols = [(t["market"], float(t.get("acc_trade_price_24h") or 0)) for t in _tk]
         vols.sort(key=lambda x: x[1], reverse=True)
         return {market: i + 1 for i, (market, _) in enumerate(vols)}
     except Exception as e:  # noqa: BLE001
@@ -288,7 +377,9 @@ def _wilder_rsi(closes: list, period: int = RSI_PERIOD) -> Optional[float]:
 
 
 def _fetch_ohlc(market: str, unit: str, count: int, timeout: float) -> Optional[list]:
-    """캔들 (고가, 저가, 종가) 튜플 목록(과거→최신). unit: 'days'|'weeks'. 실패 시 None.
+    """캔들 (고가, 저가, 종가, 거래대금, 시작epoch) 튜플 목록(과거→최신).
+    unit: 'days'|'weeks'. 실패 시 None. 소비처는 인덱스로 접근할 것(언패킹 금지 —
+    2026-09-27 튜플 끝 확장).
 
     (2026-08-16 Tier2) 종전 _fetch_closes 의 요청·페이싱 경로를 그대로 흡수한
     분리다 — ATR 은 OHLC 가 필요한데, 같은 1콜 응답에 종가(RSI/MA용)와 고저가가
@@ -310,12 +401,18 @@ def _fetch_ohlc(market: str, unit: str, count: int, timeout: float) -> Optional[
         # 전체를 KeyError/TypeError 로 죽여 200개가 통째로 None — RSI/MA/ATR/레짐
         # 소비처 전부가 한 번에 실종됐다. 이제 필드 결손 캔들만 건너뛰고 나머지를
         # 살린다 — 소비처는 표본 부족 시 각자 None 으로 우아하게 강등(종전 설계).
+        # 튜플 확장 (2026-09-27 알림 항목 v3): (고, 저, 종, 거래대금KRW, 캔들시작 epoch)
+        # — **끝에만** 붙였다. 앞 3원소 인덱스(ATR·ADX·RSI·MA 소비처)는 불변.
+        # [3] candle_acc_trade_price 결측이면 None, [4] candle_date_time_utc 파싱 실패면 None.
         out = []
         for c in reversed(candles):
             h, l, tp = c.get("high_price"), c.get("low_price"), c.get("trade_price")
             if h is None or l is None or tp is None:
                 continue  # 결측 캔들 스킵 — 나머지는 유효
-            out.append((float(h), float(l), float(tp)))
+            _acc = c.get("candle_acc_trade_price")
+            out.append((float(h), float(l), float(tp),
+                        float(_acc) if _acc is not None else None,
+                        _candle_start_ts(c.get("candle_date_time_utc"))))
         if len(out) < 2:
             return None  # 쓸만한 캔들 2개 미만 — 지표 계산 무의미(종전 None 동작)
         return out
@@ -325,6 +422,126 @@ def _fetch_ohlc(market: str, unit: str, count: int, timeout: float) -> Optional[
         # 특히 컸던 지점.
         time.sleep(_CANDLE_PACE_SEC)
         logger.warning("[upbit] %s %s 캔들 조회 실패: %s", market, unit, e)
+        return None
+
+
+def _candle_start_ts(s) -> Optional[float]:
+    """업비트 candle_date_time_utc('2026-09-27T00:00:00') → epoch 초. 실패 시 None."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+# ── 일봉 기반 알림 항목 (2026-09-27 알림 항목 v3) ─────────────────────────
+# 백테스트(msgitems_R1_backtest)와 같은 정의: **터치 시점 이전에 완성된 일봉만**
+# 쓴다. 업비트 일봉은 UTC 00:00(=KST 09:00) 경계 — 캔들 시작+24h ≤ now 인 봉이
+# 완성봉이다. 진행 중인 오늘 봉은 제외(현재 시각이 아니라 인자 now_ts 로 판정 —
+# 테스트는 고정 픽스처로 경계 전·후·경계를 검증한다).
+# 이름 주의: 60분봉 기반 fetch_rvol_1h(최근 1h ÷ 20h)와 다른 지표다 — rvol_d20.
+_DAY_SEC = 86400
+RVOL_D20_LOOKBACK = 20
+LOW30_LOOKBACK = 30
+
+
+def completed_daily(ohlc, now_ts: float) -> list:
+    """일봉 목록 중 now_ts 시점에 **완성된** 봉만(과거→최신). 시작시각 없는 봉 제외."""
+    if not ohlc or now_ts is None:
+        return []
+    out = []
+    for c in ohlc:
+        if len(c) < 5 or c[4] is None:
+            continue
+        if c[4] + _DAY_SEC <= now_ts:
+            out.append(c)
+    return out
+
+
+def rvol_d20(ohlc, now_ts: float) -> Optional[float]:
+    """전일 완성봉 거래대금 ÷ 그 직전 20개 완성봉 평균 거래대금. 표본 부족·0 이면 None."""
+    done = completed_daily(ohlc, now_ts)
+    if len(done) < RVOL_D20_LOOKBACK + 1:
+        return None
+    last = done[-1][3]
+    prev = [c[3] for c in done[-(RVOL_D20_LOOKBACK + 1):-1]]
+    if last is None or any(v is None for v in prev):
+        return None
+    avg = sum(prev) / len(prev)
+    if avg <= 0:
+        return None
+    return last / avg
+
+
+def low30_pct(ohlc, now_ts: float, price: float) -> Optional[float]:
+    """현재가의 직전 30개 완성 일봉 최저가 대비 %. 표본 30 미만·가격 없음이면 None."""
+    if not price or price <= 0:
+        return None
+    done = completed_daily(ohlc, now_ts)
+    if len(done) < LOW30_LOOKBACK:
+        return None
+    low = min(c[1] for c in done[-LOW30_LOOKBACK:])
+    if low <= 0:
+        return None
+    return (price / low - 1.0) * 100.0
+
+
+def daily_items(ohlc, now_ts: float, price: float) -> dict:
+    """알림·스냅샷용 일봉 항목 일괄 계산. 실패는 값별 None (예외 없음)."""
+    try:
+        rv = rvol_d20(ohlc, now_ts)
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
+        rv = None
+    try:
+        lp = low30_pct(ohlc, now_ts, price)
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
+        lp = None
+    return {"rvol_d20": rv, "low30_pct": lp}
+
+
+# ── 글 이후 가격 이동 (2026-09-27 알림 항목 v3) ──────────────────────────
+# 게시 시각 가격 근사 = **게시 시각 직전에 끝난 4시간봉의 종가**(= 게시 시각이 속한
+# 4시간봉의 시가). fetch_position_data 가 이미 받는 4시간봉 100개(≈16.7일)를 재사용
+# 해 추가 API 호출 0. 오차는 최대 4시간 가격 변동(게시가 봉 후반일수록 큼).
+_H4_SEC = 4 * 3600
+
+
+def price_at_post(h4_ohlc, published_ts: float) -> Optional[float]:
+    """게시 시각 직전 완성 4시간봉 종가. 커버리지 밖·표본 없음이면 None."""
+    if not h4_ohlc or published_ts is None:
+        return None
+    base = None
+    for c in h4_ohlc:
+        if len(c) < 5 or c[4] is None:
+            continue
+        if c[4] + _H4_SEC <= published_ts:
+            base = c
+        else:
+            break
+    if base is None:
+        return None
+    # 캔들 공백(무거래)으로 한참 전 봉이 잡히면 근사가 무의미 — 1일 넘게 벌어지면 포기.
+    if published_ts - (base[4] + _H4_SEC) > 86400:
+        return None
+    return base[2]
+
+
+def post_move_pct(h4_ohlc, published_ts: float, now_ts: float, price: float,
+                  max_age_days: float = 7.0) -> Optional[float]:
+    """원글 게시 시각 가격 대비 현재가 %. 게시 max_age_days 초과·미래·조회 실패면 None."""
+    try:
+        if not price or price <= 0 or published_ts is None or now_ts is None:
+            return None
+        age = now_ts - published_ts
+        if age < 0 or age > max_age_days * 86400:
+            return None
+        base = price_at_post(h4_ohlc, published_ts)
+        if not base or base <= 0:
+            return None
+        return (price / base - 1.0) * 100.0
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
         return None
 
 
@@ -361,7 +578,7 @@ def atr20_pct(ohlc) -> Optional[float]:
     try:
         trs = []
         for i in range(1, len(ohlc)):
-            h, l, _c = ohlc[i]
+            h, l = ohlc[i][0], ohlc[i][1]
             pc = ohlc[i - 1][2]
             trs.append(max(h - l, abs(h - pc), abs(l - pc)))
         atr = sum(trs[:ATR_PERIOD]) / ATR_PERIOD
@@ -387,8 +604,8 @@ def adx14(ohlc) -> Optional[float]:
     try:
         plus_dm, minus_dm, trs = [], [], []
         for i in range(1, len(ohlc)):
-            h, l, _c = ohlc[i]
-            ph, pl, pc = ohlc[i - 1]
+            h, l = ohlc[i][0], ohlc[i][1]
+            ph, pl, pc = ohlc[i - 1][0], ohlc[i - 1][1], ohlc[i - 1][2]
             up = h - ph
             dn = pl - l
             plus_dm.append(up if (up > dn and up > 0) else 0.0)
@@ -477,8 +694,14 @@ def fetch_position_data(market: str, timeout: float) -> dict:
     w = _fetch_closes(market, "weeks", 200, timeout)
     # RSI(14) 최소 표본(15개) 확보용 여유(100개) — 업비트 4h(240분) 캔들 1콜 상한
     # 200 안에서 넉넉히, 일/주봉처럼 최대치를 쓸 필요는 없다(추세 아닌 순간 경고용).
-    h4 = _fetch_closes(market, "minutes/240", 100, timeout)
+    # 4시간봉은 OHLC 로 받아 '글 이후 가격 이동'(post_move_pct)이 재사용(2026-09-27, 콜 수 불변)
+    h4_ohlc = _fetch_ohlc(market, "minutes/240", 100, timeout)
+    h4 = [c[2] for c in h4_ohlc] if h4_ohlc else None
     return {
+        # 일봉 원본(2026-09-27 알림 항목 v3) — 거래량 배율·30일 저점(daily_items)이
+        # 같은 1콜 응답을 재사용한다(추가 콜 0).
+        "d_ohlc": d_ohlc,
+        "h4_ohlc": h4_ohlc,
         "rsi_d": _wilder_rsi(d) if d else None,
         "rsi_w": _wilder_rsi(w) if w else None,
         "rsi_4h": _wilder_rsi(h4) if h4 else None,

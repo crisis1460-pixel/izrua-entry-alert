@@ -201,7 +201,7 @@ _POL_WORDS = {
     # ETF 승인·거절·연기는 자금 흐름이 아니라 별도 결정 이벤트다(_ETF_DECISION, RV2-N4) —
     # 종전엔 approv 가 긍정 단어라 "SEC approves spot Solana ETF" 가 "ETF 순유입"이 됐다.
     "etf": (r"inflow|net-?flow|turn(?:ed|ing)? (?:back to )?(?:buying|positive)|buying",
-            r"outflow|net sold|selling|redemption"),
+            r"outflow|net sold|selling|(?<!in-kind )redemption"),
     "reg": (r"approv|opens? (?:the )?door|exemption|pass(?:es|ed)\b|green light|clears?\b|dismiss|roadmap|framework",
             r"fail|reject|odds (?:crash|drop|fall)|crash|lawsuit|sues?\b|sued|charges?\b|\bban\b|delay|crackdown"),
     "macro": (r"\bcuts?\b|lowers?\b|eas(?:e|es|ing)\b|cooling|ceasefire|de-?escalat",
@@ -233,14 +233,21 @@ _SPEC_RX = re.compile(
     r"warns?|warning|analysts?|price[sd]?\s+in|pricing\s+in|poised|mulls?|considers?|"
     r"weighs?|(?<!in )may(?!\s+\d))\b", re.I)
 _SPEC_EXEMPT_RX = re.compile(r"\b(?:as|than)\s+expected\b", re.I)
-_SEG_SEP_RX = re.compile(r"(?<=[?!.;:])\s+|\s+[—–|]\s+|\s+-\s+|\n")
+# 09-27 디버깅: "ETFs log $1B inflows, analysts say rally could extend" — 쉼표 뒤 논평
+# 주어(analysts/traders/experts …)에서도 끊어 사실 구절이 의견으로 강등되지 않게.
+_SEG_SEP_RX = re.compile(r"(?<=[?!.;:])\s+|\s+[—–|]\s+|\s+-\s+|\n"
+                         r"|,\s+(?=(?:analysts?|traders?|experts?|observers?|economists?)\b)",
+                         re.I)
 # 해킹 트리거가 걸려도 부인·루머·피싱·"피해 없음"이면 해킹 사실이 아니다(RV2-N11).
 _HACK_NEG_RX = re.compile(
     r"\bdenie[sd]\b|\bdeny(?:ing)?\b|\brumou?rs?\b|\bno funds\b|\bfunds? (?:are|were|remain) safe\b|"
     # "compromised" 는 넣지 않는다 — "Private keys were not compromised"(실측 Bitget $351.6M
     # 유출 기사)처럼 실제 해킹 기사의 경위 설명에 흔하다.
-    r"\bnot (?:been )?(?:hacked|affected|exploited|stolen)\b|\bphishing\b|\bscam\w*|"
-    r"\bfalse\b|\bfake\b|\bimpersonat\w*", re.I)
+    r"\bnot (?:been )?(?:hacked|affected|exploited|stolen)\b|\bphishing\b|"
+    # fake/false/scam 단독은 빼고 '가짜 해킹·오보' 구문만 — "drain … using fake token
+    # contract" 처럼 실제 해킹의 공격 수법 설명에 흔하다(09-27 디버깅).
+    r"\bfalse (?:alarm|reports?|claims?)\b|\bfake (?:hack|reports?|news|claims?)\b|"
+    r"\bimpersonat\w*", re.I)
 # ETF 승인·거절·연기(RV2-N4). 자금 흐름 단어가 함께 있으면 흐름 기사로 둔다.
 _ETF_FLOW_WORD_RX = re.compile(r"\binflows?\b|\boutflows?\b|\bnet-?flows?\b|\bflows?\b", re.I)
 _ETF_DECISION = [
@@ -908,8 +915,10 @@ def _fed_move(text: str) -> str:
             for m in rx.finditer(line):
                 if is_speculative(line, m.end() - 1):
                     continue
-                if best is None or m.start() < best[0]:
-                    best = (m.start(), mv)
+                # 순위는 결정 **동사** 위치(m.end()) — 세 패턴 모두 "Fed" 에서 시작해
+                # m.start() 로는 동률이 되어 목록 순서가 이기던 문제(09-27 디버깅).
+                if best is None or m.end() < best[0]:
+                    best = (m.end(), mv)
                 break
         if best:
             return best[1]

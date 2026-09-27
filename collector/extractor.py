@@ -59,7 +59,7 @@ _ENTRY_LABEL = re.compile(
     # 산문형으로 떨어졌다).
     r"((?<!re-)(?<!re\s)\bentry\b|\benter\b|\bbuy\b(?!-?\s*side)|long\s*entry|진입가?|진입|매수가?"
     r"|롱\s*진입|buy\s*zone|entry\s*zone)"
-    r"(?:\s*\([^)]*\))?\s*(?:limit\s*)?(?:price|zone|level|구간|가격)?\s*[:=]?\s*",
+    r"(?:\s*\((?![ \t]*\$?[0-9][0-9,]*(?:\.[0-9]+)?[ \t]*\))[^)]*\))?\s*(?:limit\s*)?(?:price|zone|level|구간|가격)?\s*[:=]?\s*",
     re.I,
 )
 _SL_LABEL = re.compile(
@@ -72,7 +72,7 @@ _SL_LABEL = re.compile(
     # (뒤에 콜론/=)일 때만 인정 — 산문 "invalidation of the setup" 은 제외.
     r"(stop\s*loss|stop|\bsl\b|손절가?|손절|스탑|스톱"
     r"|invalidation(?:\s*(?:level|point|price|zone))?(?=\s*(?:\([^)]*\))?\s*[:=]))"
-    r"(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
+    r"(?:\s*\((?![ \t]*\$?[0-9][0-9,]*(?:\.[0-9]+)?[ \t]*\))[^)]*\))?\s*[:=]?\s*", re.I,
 )
 # 복수형 "TARGETS:" 도 받는다 (2026-07-27). 예전엔 `target(?!s)` 로 복수형을 배제했는데,
 # "Take-Profit Targets:" 헤더가 매칭돼 그 뒤 "TP1: 5.298" 대신 라벨 번호를 가리키던
@@ -88,7 +88,7 @@ _TP_LABEL = re.compile(
     # \bprofit\s*level\b 추가 → "Profit level" 이 텍스트에 먼저 나오면 우선 채택.
     # (Take-Profit 케이스: "Profit" 뒤가 "Targets/zone/…" 이지 "level" 이 아니라 불일치 ✓)
     r"(take\s*profit|\bprofit\s*level\b|targets?|\btp\d?\b|목표가?|목표|타겟\s*\d?|익절가?)"
-    r"(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
+    r"(?:\s*\((?![ \t]*\$?[0-9][0-9,]*(?:\.[0-9]+)?[ \t]*\))[^)]*\))?\s*[:=]?\s*", re.I,
 )
 
 # 실전 버그(2026-07-23): "TP1: 5.298 / TP2: 5.420 / TP3: 5.560" 처럼 다중 목표가를
@@ -135,6 +135,8 @@ _SPACED_ORDINAL_LABEL = re.compile(
     r"\s+(?:[0-9]{1,2}|one|two|three|four|five|six)"
     r"(?=[ \t]*(?:[:=]"
     r"|\((?:TP|TGT|T|R|Target)[ \t]?[0-9]{1,2}\)"
+    # 09-27 디버깅: "Target 1 (2.40)" — 괄호 안이 가격뿐이면 뒤따름과 무관하게 서수.
+    r"|\([ \t]*\$?[0-9][0-9,]*(?:\.[0-9]+)?[ \t]*\)"
     r"|\([^)\n]{0,40}\)[ \t]*(?:[:=]|[:=]?[ \t]*\$?[0-9])"
     r"|(?:@|at\s)[ \t]*\$?[0-9]))", re.I
 )

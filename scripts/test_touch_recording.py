@@ -148,6 +148,9 @@ CANDLES = {
 }
 upbit.fetch_range_since = lambda m, mins, t: CANDLES.get(m)
 upbit.fetch_volume_ranks = lambda t: {}
+# 알림 항목 v3 (2026-09-27): 시장경보는 market/all 회차 캐시 부산물 — 억제 터치에도 기록.
+upbit.last_market_warnings = lambda: {"KRW-BBB": ["TRADING_VOLUME_SOARING"]}
+upbit.last_alt_breadth = lambda: 55.0
 binance.fetch_usdt_price = lambda s, t: None            # 김프 스냅 생략 경로
 market_sentiment.get_sentiment = lambda conn: {"fear_greed": 30, "btc_dominance": 50.0}
 token_events.fetch_upcoming_unlocks = lambda conn, t: None
@@ -194,6 +197,13 @@ check("V6S2 저장된 touch_score 는 **감점 반영값** — 캘리브레이�
       and a1["touch_score"] != int(round(_v6_s_no)))
 check("V6S3 터치 재채점 산식 버전 도장 v6", a1["touch_grade_ver"] == "v6")
 
+check("ITEMS-T1 억제 터치에도 업비트 경보 스냅샷 — 지정 코인은 코드, 비지정은 ''(경보 없음)",
+      b1["touch_upbit_warning"] == "TRADING_VOLUME_SOARING"
+      and a1["touch_upbit_warning"] == "" and a2["touch_upbit_warning"] == ""
+      and a1["touch_alt_breadth"] == 55.0 and b1["touch_alt_breadth"] == 55.0)
+check("ITEMS-T2 억제 터치는 일봉·4시간봉 미조회 → 거래량·30일 저점·글 이후 NULL (추가 콜 0)",
+      all(r["touch_rvol_d20"] is None and r["touch_low30_pct"] is None
+          and r["touch_post_move_pct"] is None for r in (a1, b1, c1)))
 check("R4 touch_tp_usd — 각 레벨 자신의 TP 동결 (대표 TP 아님)",
       a1["touch_tp_usd"] == 11.5 and a2["touch_tp_usd"] == 11.0
       and b1["touch_tp_usd"] == 23.0)

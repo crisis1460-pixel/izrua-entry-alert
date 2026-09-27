@@ -399,6 +399,24 @@ _OUTCOME_COLUMNS = {
     # StockTwits 소셜 심리 (2026-08-17) — bullish_ratio (0~1) 또는 NULL.
     # 태그된 표본 5건 미만·심볼 미존재 시 NULL(자연 스킵).
     "touch_stwits_bullish_ratio": "REAL",
+    # 알림 항목 v3 스냅샷 (2026-09-27) — 소급 불가 데이터라 표시 시작과 같은 배포에서
+    # 기록한다(10월 재측정용). 표시 스위치와 무관하게 항상 기록.
+    # touch_rvol_d20: 전일 완성 일봉 거래대금 ÷ 직전 20일 평균(60분봉 RVOL 과 별개).
+    # touch_low30_pct: 현재가의 직전 30 완성 일봉 최저가 대비 %.
+    #   (둘 다 발송 경로 fetch_position_data 일봉 공유 — 억제 터치는 NULL, touch_atr_pct 관례)
+    # touch_upbit_warning: 업비트 시장경보 코드 콤마 목록('WARNING,TRADING_VOLUME_SOARING'),
+    #   '' = 조회 성공·경보 없음, NULL = 조회 실패/미조회. market/all 회차 캐시라 억제 터치도 값.
+    # touch_post_move_pct: 대표 글 게시 시각 가격(직전 완성 4시간봉 종가 근사) 대비
+    #   현재가 %. 게시 7일 초과·조회 실패는 NULL. 발송 경로만(억제 터치 NULL).
+    # touch_stwits_n: StockTwits 태그 표본 수(bullish+bearish) — 소셜 경고 임계 재보정용.
+    "touch_rvol_d20": "REAL",
+    "touch_low30_pct": "REAL",
+    "touch_upbit_warning": "TEXT",
+    "touch_post_move_pct": "REAL",
+    # touch_alt_breadth: 업비트 BTC 제외 KRW 종목 중 24h 상승(signed_change_rate>0) 비율 %.
+    #   거래대금 순위와 같은 배치 ticker 응답(회차 캐시) — 억제 터치도 값.
+    "touch_alt_breadth": "REAL",
+    "touch_stwits_n": "INTEGER",
     # 글 발행→터치 경과 시간(h) 비정규화 = (터치시각-수집시각)/3600 +
     # 수집시점 글나이(post_age_minutes)/60. 신선도 창(168h→96-120h) 조이기
     # 근거 데이터(시들음 분석) — 레벨별 값(post_age_minutes 가 레벨마다 다름).
@@ -1097,8 +1115,17 @@ def record_touch_snapshot(conn, rows: list,
                           dex_volume_24h_usd: Optional[float] = None,
                           dex_buy_ratio: Optional[float] = None,
                           active_addr_pctile: Optional[float] = None,
-                          stwits_bullish_ratio: Optional[float] = None) -> None:
+                          stwits_bullish_ratio: Optional[float] = None,
+                          rvol_d20: Optional[float] = None,
+                          low30_pct: Optional[float] = None,
+                          upbit_warning: Optional[str] = None,
+                          post_move_pct: Optional[float] = None,
+                          alt_breadth: Optional[float] = None,
+                          stwits_n: Optional[int] = None) -> None:
     """터치 시점 스냅샷 일괄 기록 (2026-08-15 Tier1 + 08-16 Tier2) — **기록 전용**.
+
+    알림 항목 v3(2026-09-27): rvol_d20·low30_pct·upbit_warning('' = 경보 없음,
+    None = 미조회 → 기록 안 함)·post_move_pct·stwits_n — 클러스터 공통.
 
     rows: [(level_id, grade, score, tp_usd, post_age_hours,
             penetration_pct, closed_below), ...] — 각 레벨 **자신의** 터치 시점
@@ -1214,6 +1241,18 @@ def record_touch_snapshot(conn, rows: list,
             f"UPDATE levels SET touch_stwits_bullish_ratio=? "
             f"WHERE id IN ({ph}) AND touch_stwits_bullish_ratio IS NULL",
             (float(stwits_bullish_ratio), *ids))
+    # 알림 항목 v3 (2026-09-27) — 클러스터 공통, 최초 기록 우선.
+    for _col, _val, _cast in (("touch_rvol_d20", rvol_d20, float),
+                              ("touch_low30_pct", low30_pct, float),
+                              ("touch_upbit_warning", upbit_warning, str),
+                              ("touch_post_move_pct", post_move_pct, float),
+                              ("touch_alt_breadth", alt_breadth, float),
+                              ("touch_stwits_n", stwits_n, int)):
+        if _val is not None:
+            conn.execute(
+                f"UPDATE levels SET {_col}=? "
+                f"WHERE id IN ({ph}) AND {_col} IS NULL",
+                (_cast(_val), *ids))
 
 
 def get_regime_heatmap(conn, since_ts: Optional[float] = None) -> dict:

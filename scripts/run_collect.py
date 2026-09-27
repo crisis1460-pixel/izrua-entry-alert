@@ -360,9 +360,15 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         # 찍어, (A) 진입가 아래에서 수집된 뒤 그 사이 위로 올라가면 수집 직후 저가로
         # 즉시 터치되고 (B) 위에서 수집돼 실제로 닿은 뒤 다시 내려가 있으면 armed=0 으로
         # 잠겨 진짜 터치가 사라졌다(08-15 이후 복원: A 7건 · B 3건). 기준가는 sanity 와
-        # 같은 달러가(CoinGecko 우선, 업비트 폴백). 가격 미상이면 None → 가격체크 첫 판정.
-        _p_now = _sanity_price(coin)
+        # 업비트 환산가(아래). 가격 미상이면 None → 가격체크 첫 판정.
+        # 기준가는 가격체크와 같은 업비트 환산가. 없으면 CoinGecko 가로 하되 진입가
+        # ±3% 안이면 기준 차이로 뒤집힐 수 있어 None(가격체크 첫 판정)으로 둔다.
         _e = setup.get("entry")
+        _p_now = coin.get("upbit_usd")
+        if not _p_now:
+            _p_now = _sanity_price(coin)
+            if _p_now and _e and abs(_p_now - _e) / _e < 0.03:
+                _p_now = None
         if _p_now and _e and settings.get("watch_arming_enabled"):
             _up = (_p_now <= _e) if setup["direction"] == "short" else (_p_now >= _e)
             level["armed"] = 1 if _up else 0
@@ -514,6 +520,12 @@ def main() -> int:
             n_fallback = n_no_price = 0
             for u in universe:
                 upbit_p, cg_p = krw_prices.get(u["ticker"]), u.get("price_usd")
+                # 무장 판정용 업비트 달러 환산가 — 가격체크(업비트 KRW/usdt_krw)와 같은
+                # 기준으로 armed 를 찍기 위해(09-27 디버깅: CoinGecko 기준이면 김프·지연만큼
+                # 즉시터치(A)가 되살아난다).
+                _ub = _usd_price_fallback(upbit_p, usdt_krw)
+                if _ub:
+                    u["upbit_usd"] = _ub
                 if upbit_p and cg_p:
                     expected = cg_p * usdt_krw
                     if abs(upbit_p - expected) / expected > 0.40:

@@ -38,14 +38,43 @@ def _normalize_name(name: str) -> str:
     return re.sub(r"[\s\-_.]+", "", name.strip().lower())
 
 
-def _names_match(cg_name: str, stwits_title: str) -> bool:
+# 같은 프로젝트인데 표기만 다른 StockTwits title 별칭 (2026-09-27 알림 항목 v3).
+# 엄격 완전 일치 규칙 때문에 XRP(CG 'XRP' vs ST 'Ripple')가 **매 발송 폐기**됐다
+# (운영 DB: XRP 터치 18회 전부 소셜 NULL). 09-27 StockTwits 실측으로 소셜이 한 번도
+# 안 채워진 코인을 전수 대조해 **title 은 다르지만 external_id(=CoinGecko id)가
+# 일치하고 이름도 같은 프로젝트로 확인된 것만** 등록했다.
+# 등록하지 않은 것(= 계속 폐기, 다른 프로젝트 이름): GMT(ST 'Mercury Protocol'),
+# TRUMP('Trump For President'), ESP('Spain Coin'), VANA('Nirvana'), ZORA('Zoracles').
+# 키 = 업비트 심볼(대문자), 값 = 허용 StockTwits title 목록.
+TITLE_ALIASES = {
+    "XRP": ("Ripple",),
+    "HBAR": ("Hedera Hashgraph",),
+    "XLM": ("Stellar Lumens",),
+    "IOST": ("IOStoken",),
+    "OP": ("Optimism Coin",),
+    "ZRX": ("0x",),
+    "ATOM": ("Cosmos",),
+    "NEAR": ("Near",),
+    "POL": ("Polygon",),
+    "IMX": ("Immutable X",),
+}
+
+
+def _names_match(cg_name: str, stwits_title: str, symbol: Optional[str] = None) -> bool:
     """CoinGecko name 과 StockTwits symbol.title 이 같은 프로젝트를 지칭하는지.
-    정규화 후 완전 일치. Skycoin(별도 프로젝트) vs Sky(구 MKR) 심볼 충돌 방지."""
+    정규화 후 완전 일치. Skycoin(별도 프로젝트) vs Sky(구 MKR) 심볼 충돌 방지.
+    symbol 이 주어지면 TITLE_ALIASES 의 확인된 별칭 title 도 일치로 본다."""
     a = _normalize_name(cg_name)
     b = _normalize_name(stwits_title)
     if not a or not b:
         return False
-    return a == b
+    if a == b:
+        return True
+    if symbol:
+        for alias in TITLE_ALIASES.get(symbol.upper(), ()):
+            if _normalize_name(alias) == b:
+                return True
+    return False
 
 
 def fetch_sentiment_stats(coin_symbol: str, expected_name: Optional[str] = None,
@@ -63,10 +92,10 @@ def fetch_sentiment_stats(coin_symbol: str, expected_name: Optional[str] = None,
     비교해 다른 프로젝트(예: SKY.X = 'Skycoin')면 None 반환. None 전달 시
     검증 스킵(구 호출부 호환).
 
-    bullish_ratio 임계 관례 (금융 소셜 심리 표준):
-      ≥0.75 강한 매수 심리 (매수 유리 배지)
-      ≤0.30 강한 매도 심리 (매수 부담 배지)
-      나머지·표본 부족 → 배지 무표기."""
+    알림 표시(2026-09-27 v3 재보정): '매수 유리' 배지는 폐지 — 크립토 스트림은
+    평소 매수 비중이 높다(운영 DB 중앙값 90%). 평소보다 크게 낮을 때만
+    (settings.social_warn_max_ratio 이하) 경고 배지 — 표시부는 소스 중립
+    telegram.format_social({"bull_ratio", "n"}). 등급 산식(grading)은 별개."""
     sym = f"{coin_symbol.upper()}.X"
     try:
         r = requests.get(f"{_BASE}/{sym}.json",
@@ -81,7 +110,7 @@ def fetch_sentiment_stats(coin_symbol: str, expected_name: Optional[str] = None,
         # 방지. expected_name 이 None 이면 (구 호출부 호환) 검증 스킵.
         if expected_name:
             st_title = (payload.get("symbol") or {}).get("title") or ""
-            if not _names_match(expected_name, st_title):
+            if not _names_match(expected_name, st_title, symbol=coin_symbol):
                 logger.warning("[stocktwits] %s 심볼 충돌 (CG=%s vs ST=%s) → 폐기",
                                sym, expected_name, st_title)
                 return None
