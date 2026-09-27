@@ -175,7 +175,8 @@ _TYPES = [
     ("etf", r"\bETFs?\b", "ETF", 0, "단기", "H"),
     ("reg", r"\bSEC\b|\bCFTC\b|\bclarity act\b|\bact\b.{0,20}\bsenate|\bsenate\b|\bbill\b|\bregulat\w*|"
             r"\blawsuit\b|\bsu(?:e|es|ed|ing)\b|\bcourt\b|\bruling\b|\binjunction\b|\bexemption\b", "규제", 0, "중장기", "H"),
-    ("listing", r"\bdelist\w*|\blist(?:ing|ed|s)\b(?! of)", "상장", 1, "단기", "H"),
+    # 09-28 디버깅: "Upbit to list Sui (SUI)"·"Binance will list Plasma" — 원형 list 도 예정 상장.
+    ("listing", r"\bdelist\w*|\blist(?:ing|ed|s)\b(?! of)|\b(?:to|will)\s+list\b", "상장", 1, "단기", "H"),
     ("unlock", r"\bunlock(?:s|ed|ing)?\b(?!\s+premium)|\bvesting\b|\bcliff\b", "언락", -1, "단기", "H"),
     ("burn", r"\bburn(?:s|ed|ing)?\b|\bbuy-?backs?\b", "소각", 1, "중장기", "M"),
     ("whale", r"\bwhales?\b|\bsmart money\b|\bdeposit(?:s|ed)?\b[^\n]{0,60}\binto\b|"
@@ -202,18 +203,25 @@ _POL_WORDS = {
     # 종전엔 approv 가 긍정 단어라 "SEC approves spot Solana ETF" 가 "ETF 순유입"이 됐다.
     "etf": (r"inflow|net-?flow|turn(?:ed|ing)? (?:back to )?(?:buying|positive)|buying",
             r"outflow|net sold|selling|(?<!in-kind )redemption"),
-    "reg": (r"approv|opens? (?:the )?door|exemption|pass(?:es|ed)\b|green light|clears?\b|dismiss|roadmap|framework",
+    "reg": (r"approv|opens? (?:the )?door|exemption|pass(?:es|ed)\b|green light|clears?\b|dismiss|roadmap|framework|"
+            r"\bdrops?\b|\bdropped\b|withdr[ae]w\w*|\bends?\b|\bended\b|\bcloses?\b|\bclosed\b|in favou?r",
             r"fail|reject|odds (?:crash|drop|fall)|crash|lawsuit|sues?\b|sued|charges?\b|\bban\b|delay|crackdown"),
     "macro": (r"\bcuts?\b|lowers?\b|eas(?:e|es|ing)\b|cooling|ceasefire|de-?escalat",
               r"hikes?\b|raises?\b|risk-off|tensions?|escalat|war\b|tariff|rising yields|higher yields|inflation (?:concerns|fears)|oil"),
     "whale": (r"\bbought\b|\bbuy(?:s|ing)?\b|accumulat",
-              r"deposit(?:s|ed)?\b[^\n]{0,60}\binto\b[^\n]{0,20}(?:coinbase|binance|exchange|kraken|okx|bybit|prime)|\bsold\b|dump"),
+              r"deposit(?:s|ed)?\b[^\n]{0,60}\binto\b[^\n]{0,20}(?:coinbase|binance|exchange|kraken|okx|bybit|prime)|\bsold\b|\bsell(?:s|ing)\b|dump"),
     "flow": (r"inflow", r"outflow"),
     "inst": (r"buying|bought|adds?\b|adding|bets? on|betting|demand|adoption|raised|expands?|teams? up|partner",
              r"outflow|net sold|selling|volatility test|liquidation"),
-    "listing": (r"\blist(?:ing|ed|s)\b", r"delist"),
+    "listing": (r"\blist(?:ing|ed|s)\b|\b(?:to|will)\s+list\b", r"delist"),
 }
 _POL_RX = {k: (re.compile(p, re.I), re.compile(n, re.I)) for k, (p, n) in _POL_WORDS.items()}
+_STREAK_RX = re.compile(r"\b(?:\w+[- ])?(?:week|day|month)s?[- ](?:long )?(?:in|out)flow streak\b|"
+                        r"\b(?:in|out)flow streaks?\b", re.I)
+_REG_RESOLVE_RX = re.compile(r"\b(?:drops?|dropped|dismiss\w*|withdr[ae]w\w*|ends?|ended|closes?|closed)\b|"
+                             r"\bin favou?r\b", re.I)
+_RATE_WORD_RX = re.compile(r"\b(?:rate\s+)?(?:cuts?|hikes?|raises?|lowers?|eas(?:e|es|ing))\b", re.I)
+_REG_CASE_RX = re.compile(r"lawsuit|\bsues?\b|\bsued\b|\bcharges?\b", re.I)
 # 오래된 사건을 다루는 회고 기사("eighteen months after ...")는 신선한 이벤트가 아니다.
 _STALE_RX = re.compile(r"\b(?:months|years)\s+(?:after|ago|later)\b", re.I)
 _EXCHANGE_RX = re.compile(r"\b(?:binance|coinbase|kraken|bybit|bitget|okx|upbit|bithumb|"
@@ -247,6 +255,8 @@ _HACK_NEG_RX = re.compile(
     # fake/false/scam 단독은 빼고 '가짜 해킹·오보' 구문만 — "drain … using fake token
     # contract" 처럼 실제 해킹의 공격 수법 설명에 흔하다(09-27 디버깅).
     r"\bfalse (?:alarm|reports?|claims?)\b|\bfake (?:hack|reports?|news|claims?)\b|"
+    # 09-28 디버깅: "reports of a hack are false"·"hack claims are fake" 어순.
+    r"\b(?:claims?|reports?|rumou?rs?)\b[^.\n]{0,30}\b(?:are|were|is|was)\s+(?:false|fake|untrue|baseless)\b|"
     r"\bimpersonat\w*", re.I)
 # ETF 승인·거절·연기(RV2-N4). 자금 흐름 단어가 함께 있으면 흐름 기사로 둔다.
 _ETF_FLOW_WORD_RX = re.compile(r"\binflows?\b|\boutflows?\b|\bnet-?flows?\b|\bflows?\b", re.I)
@@ -470,7 +480,22 @@ def _polarity(key: str, base: int, text: str, amts: list) -> int:
     head = clean(text).split("\n")
     # 머리(제목+첫 두 문장)에 가중 — 기사 뒷부분의 반론·일반론이 방향을 뒤집지 않게.
     lead = " ".join(head[:3])
+    # 09-28 디버깅: "…$2B outflows, ending three-week inflow streak" — 끝난 연속 기록 표현은
+    # 이번 사실의 방향이 아니다(동률 → 유입 문장으로 뒤집히던 문제).
+    lead = _STREAK_RX.sub(" ", lead)
+    if key == "macro":
+        # 09-28 디버깅: 금리 방향은 **확정된 연준 결정**으로만 — "rate cut hopes fade"·"Fed rules
+        # out rate hikes" 가 cut/hike 단어 수로 🟢/🔴 가 되던 문제. 결정이 없으면 금리 단어는
+        # 세지 않고 나머지(긴장·유가·휴전 등)만 본다. 동결은 방향 없음(⚪).
+        mv = _fed_move(text)
+        if mv:
+            return {"인하": 1, "인상": -1}.get(mv, 0)
+        lead = _RATE_WORD_RX.sub(" ", lead)
     p, n = len(pos_rx.findall(lead)), len(neg_rx.findall(lead))
+    if key == "reg" and _REG_RESOLVE_RX.search(lead):
+        # 소송·제소 단어가 '취하·기각·승소' 동사와 함께면 악재 단어로 세지 않는다
+        # ("SEC drops lawsuit against Coinbase" 가 🔴 SEC 난항이던 문제, 09-28).
+        n -= len(_REG_CASE_RX.findall(lead))
     if key == "listing":
         return -1 if n else (1 if p else 0)
     if p == n:
@@ -895,11 +920,18 @@ def _bp(text: str) -> str:
     return f"{m.group(1)}bp" if m else ""
 
 
+# 09-28 디버깅: 주어 없는 "rate cut" 맨몸 매치를 뺐다 — "rate cut hopes fade"·"traders price out
+# rate cut" 가 "연준이 인하했습니다"가 됐다. 결정 동사는 연준 주어 뒤에서만 인정하고, 부정·기대
+# 문맥(_FED_NEG_BEFORE/_AFTER)이면 버린다. 동결에 leaves/keeps … unchanged/steady 추가.
 _FED_MOVE_RX = [
-    ("인상", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:hikes?|hiked|raises?|raised)\b|\brate hike", re.I)),
-    ("인하", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:cuts?|lowers?|lowered)\b|\brate cut", re.I)),
-    ("동결", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:holds?|held|pauses?|paused)\b", re.I)),
+    ("인상", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:hikes?|hiked|raises?|raised)\b", re.I)),
+    ("인하", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:cuts?|lowers?|lowered)\b", re.I)),
+    ("동결", re.compile(r"\bfed\b[^\n]{0,50}?\b(?:holds?|held|pauses?|paused)\b|"
+                      r"\bfed\b[^\n]{0,30}?\b(?:leaves?|left|keeps?|kept)\b[^\n]{0,30}?\b(?:unchanged|steady)\b", re.I)),
 ]
+_FED_NEG_BEFORE = re.compile(r"\b(?:no|not|never|rules?\s+out|ruled\s+out|push(?:es)?\s+back\s+on|"
+                             r"price[sd]?\s+out|pricing\s+out|against)\b[^.\n]{0,20}$", re.I)
+_FED_NEG_AFTER = re.compile(r"^\w*\s*(?:hopes?|bets?|odds|expectations?|fears?|talk|calls?|speculation)\b", re.I)
 
 
 def _fed_move(text: str) -> str:
@@ -914,6 +946,11 @@ def _fed_move(text: str) -> str:
         for mv, rx in _FED_MOVE_RX:
             for m in rx.finditer(line):
                 if is_speculative(line, m.end() - 1):
+                    continue
+                _pre = line[max(0, m.end() - 60):m.end()]
+                _verb = re.search(r"\w+$", _pre)
+                _pre = _pre[:_verb.start()] if _verb else _pre
+                if _FED_NEG_BEFORE.search(_pre) or _FED_NEG_AFTER.search(line[m.end():].lstrip()):
                     continue
                 # 순위는 결정 **동사** 위치(m.end()) — 세 패턴 모두 "Fed" 에서 시작해
                 # m.start() 로는 동률이 되어 목록 순서가 이기던 문제(09-27 디버깅).
@@ -1118,7 +1155,9 @@ def _fact_what(p: dict, text: str, sym: str) -> str:
         obj = what if qty else (f"{what}의 {asset}" if what else asset)
         return f"{josa(who, '이/가')} {josa(obj, '을/를')} {verb}."
     if k == "flow":
-        d = "유입" if pol >= 0 else "유출"
+        if pol == 0:  # 방향 미정이면 유입이라 단정하지 않는다(09-28 디버깅)
+            return f"{subj}의 {amt + ' 규모 ' if amt else ''}자금 흐름이 집계됐습니다."
+        d = "유입" if pol > 0 else "유출"
         return f"{subj}에 {amt + ' 규모의 ' if amt else ''}자금 {josa(d, '이/가')} 확인됐습니다."
     if k == "partner":
         who = _first_cap(r"\b(?:with|With)\s+([A-Z][\w]+(?:\s+[A-Z][\w]+)?)", text)
@@ -1184,7 +1223,9 @@ def _fact_why(p: dict, text: str) -> str:
             return "대형 지갑의 매도는 수급상 통상 단기 악재로 받아들여집니다."
         return "대규모 이동 자체는 방향이 정해지지 않은 사실이라 이후 거래소 입출금 흐름을 함께 봐야 합니다."
     if k == "flow":
-        return ("자금 유입은 수요 증가 신호로 통상 단기 호재로 받아들여집니다." if pol >= 0
+        if pol == 0:
+            return "유입과 유출이 함께 언급돼 방향은 세부 수치를 확인해야 합니다."
+        return ("자금 유입은 수요 증가 신호로 통상 단기 호재로 받아들여집니다." if pol > 0
                 else "자금 유출은 수요 감소 신호로 통상 단기 악재로 받아들여집니다.")
     if k == "partner":
         return "제휴는 즉각적인 가격 재료라기보다 중장기 펀더멘털 재료로 받아들여지는 편입니다."

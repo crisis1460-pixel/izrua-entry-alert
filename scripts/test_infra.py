@@ -2686,6 +2686,40 @@ check("DBG-5 범위 진입(고가 코인)도 '(현재 -x%)' 꼬리 유지·32칸
       _gap_line and "~" in _gap_line[0] and "(현재-20%)" in _gap_line[0]
       and tg._line_width(_gap_line[0]) <= 32)
 
+# ── 2026-09-28 디버깅 회귀 (DBG2-*) ──
+from notify import news_parse as _n2
+def _sl2(t):
+    return _n2.summary_line(_n2.parse(t), t)
+check("DBG2-1 금리 기대·부정 문맥은 연준 결정 아님(⚪ 매크로 변수)",
+      all("⚪" in _sl2(t) and "연준 금리" not in _sl2(t) for t in (
+          "Bitcoin slips as rate cut hopes fade", "Traders price out September rate cut",
+          "Fed signals no rate cut in September", "Fed rules out rate hikes")))
+check("DBG2-1b 확정 결정은 그대로(인하 🟢·인상 🔴·동결 ⚪)",
+      "🟢" in _sl2("Fed cuts rates by 25 bps") and "🔴" in _sl2("Fed raises rates by 50bps")
+      and "동결" in _sl2("Fed leaves rates unchanged, pushes back on cut bets"))
+check("DBG2-2 SEC 소송 취하·승소는 🟢, 제소는 🔴",
+      "🟢" in _sl2("SEC drops lawsuit against Coinbase")
+      and "🟢" in _sl2("Judge rules in favor of Coinbase in SEC lawsuit")
+      and "🔴" in _sl2("SEC sues Binance over unregistered securities"))
+check("DBG2-3 해킹 부인(어순 반전)은 해킹 사실 아님",
+      (_n2.classify_event("Kraken says reports of a hack are false") or {}).get("label") != "해킹"
+      and (_n2.classify_event("Binance says hack claims are fake") or {}).get("label") != "해킹")
+_p = _n2.parse("Crypto funds see $2B outflows, ending three-week inflow streak")
+check("DBG2-4 끝난 유입 연속 기록은 방향 아님 → 유출", "🔴" in _n2.summary_line(_p, "x"))
+check("DBG2-5 상장 예정(to/will list)도 상장 이벤트",
+      (_n2.classify_event("Upbit to list Sui (SUI)") or {}).get("label") == "상장"
+      and (_n2.classify_event("Binance will list Plasma (XPL)") or {}).get("label") == "상장")
+check("DBG2-6 _krw_fmt: NaN·inf 는 '–', 반올림 자릿수 올림(99.96→100, 9.999→10.0)",
+      tg._krw_fmt(float("nan")) == "–" and tg._krw_fmt(99.96) == "100"
+      and tg._krw_fmt(9.999) == "10.0" and tg._krw_fmt(0.99999) == "1.00")
+_txt2 = tg.render_alert("touch", "ABC", [
+    {"direction": "long", "entry_usd": 123.4 / 1360, "tp_usd": 140 / 1360, "score": 60,
+     "grade": "A", "author": "x", "collected_at": 0},
+    {"direction": "long", "entry_usd": 123.0 / 1360, "tp_usd": 140 / 1360, "score": 50,
+     "grade": "B", "author": "y", "collected_at": 0}], 124.0, 1360.0)
+_el = [l for l in _txt2.split("\n") if "진입:" in l]
+check("DBG2-7 범위가 같은 호가 문자열이면 '123~123원' 대신 단일 값", _el and "~" not in _el[0])
+
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")
 print(f"{'='*40}")

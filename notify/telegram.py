@@ -835,12 +835,19 @@ def _krw_fmt(v: float) -> str:
     업비트 /v1/orderbook/instruments 실측(09-28): 100원 이상 호가 1원+ → 정수, 그 아래는
     가격 자릿수보다 두 단계 아래가 호가 단위 — 10~100원 0.1 · 1~10원 0.01 · 0.1~1원 0.001 ·
     0.001~0.01원 0.00001(PEPE) · 0.0001~0.001원 0.000001(BTT)."""
-    if not v or v <= 0:
-        return f"{v or 0:,.0f}"
+    if v is None or not math.isfinite(v):
+        return "–"  # NaN·inf 한 값 때문에 알림 전체가 죽지 않게(09-28 디버깅)
+    if v <= 0:
+        return "0"
     if v >= 100:
         return f"{v:,.0f}"
     decimals = max(0, 2 - math.floor(math.log10(v)))
-    return f"{v:.{decimals}f}"
+    # 반올림이 다음 자릿수로 올라가면(99.96→100.0, 9.999→10.00) 올라간 값 기준으로 다시 정한다.
+    r = round(v, decimals)
+    if r >= 100:
+        return f"{r:,.0f}"
+    decimals = max(0, 2 - math.floor(math.log10(r)))
+    return f"{r:.{decimals}f}"
 
 
 def _krw_short_range(lo: float, hi: float) -> str:
@@ -975,9 +982,13 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         if _gap < -_ENTRY_GAP_SHOW_PCT:
             gap_tails = [f" (현재 {_gap:+.1f}%)", f" (현재 {_gap:+.0f}%)",
                          f" (현재{_gap:+.0f}%)", f" ({_gap:+.0f}%)"]
-    if lo is not None and hi is not None and hi > lo and _krw(lo):
+    # 09-28 디버깅: 두 값이 같은 호가 문자열로 뭉개지면('123~123원') 단일 값으로.
+    if (lo is not None and hi is not None and hi > lo and _krw(lo)
+            and _krw(lo) != _krw(hi)):
         lines.append(_fit_price(f"  진입: {_krw(lo)}~{_krw(hi)}원", gap_tails,
                                 fallback=f"  진입: {_krw_short_range(lo * usdt_krw, hi * usdt_krw)}원"))
+    elif lo is not None and hi is not None and hi > lo and _krw(lo):
+        lines.append(_fit_price(f"  진입: {_krw(hi)}원", gap_tails))
     elif entry_rep and _krw(entry_rep):
         lines.append(_fit_price(f"  진입: {_krw(entry_rep)}원", gap_tails))
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)

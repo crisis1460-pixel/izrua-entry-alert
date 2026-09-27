@@ -5218,18 +5218,7 @@
   "text": "XRP long\nIdea: long XRP.\n\nEntry:\n1. on breakout & test. SL below.  PT1 prior high, PT2 $2, PT3 as please\n\n2. Buy the dip if drop back to lower trend line. SL 5% below. PT1 upper trend line (whereever it will be). PT2 prior high. \n\n3. Aggressive trade enter anytime in the triangle. Stop 5% below lower trendline.  Same PTs.\n\nAssumption: \nCrypto bottoms already in\nWe are in early innings of the bull run\nBTC, ETH, SOL already broke their triangle.\n",
   "current_price": 1.0,
   "direction_hint": null,
-  "expected": {
-   "direction": "long",
-   "entry": 1.0,
-   "entry_low": 1.0,
-   "entry_high": 1.0,
-   "sl": null,
-   "tp": null,
-   "rr": null,
-   "tps_all": [],
-   "tp_ladder_count": 0,
-   "nonsetup": null
-  }
+  "expected": null
  },
  {
   "id": "p779",
@@ -8041,20 +8030,7 @@
   "text": "TRXUSDT — Accumulation Breakout Setup\nTRXUSDT — Accumulation Breakout Setup 📈\n\nTRXUSDT has been consolidating inside a well-defined multi-month accumulation range, while price continues to compress beneath descending resistance.\n\nThe key level is 0.3503.\n\nA clean breakout above 0.3503, followed by a successful retest, could open the way toward the 0.44–0.45 zone.\n\nTrade Plan:\n🟢 Entry: Breakout + Retest\n🛑 Invalidation: Below 0.3112\n🎯 Target: 0.44–0.45\n📊 Potential R:R: 1:3+, depending on execution\n\nI wouldn't chase the breakout. The professional approach is simple:\n\nBreakout → Retest → Confirmation → Expansion\n\nLet the market confirm before committing capital.\n\n#TRXUSDT #TRX #CryptoTrading #TradingView #PriceAction #Breakout #TechnicalAnalysis",
   "current_price": 0.3112,
   "direction_hint": null,
-  "expected": {
-   "direction": "long",
-   "entry": 0.3112,
-   "entry_low": 0.3112,
-   "entry_high": 0.3112,
-   "sl": null,
-   "tp": 0.45,
-   "rr": null,
-   "tps_all": [
-    0.45
-   ],
-   "tp_ladder_count": 0,
-   "nonsetup": null
-  }
+  "expected": null
  },
  {
   "id": "p886",
@@ -8270,18 +8246,7 @@
   "text": "AVAX Corrects After Sharp Rally — Eyeing Lower Support Before th\nAfter a sharp bullish move, AVAX has entered a correction phase and could retest lower support zones before continuing higher.\n\n 🔹 Timeframe: 1D \n\n 📍 Entry Zones: \n✔️ Step 1: 9.795\n✔️ Step 2: 8.179\n\n 🎯 Targets: \n➕ 11.77\n➕ 13.38\n➕ 16.88\n\n🚨 Invalidation: A confirmed close  below $7.014  would call this scenario into question.",
   "current_price": 2.0,
   "direction_hint": null,
-  "expected": {
-   "direction": "long",
-   "entry": 2.0,
-   "entry_low": 2.0,
-   "entry_high": 2.0,
-   "sl": null,
-   "tp": null,
-   "rr": null,
-   "tps_all": [],
-   "tp_ladder_count": 0,
-   "nonsetup": null
-  }
+  "expected": null
  },
  {
   "id": "p896",

@@ -364,11 +364,11 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
         # 기준가는 가격체크와 같은 업비트 환산가. 없으면 CoinGecko 가로 하되 진입가
         # ±3% 안이면 기준 차이로 뒤집힐 수 있어 None(가격체크 첫 판정)으로 둔다.
         _e = setup.get("entry")
-        _p_now = coin.get("upbit_usd")
-        if not _p_now:
-            _p_now = _sanity_price(coin)
-            if _p_now and _e and abs(_p_now - _e) / _e < 0.03:
-                _p_now = None
+        # 업비트가도 회차 시작에 한 번 받은 값이라 저장 시점(수집 ~10분 뒤)과 어긋난다 —
+        # 진입가 ±3% 안이면 둘 다 보류(09-28 디버깅: 수집 중 급락 시 즉시터치 재발 경로).
+        _p_now = coin.get("upbit_usd") or _sanity_price(coin)
+        if _p_now and _e and abs(_p_now - _e) / _e < 0.03:
+            _p_now = None
         if _p_now and _e and settings.get("watch_arming_enabled"):
             _up = (_p_now <= _e) if setup["direction"] == "short" else (_p_now >= _e)
             level["armed"] = 1 if _up else 0

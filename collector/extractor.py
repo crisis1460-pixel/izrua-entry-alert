@@ -105,6 +105,9 @@ _ORDINAL_LABEL = re.compile(r"\b(TP|SL|Target|Entry|타겟|목표)[0-9]{1,2}\b",
 # "T1: 84,800 / T2: 86,500"(793 BTC, 849) — 'T' 약칭 목표 라벨은 라벨로 인식되지 않아
 # 서수 1 이 창의 첫 숫자로 잡혔다. 콜론이 뒤따를 때만 "TP:" 로 정규화한다.
 _T_ORDINAL = re.compile(r"\bT[1-9]\b(?=\s*(?:\(|[:=]))")  # "T1 (Mirror …): 86,024"(851)
+# 09-28 디버깅: "PT1 prior high, PT2 $2"(778 XRP) — PT(price target) 서수 1 이 진입 창의 첫 숫자로
+# 잡혀 진입가 1.0 이 됐다. PT 는 목표 라벨로 정규화("PT2" → "TP").
+_PT_ORDINAL = re.compile(r"\bPT[0-9]{1,2}\b")
 
 # 2차 실전 버그(2026-07-23 저녁, ALGO/ARB 알림): "Target 1: 0.08977" 처럼 서수가
 # 공백으로 떨어져 있는 표기는 위 규칙이 못 잡아서, "Target"까지만 라벨로 매칭된 뒤
@@ -293,6 +296,10 @@ _BUY_STOP_CTX = 100
 # TP 로 잡혔다(과거 "Target 1:" 서수오인과 같은 계열, ALGO/ARB 실사고 재발 형태).
 # 줄 시작 외에 "라벨 뒤 공백/콜론/등호 직후"도 마커로 인정한다 — 문장 중간의
 # "(1) 참고" 류는 앞 문자가 저 셋에 없어(보통 알파벳·괄호) 여전히 회피된다.
+# 09-28 디버깅: "Step 1: 9.795 / Step 2: 8.179" 의 단계 번호, 줄 머리 "1. on breakout"(뒤가 가격이
+# 아닌 단어) 의 목록 번호가 진입가(2.0·1.0)로 읽혔다. 단계·목록 번호는 가격이 될 수 없다.
+_STEP_ORDINAL = re.compile(r"\b(?:step|phase|stage)\s*[0-9]{1,2}\b", re.I)
+_WORD_LIST_MARKER = re.compile(r"(?m)^[ \t]*[0-9]{1,2}[.)][ \t]+(?=[A-Za-z가-힣])")
 _LIST_MARKER = re.compile(r"(?:^|(?<=[\s:=]))[ \t]*\d{1,2}[).][ \t]+(?=[$\d])", re.M)
 
 # 타임프레임 파싱 (2026-07-23 적중창 결정 B: 작성자가 밝힌 지평으로 판정 창 결정)
@@ -386,7 +393,10 @@ def _clean(text: str) -> str:
     text = _TF_TOKEN.sub(" ", text)     # "H1"·"M15" (2026-09-27, 656)
     text = _TF_NUM_UNIT.sub(" ", text)  # "4H"·"15m"·"30 Days" (2026-09-27, 575·879·831)
     text = _LIST_MARKER.sub("", text)   # "1) 1.1129" → 마커만 제거, 가격은 보존
+    text = _STEP_ORDINAL.sub(" ", text)  # "Step 2: 8.179" → 단계 번호 제거(09-28, 895 AVAX)
+    text = _WORD_LIST_MARKER.sub("", text)  # 줄 머리 "1. on breakout" → 번호 제거(09-28, 778 XRP)
     text = _T_ORDINAL.sub("TP", text)   # "T1:" → "TP:" (2026-09-27)
+    text = _PT_ORDINAL.sub("TP", text)  # "PT2 $2" → "TP $2" (2026-09-28)
     text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
     text = _SPACED_ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "Target 1:" → "Target:"
     # 서수 제거 **뒤에** 돈다 — "Target 1:1.5" 가 먼저 "Target:1.5" 가 되어야
@@ -520,6 +530,12 @@ def _grab_after_ex(label_pat, text: str, stop_pat=None, allow_to_range: bool = F
             # 산문형은 라벨과 숫자 사이 25자 이하만 인정 — 먼 숫자는 다른 뜻이다
             # (575 "Enter … Over The Next 30 Days", 669 "open buy positions. Target $13.7").
             continue
+        if sng and is_spec and stop_pat is not None:
+            # 09-28 디버깅(778 XRP "Entry:\non breakout & test. SL below. PT2 $2"): 스펙형 창도
+            # 첫 숫자보다 **앞에** 다른 라벨이 있으면 그 숫자는 다른 라벨의 값이다.
+            _sp = stop_pat.search(window, 0, sng.start(1))
+            if _sp:
+                continue
         lad = None
         if sng:
             # start(1) = 숫자 첫 자리 위치. start(0) 은 _NUM 앞의 `\$?\s*` 때문에
