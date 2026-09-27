@@ -501,13 +501,18 @@ _rep = dict(coin_symbol="LINK", entry_usd=8.3, sl_usd=7.8, tp_usd=9.5, rr=2.4,
             mcap_rank=19, mcap_tier_icon="🥇", post_url="https://t.me/x/1",
             post_age_minutes=60, collected_at=_time.time(), source="telegram")
 _USDT = 1400.0
-_m13 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=13)],
+# 2026-09-27 S2 D4: 단계 수 N 은 판정용 유효 TP 목록(tps_usd∪tp_usd) 길이라
+# 사다리를 tps_usd 로 준다. 목표 행이 32칼럼을 넘으면 꼬리표는 값 칼럼 정렬 다음 줄.
+_tps13 = "[" + ", ".join(f"{8.4 + 0.1 * i:.1f}" for i in range(12)) + ", 9.6]"
+_tps8 = "[8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.5]"
+_m13 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=13, tps_usd=_tps13)],
                         8.35 * _USDT, _USDT)
-_m8 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=8)],
+_m8 = _tg.render_alert("touch", "LINK", [dict(_rep, tp_ladder_count=8, tps_usd=_tps8)],
                        8.35 * _USDT, _USDT)
+_m8_strip = _m8.replace("\n" + _tg._VALUE_INDENT + "1/8", "").replace(" 1/8", "")
 for _desc, _passed in [
         ("렌더 13단(>12)은 꼬리표 생략 — 종전 양식과 동일", "1/13" not in _m13
-         and _m13 == _m8.replace("  1/8", "")),
+         and _m13 == _m8_strip),
         ("렌더 8단(≤12)은 종전대로 '1/8' 병기", "1/8" in _m8)]:
     print(("✅" if _passed else "❌"), _desc)
     if _passed:

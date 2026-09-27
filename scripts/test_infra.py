@@ -272,21 +272,22 @@ from monitor.binance import derive_supply_verdict
 v = derive_supply_verdict(0.005, 5.0, 2.0)
 check("수급보정: 기본(자금 유입=우호)", v == ("우호", "자금 유입"))
 
-# 우호 + CVD 매도 우위 → 중립 강등 (reason 유지)
+# 우호 + CVD 매도 우위 → 중립 강등. 2026-09-27 S2 D8: 근거도 보정 사유로 교체
+# (종전 "중립 (자금 유입)" 은 라벨-근거 역전 — 감사 D 38/150)
 v = derive_supply_verdict(0.005, 5.0, 2.0, cvd_ratio=-0.2)
-check("수급보정: 우호+CVD매도 → 중립", v == ("중립", "자금 유입"))
+check("수급보정: 우호+CVD매도 → 중립(매도 우위)", v == ("중립", "매도 우위"))
 
 # 우호 + 매도벽 → 중립 강등
 v = derive_supply_verdict(0.005, 5.0, 2.0, bid_ask_ratio=0.5)
-check("수급보정: 우호+매도벽 → 중립", v == ("중립", "자금 유입"))
+check("수급보정: 우호+매도벽 → 중립(매도벽)", v == ("중립", "매도벽"))
 
 # 중립 + 경고 2개 → 주의 강등
 v = derive_supply_verdict(0.005, 5.0, -2.0, cvd_ratio=-0.2, bid_ask_ratio=0.5)
-check("수급보정: 중립+경고2 → 주의", v[0] == "주의")
+check("수급보정: 중립+경고2 → 주의(첫 경고 사유)", v == ("주의", "매도 우위"))
 
 # 중립 + 확인 2개 → 우호 상향 (둘 다 필요)
 v = derive_supply_verdict(0.005, None, None, cvd_ratio=0.2, bid_ask_ratio=2.0)
-check("수급보정: 중립+확인2 → 우호", v[0] == "우호")
+check("수급보정: 중립+확인2 → 우호(첫 확인 사유)", v == ("우호", "매수 우위"))
 
 # 중립 + 확인 1개만 → 상향 없음 (보수 원칙)
 v = derive_supply_verdict(0.005, None, None, cvd_ratio=0.2)

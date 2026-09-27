@@ -67,7 +67,7 @@ msg_empty = telegram.render_weekly_report({}, now=now, **RK)
 check("W1 빈 DB 우아한 표시", "아직 표본 부족" in msg_empty)
 check("W1 헤더 유지 + 주차(KST) 행 + 각주",
       "📈" in msg_empty and "주간 성적 리포트" in msg_empty
-      and "(KST, 7일)" in msg_empty and "터치 후 7일" in msg_empty)
+      and "(KST, 7일)" in msg_empty and "판정창 7~30일(레벨별)" in msg_empty)  # S2 W2
 
 # W2: 종합 시나리오
 # GoodAuthor: R=[1]*5 (전부 hit) → E_LB +1.00, 게이트 통과, 정신호
@@ -176,6 +176,25 @@ with db.connect(TEST_DB) as conn:
     check("I2d count_resolved_touches_since (touched_at>=since AND outcome NOT NULL)",
           db.count_resolved_touches_since(conn, now - DAY) == 5
           and db.count_resolved_touches_since(conn, now + DAY) == 0)
+    # S2 W1: 발송 터치 레벨 id (sent=1·kind=touch 만 — preview·sent=0 제외)
+    check("DSPI1 get_sent_touch_level_ids = {1} (sent=0 터치·preview 제외)",
+          db.get_sent_touch_level_ids(conn) == {1})
+    # S2 W4: 캘리브레이션 표본 수집 범위 (grade·grade_ver 있는 종결 행)
+    conn.execute("UPDATE levels SET grade='B', grade_ver='v6' "
+                 "WHERE signal_key IN ('g0','g1')")
+    _span = db.get_calibration_span(conn, "v6")
+    check("DSPI2 get_calibration_span(v6) = 수집 시각 (min, max) · 표본 없으면 None",
+          _span == (now - 86400, now - 86400) and db.get_calibration_span(conn, "v9") is None)
+    # S2 W1: build_report 헤더에 알림분 병기(실 조립 경로, 읽기 전용)
+    import importlib.util as _ilu  # noqa: E402
+    _spec = _ilu.spec_from_file_location(
+        "_rwr_s2", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "run_weekly_report.py"))
+    _rwr = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_rwr)
+    _txt_rw, _meta_rw = _rwr.build_report(now=now, conn=conn)
+    check("DSPI3 build_report 헤더 '종결 1건(알림분 1)' + 캘리브레이션 표본 기간 명시",
+          "종결 1건(알림분 1)" in _txt_rw and "등급=수집 시점" in _txt_rw)
 os.remove(TEST_DB)
 
 # ── V: v2 본문 — ② 이번 주 한눈에 (지난주 대비 화살표) ─────────────────
@@ -323,6 +342,22 @@ check("C4 소표본 등급 ⚠️ 표기 (S·A 2건)", msg_c.count("⚠️n&lt;5
 check("C5 단조성 위반은 1줄 요약", "단조성 위반 1건" in msg_c
       and "D 100% &gt; C 42%, CI 겹침" in msg_c and "표기 전용" in msg_c)
 check("C6 HTML 안전 — 날 '<'/'>' 없음", "n<5" not in msg_c and "% > " not in msg_c)
+# ── DSPW: 2026-09-27 S2 표시 정합 (감사 D W1·W2·W4) ─────────────────
+_cur_w1 = dict(CUR, closed_alerted=9)
+_msg_w1 = telegram.render_weekly_report(rows_by_author, now=now, current=_cur_w1,
+                                        previous=PRV, **RK)
+check("DSPW1 헤더 '종결 N건(알림분 M)' 병기 — 미주입이면 종전 표기",
+      "📦 표본: 알림 10건 · 종결 12건(알림분 9)" in _msg_w1
+      and "📦 표본: 알림 10건 · 종결 12건\n" in msg_v)
+check("DSPW2 각주 '판정창 7~30일(레벨별)' — '터치 후 7일' 문구 제거",
+      "ℹ️ 결과 확인 기준: 판정창 7~30일(레벨별)" in _msg_w1 and "터치 후 7일" not in _msg_w1)
+_msg_w4 = telegram.render_weekly_report(rows_by_author, now=now, calibration_result=CAL,
+                                        calibration_ver="v6",
+                                        calibration_span=(now - 20 * DAY, now - DAY), **RK)
+check("DSPW4 캘리브레이션 표본 기간·등급 기준 명시(span 없으면 '전체 기간')",
+      "  (표본: v6 " in _msg_w4 and "수집분 · 등급=수집 시점)" in _msg_w4
+      and "  (표본: v6 전체 기간 · 등급=수집 시점)" in msg_c)
+
 check("C7 구 산식 병기 제거(legacy 주입해도 출력 없음)",
       "구 산식" not in telegram.render_weekly_report(
           rows_by_author, now=now, calibration_result=CAL,

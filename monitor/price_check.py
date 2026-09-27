@@ -1138,7 +1138,21 @@ def run_once(now: float | None = None) -> dict:
                 for _lv in cluster:
                     _lv["touch_volume_rank"] = _vr_now
 
-                rep = _rep(cluster, current_usd)  # 재채점 기준 대표 선정
+                # 대표 후보 = 자기 진입가에 **도달한** 멤버 (2026-09-27 S2 T9/D3).
+                # 터치는 클러스터 상단(cluster[0]) 기준이라 하단 멤버는 아직 자기
+                # 진입가에 안 닿았을 수 있다(섀도). 그 멤버가 대표가 되면 알림의
+                # 작성자·등급·목표가 '아직 체결 안 된 셋업'의 것이 된다(다중 발송
+                # 10건 중 8). 도달 판정은 아래 touches 루프와 같은 식(_eff_low ≤
+                # 자기 진입 KRW). 터치면 cluster[0] 은 항상 도달이라 후보가 빌 일은
+                # 없지만 방어적으로 전 멤버 폴백. 예고는 도달 개념이 없어 종전대로.
+                # 롤백: settings.alert_rep_reached_only=False.
+                _rep_pool = cluster
+                if touched and cfg_get("alert_rep_reached_only"):
+                    _reached = [l for l in cluster if l.get("entry_usd")
+                                and _eff_low(l) <= l["entry_usd"] * usdt_krw]
+                    if _reached:
+                        _rep_pool = _reached
+                rep = _rep(_rep_pool, current_usd)  # 재채점 기준 대표 선정
                 ids = [l["id"] for l in cluster]
                 kind = "touch" if touched else "preview"
 
@@ -1223,15 +1237,21 @@ def run_once(now: float | None = None) -> dict:
                         def _heir_ok(l):
                             if not meets_min_grade(l.get("grade") or "D", min_grade):
                                 return False
+                            # 2026-09-27 S2 T10: _b_swing_pass 는 무TP 를 '통과'로
+                            # 보므로 무TP 형제가 초단타 대표를 승계해 발송됐다
+                            # (aid 522 ETH). 승계자는 유효 TP 가 있어야 한다.
+                            if not _has_effective_tp(l):
+                                return False
                             if not _b_swing_pass(l):
                                 return False
                             _h_tf = l.get("timeframe_hours")
                             if _min_tf and _h_tf is not None and _h_tf > 0 and _h_tf < _min_tf - 1e-9:
                                 return False
                             return True
+                        # 승계 후보도 대표 후보와 같은 풀(자기 진입가 도달 멤버, T9).
                         heir = next(
                             (l for l in sorted(
-                                (l for l in cluster if l is not rep),
+                                (l for l in _rep_pool if l is not rep),
                                 key=lambda l: -(l.get("score") or 0))
                              if _heir_ok(l)),
                             None)
@@ -1373,6 +1393,7 @@ def run_once(now: float | None = None) -> dict:
                 _snap_stwits = None       # StockTwits bullish_ratio (2026-08-17) — 태그 표본
                                           # 5건 미만·심볼 미존재 시 None (자연 스킵). 무등록
                                           # 200 req/hr, 발송당 1콜.
+                _snap_stwits_n = None     # 위 태그 표본 수 — 알림 배지 표기 전용(S2 D10)
                 _snap_addr_pct = None     # Coin Metrics 활성주소 30d 백분위 (2026-08-17) —
                                           # 무료 티어 커버 자산(BTC/ETH/XRP 등 18종)만 값,
                                           # 미커버는 None (자연 스킵). 24h DB 캐시로 알림당
@@ -1392,6 +1413,8 @@ def run_once(now: float | None = None) -> dict:
                         for lv in cluster:
                             st = db.get_author_self_stats(conn, lv.get("author"))
                             lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
+                            # 🏅 배지 원천 (2026-09-27 S2 D12): 실제 TP 적중(hit) 건수
+                            lv["author_self_tp_hits"] = st.get("tp_hits", 0)
                             lv["author_touched_n"] = st["touched"]
                             lv["author_untouched_expired"] = st["untouched_expired"]
                             # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →
@@ -1608,12 +1631,23 @@ def run_once(now: float | None = None) -> dict:
                                 timeout=cfg_get("http_timeout_sec"))
                             if _st:
                                 _snap_stwits = _st.get("bullish_ratio")
+                                # 표시 전용 표본 수 (2026-09-27 S2 D10)
+                                _snap_stwits_n = ((_st.get("bullish") or 0)
+                                                  + (_st.get("bearish") or 0)) or None
                         except Exception as e:  # noqa: BLE001
                             logger.warning("[체크] %s StockTwits 조회 실패(무시): %s",
                                            coin, e)
                     # F3 (2026-08-17): rep 표시 등급을 ADX/BB/DEX 반영해 재조정.
                     # 필터는 이미 위에서 통과했으므로 표시 등급만 갱신 — 관찰 기간
                     # 알림 발송 여부는 종전과 동일(필터 안정성 유지, 사용자 결정).
+                    # 표시 등급 = 필터 등급 (2026-09-27 S2 D15): 발송 필터는 F3 **이전**
+                    # 등급으로 통과 판정했는데 알림에는 F3 **이후** 등급이 찍혀 하한(C)
+                    # 보다 낮은 D 가 표시된 적이 있다(604 BTC). F3 재조정 값은 rep["grade"]
+                    # 에 그대로 남긴다 — 터치 스냅샷(touch_grade)·무음 판정의 종전 의미를
+                    # 바꾸지 않기 위함. 렌더러는 display_grade 를 우선 쓴다.
+                    # 롤백: settings.alert_display_filter_grade=False.
+                    if cfg_get("alert_display_filter_grade"):
+                        rep["display_grade"] = rep.get("grade")
                     _dex_bratio = (_snap_dex or {}).get("buy_ratio_24h")
                     _dex_liq = (_snap_dex or {}).get("liquidity_usd")
                     if (_snap_adx is not None or _snap_bbw_pctile is not None
@@ -1647,6 +1681,7 @@ def run_once(now: float | None = None) -> dict:
                                                  dex_stats=_snap_dex,
                                                  active_addr_pctile=_snap_addr_pct,
                                                  stwits_bullish_ratio=_snap_stwits,
+                                                 stwits_n=_snap_stwits_n,
                                                  watcher_coin_sl=_watcher_coin_sl().get(coin))
                     # 무음/유음 분리 (2026-07-27 사장님 승인, 기획 카드 #6).
                     # 터치 본알림만 소리를 낸다 — 그게 "지금 매수를 판단하라"는 유일한

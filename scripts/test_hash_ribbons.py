@@ -139,11 +139,12 @@ check("캐시: 신규조회 실패 → None (캐시 미저장)",
 v = derive_supply_verdict(0.005, 5.0, 2.0)
 check("수급연동: 기본(자금 유입=우호)", v == ("우호", "자금 유입"))
 
-# 우호 + capitulation(warn 1) → 중립 강등, reason 유지
+# 우호 + capitulation(warn 1) → 중립 강등. 2026-09-27 감사 D8: 근거도 보정 사유로 교체
+# (종전 "reason 유지"는 '중립 (자금 유입)'처럼 판정과 근거가 어긋나는 표시 모순이었다)
 v = derive_supply_verdict(0.005, 5.0, 2.0,
                           hash_ribbons={"state": "capitulation",
                                         "sma30_over_sma60": 0.95})
-check("수급연동: 우호+항복 → 중립", v == ("중립", "자금 유입"))
+check("수급연동: 우호+항복 → 중립, 근거=보정 사유", v == ("중립", "채굴자 항복"))
 
 # normal 은 보정 없음
 v = derive_supply_verdict(0.005, 5.0, 2.0,

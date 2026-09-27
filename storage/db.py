@@ -1532,6 +1532,28 @@ def count_touch_alerts_between(conn, start_ts: float, end_ts: float) -> int:
     return int(row["n"] or 0) if row else 0
 
 
+def get_sent_touch_level_ids(conn) -> set:
+    """실제 발송된 터치 알림(kind='touch' AND sent=1)에 실린 레벨 id 집합.
+
+    2026-09-27 S2 (감사 W1): 주간 리포트 '종결 N건' 은 터치 전체(억제 터치 포함)가
+    모집단이라 '알림 성적'으로 읽혔다. 종결 행 중 알림이 실제로 나간 것을 가려
+    '종결 N건(알림분 M)' 으로 병기하는 데 쓴다. 클러스터 알림은 level_ids 에 멤버
+    전부가 실리므로 섀도 멤버도 포함된다 — 다만 섀도는 touched_at NULL 이라 종결
+    표본(get_resolved_rows_between)에 애초에 없다. sent 컬럼 부재(구세대)면 전 행."""
+    q = "SELECT level_ids FROM alerts_log WHERE kind='touch'"
+    try:
+        rows = conn.execute(q + " AND sent = 1").fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(q).fetchall()
+    out = set()
+    for r in rows:
+        for tok in str(r["level_ids"] or "").split(","):
+            tok = tok.strip()
+            if tok.isdigit():
+                out.add(int(tok))
+    return out
+
+
 def count_resolved_touches_since(conn, since_ts: float) -> int:
     """마일스톤 카운트 — `touched_at >= since AND outcome IS NOT NULL` 의 단순 건수.
 
@@ -1561,6 +1583,20 @@ def get_weekly_calibration_rows(conn, ver: str) -> list:
         "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL "
         f"AND {NOT_STALE} AND grade_ver = ?", (ver,)
     ).fetchall()]
+
+
+def get_calibration_span(conn, ver: str):
+    """캘리브레이션 표본(get_weekly_calibration_rows 와 같은 조건)의 수집 시각 범위
+    (min, max) epoch — 표본 0 이면 None (2026-09-27 S2 감사 W4: 주간 리포트 헤더에
+    표본 기간을 명시해 '최근 28일' 섹션과 모집단이 다름을 드러낸다)."""
+    row = conn.execute(
+        "SELECT MIN(collected_at) AS a, MAX(collected_at) AS b FROM levels "
+        "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL "
+        f"AND {NOT_STALE} AND grade_ver = ?", (ver,)
+    ).fetchone()
+    if not row or row["a"] is None:
+        return None
+    return (float(row["a"]), float(row["b"]))
 
 
 ## ── 적중 판정 해시체인 (2026-07-27 기획 카드 #3) ─────────────────────────
@@ -1833,11 +1869,20 @@ def get_author_self_stats(conn, author: str) -> dict:
     나간 뒤 실제로 닿았는가'를 재는 것이고, 판정 방식과 무관한 별개 축이다.
     touched_at IS NOT NULL 을 함께 거는 것은 get_author_outcome_rows(=E_LB 원천)의
     섀도 터치 제외와 표본을 글자 그대로 일치시키기 위함이다(현 데이터엔 해당 행 0건).
+
+    tp_hits (2026-09-27 S2 D12·W3): 알림 🏅 "TP도달 N회" 배지 전용. **실제 TP 적중
+    (outcome='hit')** 건수이고 R 트랙 제한이 없다. 종전 배지는 위 wins(=hit+만료·수익,
+    R 트랙 한정)를 빌려 써서 TP 에 닿지 않은 만료·수익(POL 14회 전부)을 'TP도달'로
+    셌고, SL 미기재 작성자의 실제 적중(89~93회)은 뺐다. 승률 줄(wins/losses)과는
+    다른 질문('TP 에 몇 번 닿았나')이라 별도 키로 둔다.
     """
     if not author:
-        return {"wins": 0, "losses": 0, "touched": 0, "untouched_expired": 0}
+        return {"wins": 0, "losses": 0, "touched": 0, "untouched_expired": 0,
+                "tp_hits": 0}
     row = conn.execute(
         """SELECT
+             SUM(CASE WHEN outcome = 'hit' AND touched_at IS NOT NULL
+                      THEN 1 ELSE 0 END) AS th,
              SUM(CASE WHEN outcome IN ('hit','timeboxed_win')
                        AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
                       THEN 1 ELSE 0 END) AS w,
@@ -1852,7 +1897,8 @@ def get_author_self_stats(conn, author: str) -> dict:
         (author,),
     ).fetchone()
     return {"wins": row["w"] or 0, "losses": row["l"] or 0,
-            "touched": row["t"] or 0, "untouched_expired": row["e"] or 0}
+            "touched": row["t"] or 0, "untouched_expired": row["e"] or 0,
+            "tp_hits": row["th"] or 0}
 
 
 def get_author_avg_holding_days(conn, author: str) -> Optional[float]:
@@ -2803,8 +2849,25 @@ def get_collected_counts_by_day(conn, days: int = 30) -> dict:
 
 
 def get_alerts_sent_by_day(conn, days: int = 30) -> dict:
-    """일자별 실제 발송 알림 건수(예고+본알림 합계) — 기존 alerts_log 재활용,
-    중복 집계 없음."""
+    """일자별 **실제 발송** 알림 건수(sent=1, 전 kind 합계) — 기존 alerts_log 재활용,
+    중복 집계 없음.
+
+    2026-09-27 S2 (감사 P2-15): 종전엔 sent 조건이 없어 '기록만' 행(touch_no_tp·
+    touch_deep·발송 OFF 된 tp/news, sent=0)까지 '발송'으로 셌다(159건). 기록 건수는
+    get_alerts_recorded_by_day 로 분리했다. sent 컬럼이 없는 구세대 DB 는 그 시절
+    행이 전부 실발송이므로 조건 없이 센다."""
+    q = ("SELECT day_kst, COUNT(*) AS n FROM alerts_log {w}GROUP BY day_kst "
+         "ORDER BY day_kst DESC LIMIT ?")
+    try:
+        rows = conn.execute(q.format(w="WHERE sent = 1 "), (days,)).fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(q.format(w=""), (days,)).fetchall()
+    return {r["day_kst"]: r["n"] for r in rows}
+
+
+def get_alerts_recorded_by_day(conn, days: int = 30) -> dict:
+    """일자별 alerts_log **기록** 건수(발송 여부 무관) — 발송(sent=1)과 분리된
+    칸(2026-09-27 S2 P2-15). 차이 = 기록만 하고 보내지 않은 억제·OFF 건."""
     rows = conn.execute(
         "SELECT day_kst, COUNT(*) AS n FROM alerts_log GROUP BY day_kst "
         "ORDER BY day_kst DESC LIMIT ?", (days,)
@@ -2963,9 +3026,11 @@ def get_observation_report(conn, days: int = 30) -> list:
     스프린트의 주간 리포트 노출을 위해 조회 함수만 미리 준비해 둔다."""
     collected = get_collected_counts_by_day(conn, days)
     sent = get_alerts_sent_by_day(conn, days)
+    recorded = get_alerts_recorded_by_day(conn, days)
     stats_rows = get_daily_stats(conn, days)
     by_day = {r["day_kst"]: r for r in stats_rows}
-    all_days = sorted(set(collected) | set(sent) | set(by_day), reverse=True)[:days]
+    all_days = sorted(set(collected) | set(sent) | set(recorded) | set(by_day),
+                      reverse=True)[:days]
     out = []
     for d in all_days:
         s = by_day.get(d, {})
@@ -2975,6 +3040,8 @@ def get_observation_report(conn, days: int = 30) -> list:
             "touches_total": s.get("touches_total", 0),
             "previews_total": s.get("previews_total", 0),
             "alerts_sent": sent.get(d, 0),
+            # 발송·기록 분리 (2026-09-27 S2 P2-15) — 기록 = sent 무관 alerts_log 행
+            "alerts_recorded": recorded.get(d, 0),
             "suppressed_grade": s.get("suppressed_grade", 0),
             "suppressed_cap": s.get("suppressed_cap", 0),
             "suppressed_dup": s.get("suppressed_dup", 0),

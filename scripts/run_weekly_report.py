@@ -108,16 +108,36 @@ def _collect(conn, now: float, pool_days: float) -> dict:
     authors = db.list_authors_with_outcomes(conn)
     wk_start = now - 7 * DAY
     pv_start = now - 14 * DAY
+    cur_rows = db.get_resolved_rows_between(conn, wk_start, now)
+    # W1 (2026-09-27 S2): 종결 중 '알림이 실제로 나간' 건 — 헤더 병기용(표시 전용,
+    # 승률·PF 모집단은 종전대로 터치 전체. 알림분 한정은 사용자 결정 사항).
+    try:
+        _sent_ids = db.get_sent_touch_level_ids(conn)
+    except sqlite3.OperationalError:
+        _sent_ids = None
+    cur_alerted = (sum(1 for r in cur_rows if r.get("id") in _sent_ids)
+                   if _sent_ids is not None else None)
+    cal = _calibration_latest(conn)
+    # W4 (2026-09-27 S2): 캘리브레이션 표본 기간 — 헤더에 명시(같은 화면의 '최근
+    # 28일' 판정 사유별과 모집단이 다르다는 걸 드러낸다).
+    cal_span = None
+    if cal[1]:
+        try:
+            cal_span = db.get_calibration_span(conn, cal[1])
+        except sqlite3.OperationalError:
+            cal_span = None
     return {
         "rows_by_author": {a: db.get_author_outcome_rows(conn, a) for a in authors},
         # 등급 캘리브레이션 — grade_ver 최신 표본만(구 산식 병기 제거, 2026-09-22 R4)
-        "calibration": _calibration_latest(conn),
+        "calibration": cal,
+        "calibration_span": cal_span,
         # 역신호 확정 구분(S9, 표시 전용) — run_cycle 스냅샷 훅이 meta 에 기록한
         # 확정 상태를 안내 한 줄로만 병기한다(정렬·수식·필터 불변).
         "reverse_confirmed": db.get_reverse_confirmed_authors(conn),
         # ── v2 창 데이터 ──
         "wk_start": wk_start,
-        "cur_rows": db.get_resolved_rows_between(conn, wk_start, now),
+        "cur_rows": cur_rows,
+        "cur_alerted": cur_alerted,
         "prev_rows": db.get_resolved_rows_between(conn, pv_start, wk_start),
         "pool_rows": db.get_resolved_rows_between(conn, now - pool_days * DAY, now),
         "cur_alerts": db.count_touch_alerts_between(conn, wk_start, now),
@@ -145,6 +165,7 @@ def build_report(db_path: str = None, now: float = None, conn=None) -> tuple:
 
     calibration_result, calibration_ver = d["calibration"]
     current = weekly.summary(d["cur_rows"], alerts=d["cur_alerts"])
+    current["closed_alerted"] = d.get("cur_alerted")  # W1 병기용(표시 전용)
     previous = weekly.summary(d["prev_rows"], alerts=d["prev_alerts"])
     obs = weekly.observations(d["cur_rows"], d["prev_rows"], d["pool_rows"],
                               limit=settings.get("weekly_report_observations"),
@@ -154,6 +175,7 @@ def build_report(db_path: str = None, now: float = None, conn=None) -> tuple:
     text = telegram.render_weekly_report(
         d["rows_by_author"], now=now,
         calibration_result=calibration_result, calibration_ver=calibration_ver,
+        calibration_span=d.get("calibration_span"),
         reverse_confirmed=d["reverse_confirmed"],
         current=current, previous=previous, observations=obs,
         pool_n=stats["total"], pool_days=pool_days,

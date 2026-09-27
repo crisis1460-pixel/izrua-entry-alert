@@ -230,7 +230,11 @@ def fetch_orderbook_ratio(market: str, timeout: float) -> Optional[float]:
 
 def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
     """52주 고가/저가 (KRW) — 주봉 52개의 최고 high / 최저 low. 실패 시 None.
-    알림 발송 시에만 호출(회당 1콜)되므로 한도 부담 없음."""
+    알림 발송 시에만 호출(회당 1콜)되므로 한도 부담 없음.
+
+    반환 (고가, 저가, 주봉 개수) — 2026-09-27 S2 D6: 상장 1년 미만 코인은 주봉이
+    52개보다 적은데 알림이 '52주'라 불렀다(TAO 28주 등). 개수를 함께 돌려 렌더러가
+    52 미만이면 '상장후'로 표기한다. 렌더러는 2원소 튜플(구 호출부)도 받는다."""
     try:
         resp = requests.get(
             f"{_BASE}/candles/weeks",
@@ -244,7 +248,7 @@ def fetch_week52(market: str, timeout: float) -> Optional[tuple]:
             return None
         high = max(float(c["high_price"]) for c in candles)
         low = min(float(c["low_price"]) for c in candles)
-        return (high, low)
+        return (high, low, len(candles))
     except Exception as e:  # noqa: BLE001
         # 2026-08-08 재검토: 예외 경로도 페이싱(fetch_rvol_1h 관례 통일).
         time.sleep(_CANDLE_PACE_SEC)
@@ -542,7 +546,11 @@ def _base_position_verdict(rsi_d, rsi_w, price=None,
 
     in_pullback = rsi_d <= RSI_PULLBACK_MAX     # 조정권 (바닥권 포함)
     rsi_tag = "바닥권" if rsi_d <= 30 else "조정중"
-    d_tok = f"RSI{rsi_d:.0f}"
+    # 2026-09-27 S2 D7: 과열권(일RSI≥70)이면 시간축을 명시한다 — 진입가 터치(눌림)
+    # 알림에 "과열·RSI75" 가 붙으면 '지금 과열'로 읽히는데, 이 값은 직전 랠리를 담은
+    # **일봉** RSI 다. 판정 로직·라벨은 불변. 70 미만은 종전 "RSI48" 유지 —
+    # "120일지지·일RSI48" 이 32칼럼을 넘기 때문(과열권 토큰 조합은 최장 30칼럼).
+    d_tok = f"일RSI{rsi_d:.0f}" if rsi_d >= 70 else f"RSI{rsi_d:.0f}"
 
     # 하락세(역배열) 강등 — 겉보기 조정/과열의 함정·위험 처리.
     # 과열 단어는 생략 — RSI 숫자와 '위험' 라벨이 이미 전달한다(2토큰 상한).

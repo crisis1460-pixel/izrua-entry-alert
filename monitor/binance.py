@@ -170,7 +170,8 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
 
     CVD·호가·옵션·청산 보정: cvd_ratio, bid_ask_ratio, options_ctx(BTC 옵션
     P/C Ratio·Max Pain), liq_ctx(BTC 청산 클러스터)는 **라벨 이동에만** 반영하고
-    근거 텍스트·수치는 알림에 노출하지 않는다(내부 기준선 원칙). 좋은 판정을 더
+    수치는 알림에 노출하지 않는다(내부 기준선 원칙). 라벨이 옮겨지면 괄호 근거를
+    그 이동 사유(예: '달러 강세')로 바꾼다(2026-09-27 S2 D8). 좋은 판정을 더
     올리는 것보다 나쁜 신호로 낮추는 쪽을 우선(허수 터치 경고가 목적):
       · 우호 + 경고신호 1개 이상 → 중립
       · 중립 + 경고신호 2개 → 주의
@@ -215,26 +216,44 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
     else:
         return None, None
 
-    # ── CVD·호가 라벨 보정 (표기 없음 — 라벨만 이동, reason 유지) ──
+    # ── CVD·호가 라벨 보정 ──
+    # 2026-09-27 S2 D8: 종전엔 라벨만 옮기고 reason 은 원 판정 것을 남겨 "우호 (투매
+    # 진행)"·"중립 (자금 유입)" 같은 **라벨-근거 역전**이 38/150건 나갔다. 이제 보정
+    # 신호마다 사유 문구를 함께 모아 두고, 라벨이 옮겨지면 reason 을 **그 이동을
+    # 일으킨 첫 사유**로 교체한다(라벨이 안 옮겨지면 종전 reason 그대로).
+    # 사유 순서 = 아래 평가 순서(코인 자체 신호 CVD·호가가 시장 매크로보다 앞).
     warn = 0
     confirm = 0
+    warn_why: list = []
+    confirm_why: list = []
+
+    def _w(why, n=1):
+        nonlocal warn
+        warn += n
+        warn_why.append(why)
+
+    def _c(why):
+        nonlocal confirm
+        confirm += 1
+        confirm_why.append(why)
+
     if cvd_ratio is not None:
         if cvd_ratio <= SUPPLY_CVD_NEG:
-            warn += 1
+            _w("매도 우위")
         elif cvd_ratio >= SUPPLY_CVD_POS:
-            confirm += 1
+            _c("매수 우위")
     if bid_ask_ratio is not None:
         if bid_ask_ratio <= SUPPLY_OBI_SELL_WALL:
-            warn += 1
+            _w("매도벽")
         elif bid_ask_ratio >= SUPPLY_OBI_BUY_WALL:
-            confirm += 1
+            _c("매수벽")
     # 옵션 컨텍스트 보정 (BTC 전용 시장 컨텍스트 — 전 코인 적용)
     if options_ctx is not None:
         pc = options_ctx.get("pc_ratio")
         mp = options_ctx.get("max_pain")
         if pc is not None:
             if pc >= SUPPLY_PC_EXTREME_HIGH or pc <= SUPPLY_PC_EXTREME_LOW:
-                warn += 1
+                _w("옵션 쏠림")
         if mp is not None and funding_pct is not None:
             # Max Pain 대비 현재 BTC 가격 거리는 호출부가 제공할 수 없으므로
             # P/C Ratio 극단만 보정에 사용 (Max Pain은 향후 가격 입력 추가 시 활용)
@@ -243,55 +262,78 @@ def derive_supply_verdict(funding_pct, oi_change_pct, price_change_pct,
     if liq_ctx is not None:
         liq_dir = liq_ctx.get("direction")
         if liq_dir == SUPPLY_LIQ_WARN:
-            warn += 1
+            _w("롱 청산 위험")
         elif liq_dir == SUPPLY_LIQ_CONFIRM:
-            confirm += 1
+            _c("숏 청산 연료")
     # ── 매크로 환경 보정 (2026-08-14) ──────────────────────────
     # DXY > 105 = 달러 강세 → 코인 약세 압력 (warn)
     # DXY < 100 = 달러 약세 → 코인 우호 (confirm)
     if dxy is not None:
         if dxy > 105:
-            warn += 1
+            _w("달러 강세")
         elif dxy < 100:
-            confirm += 1
+            _c("달러 약세")
 
     # USDT.D > 8% = 위험회피 심화 (warn)
     # USDT.D < 5% = 위험선호 (confirm)
     if usdt_dominance is not None:
         if usdt_dominance > 8:
-            warn += 1
+            _w("위험 회피")
         elif usdt_dominance < 5:
-            confirm += 1
+            _c("위험 선호")
 
     # DVOL > 80 = 변동성 위기 (warn, 강하게)
     # DVOL > 60 = 변동성 경계 (warn)
     # DVOL < 40 = 평상시 — 신호 없음
     if dvol is not None:
         if dvol > 80:
-            warn += 2
+            _w("변동성 위기", 2)
         elif dvol > 60:
-            warn += 1
+            _w("변동성 경계")
 
     # FOMC/CPI 24h 이내: 경고(warn) — 고영향 이벤트 전후 방향성 불확실
     if macro_event is not None:
-        warn += 1
+        _w("지표 발표")
 
     # Hash Ribbons (2026-08-15) — 채굴자 항복=스트레스 구간(warn),
     # 회복 크로스 후 14일=역사적 매집 구간(confirm)
     if hash_ribbons is not None:
         state = hash_ribbons.get("state")
         if state == "capitulation":
-            warn += 1
+            _w("채굴자 항복")
         elif state == "recovery":
-            confirm += 1
+            _c("채굴 회복")
 
     if label == "우호" and warn >= 1:
-        label = "중립"
+        label, reason = "중립", warn_why[0]
     elif label == "중립" and warn >= 2:
-        label = "주의"
+        label, reason = "주의", warn_why[0]
     elif label == "중립" and confirm >= 2:
-        label = "우호"
+        label, reason = "우호", confirm_why[0]
     return label, reason
+
+
+def kimchi_display_ok(kimchi_pct) -> bool:
+    """김프 값이 **표시해도 되는** 범위인가 (2026-09-27 S2 T7 표시 가드).
+
+    업비트·바이낸스에서 같은 심볼이 다른 자산이면(업비트 BEAM = 바이낸스 BEAMX,
+    바이낸스 BEAMUSDT 는 구 Beam) 김프가 −97% 처럼 터무니없이 나온다. 원인 해결
+    (별칭 맵)은 별도 과제이고, 여기서는 |김프| 가 settings.kimchi_display_max_abs_pct
+    (기본 15%)를 넘으면 표시하지 않게 하는 방어선만 둔다. 실측 정상 역프 최대치는
+    LSK −22.8%(09 중순)·−11.4%(09-27) — 15% 초과 정상 케이스가 드물게 가려질 수
+    있으나 오표시보다 생략이 낫다(감사 A T7 추천 1). 0 이하 설정 = 가드 OFF."""
+    if kimchi_pct is None:
+        return False
+    try:
+        from config import settings as _s
+        lim = _s.get("kimchi_display_max_abs_pct")
+    except Exception:  # noqa: BLE001 - 설정 누락은 기본값
+        lim = 15.0
+    if lim is None:
+        lim = 15.0
+    if lim <= 0:
+        return True
+    return abs(float(kimchi_pct)) <= lim
 
 
 def fetch_funding_rate(symbol: str, timeout: float) -> Optional[float]:

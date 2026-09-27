@@ -303,16 +303,16 @@ check("T4 시장심리 행", "비트 점유율: 56.6%" in touch_msg and "알트�
       and "시장심리: 31 (공포)" in touch_msg)
 check("T4 원단위 반올림", ".00원" not in touch_msg and "원)" in touch_msg)
 check("T4 표기수정 1차", "[진입가 터치]" in touch_msg and "손절" not in touch_msg
-      and "평균 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg)
+      and "워쳐 적중률: 67%" in touch_msg and "작성자 평균" not in touch_msg)
 check("T4 표기수정 최종(워쳐식 타점+원화단독)", "타점" in touch_msg and "현재:" in touch_msg
       and "진입:" in touch_msg and "목표:" in touch_msg and "$" not in touch_msg
       and "엔트리" not in touch_msg and "~" in touch_msg)
 # 2026-08-03 사용자 결정: 📐 SL 행 삭제. SL 은 판정 엔진 내부에서만 사용.
-check("T4 거래순위+4칸정렬+SL행 삭제", "    거래:  5위" in touch_msg
+check("T4 거래순위+4칸정렬+SL행 삭제", "    거래대금:  5위" in touch_msg
       and "\n    현재:" in touch_msg and "\n    고가" in touch_msg
       and "📐 SL" not in touch_msg and "R:R 1:" not in touch_msg)
 check("T4 김프+52주", "김프" in touch_msg and "52주" in touch_msg
-      and "고가" in touch_msg and "지점" in touch_msg)
+      and "고가" in touch_msg and "52주 범위 중" in touch_msg and "위치" in touch_msg)
 
 # T5: 터치된 클러스터는 재알림 없음, 7.50 별개 레벨은 아직 활성
 with db.connect(TEST_DB) as conn:
@@ -418,7 +418,7 @@ msg_a = tg.render_alert("touch", "LINK", [dict(
 # 2026-08-08 2차: 행별 자동 절삭 예산 안에서만 원문과 비교(절삭 자체는 TR
 # 섹션에서 별도 검증 - 여기선 절삭 후에도 올바른 수치가 담기는지만 본다).
 check("T14 워쳐+자체 병기 (별도줄)",
-      tg._truncate_line("📊 평균 적중률: 72% (워쳐 25건)") in msg_a
+      tg._truncate_line("📊 워쳐 적중률: 72% (25건)") in msg_a
       and "\n🏹 승률73% (8승3패)" in msg_a and "✍️ @" in msg_a)
 msg_b = tg.render_alert("touch", "LINK", [dict(
     coin_symbol="LINK", entry_usd=8.3, sl_usd=None, tp_usd=None, rr=None, grade="C", score=45,
@@ -552,7 +552,7 @@ check("RPV1 RSI 단독(MA 폴백): 바닥권 우호 / 조정중 중립 강등 / 
       and _pv(48.0, 50.0) == ("중립", "조정중·RSI48")  # 상한 45→50 확대
       and _pv(52.0, 50.0) == ("중립", "RSI52")
       and _pv(64.0, 50.0) == ("중립", "상승중·RSI64")
-      and _pv(74.0, 50.0) == ("주의", "과열·RSI74"))
+      and _pv(74.0, 50.0) == ("주의", "과열·일RSI74"))  # S2 D7 시간축
 check("RPV2 주봉 극단: 주>=70 위험(일봉 무관) / 주<=30+일<=50 장기바닥 우호",
       _pv(38.0, 72.0) == ("위험", "장기과열·주RSI72")
       and _pv(38.0, 28.0) == ("우호", "장기바닥·주RSI28")
@@ -580,7 +580,7 @@ check("RPV6 우호 = 2박자: 지지+조정권(혼조) / 상승세+조정권(지
       and _pv(44.0, 50.0, price=150.0, **_MAS_UP) == ("우호", "상승세·RSI44"))
 check("RPV7 하락세 강등: 조정권 주의(함정) / 과열 위험 / 그 외 중립",
       _pv(38.0, 50.0, price=150.0, **_MAS_DOWN) == ("주의", "하락세·RSI38")
-      and _pv(74.0, 50.0, price=150.0, **_MAS_DOWN) == ("위험", "하락세·RSI74")
+      and _pv(74.0, 50.0, price=150.0, **_MAS_DOWN) == ("위험", "하락세·일RSI74")
       and _pv(64.0, 50.0, price=150.0, **_MAS_DOWN) == ("중립", "하락세·RSI64"))
 check("RPV8 중립대(50~60) 지지 근접은 정보만: 중립 (60일지지·RSI52)",
       _pv(52.0, 50.0, price=110.5, **_MAS_MIX) == ("중립", "60일지지·RSI52")
@@ -673,7 +673,7 @@ msg_c = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=-0.92)],
 check("T14c 역신호 지표를 주입해도 알림 본문엔 안 나온다",
       "역신호" not in msg_c and "-0.92R" not in msg_c)
 check("T14c2 확정 양식(워쳐 적중률·자체 승률)은 그대로 유지",
-      "📊 평균 적중률: 66% (워쳐 64건)" in msg_c and "🏹 승률25% (2승6패)" in msg_c)
+      "📊 워쳐 적중률: 66% (64건)" in msg_c and "🏹 승률25% (2승6패)" in msg_c)
 
 msg_d = tg.render_alert("touch", "LINK", [dict(_anti, author_self_e_lb=0.85)],
                         8.35 * USDT_KRW, USDT_KRW)
@@ -710,12 +710,18 @@ check("T14k2 source 가 빈 초기 수집분만 종전 문구로 남는다",
       # "...작성자)" 꼬리가 잘려나간다 — 잘리기 전 접두부만 확인.
       "👥 적중률 기록없음 (워쳐 미추적" in msg_k2)
 msg_l = tg.render_alert("touch", "LINK",
-                        [dict(_src, source="telegram", tp_ladder_count=8)],
+                        # S2 D4: 단계 수 = 판정용 유효 TP 목록 길이(tp_ladder_count 아님)
+                        [dict(_src, source="telegram", tp_ladder_count=8,
+                              tps_usd="[8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.5]")],
                         8.35 * USDT_KRW, USDT_KRW)
 check("T14l 다단계 목표는 '1/8' 병기 (2026-08-08: '단계' 글씨 제거)",
       "1/8" in msg_l)
-check("T14m 단계 표기로 줄 수가 늘지 않는다",
-      msg_l.count("\n") == msg_j.count("\n"))
+# S2 (2026-09-27): '진입+' 라벨로 목표 행이 길어져, 한 줄 32칼럼을 넘으면 꼬리표만
+# 값 칼럼에 맞춰 다음 줄로 내린다(잘림·임의 줄내림 방지). 늘어나도 최대 1줄.
+check("T14m 단계 표기로 늘어나는 줄은 최대 1줄(넘칠 때만 값 칼럼 정렬 이어쓰기)",
+      msg_l.count("\n") - msg_j.count("\n") in (0, 1)
+      and all(tg._line_width(ln) <= tg._MAX_LINE_COLS
+              for ln in msg_l.split("\n") if "목표" in ln or ln.strip() == "1/8"))
 msg_n = tg.render_alert("touch", "LINK",
                         [dict(_src, source="telegram", tp_ladder_count=1)],
                         8.35 * USDT_KRW, USDT_KRW)
@@ -3786,8 +3792,9 @@ check("SL2 6건 이상이면 '외 N건' 을 덧붙이고 6번째부터는 생략
       "외 1건" in _sl6 and "출처6" not in _sl6)
 
 # ── TG: 타점/목표 행 포맷 (2026-08-08: 원-괄호 사이 공백 제거) ──────────────
-check("TG1 목표 행 '원' 바로 뒤에 괄호 - 이중 공백 없음",
-      "원(" in touch_msg and "원  (" not in touch_msg)
+# S2 (2026-09-27 D2): 목표 % 는 괄호 없이 '진입+x%' 라벨 — 원 뒤 한 칸
+check("TG1 목표 행 '원 진입+x%' - 이중 공백 없음",
+      "원 진입+" in touch_msg and "원  진입" not in touch_msg)
 
 # ── PU: volume_watch.post_urls 합집합 병합 + 급증/부분익절 알림 출처 표기 ───
 import json as _json_pu  # noqa: E402
@@ -5027,6 +5034,231 @@ check("STALE3 조건은 AND — 관통이 깊어도 느린 터치(뉴스 급락 
 
 fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
 settings.SETTINGS["db_path"] = _arm_prev_db
+
+# ── DSP: 알림 표시 정합 (2026-09-27 S2 — 감사 D D1~D18·A T6/T7/T9/T10) ─────
+# 사용자 결정: 진입가 이탈은 진입 행 병기만(헤더 불변) / TP1 ≥ 진입+50% 는 "(장기)"
+# 라벨만 / 손절 행은 표시 안 함(누락 아님).
+from notify import telegram as _dtg  # noqa: E402
+from monitor import binance as _dbn  # noqa: E402
+_D_USDT = 1361.0
+_D_T = 1790470302.2373872            # SUI 884 발송 시각(aid 820)
+_d_real_time = _dtg.time
+_dtg.time = type("T", (), {"time": staticmethod(lambda: _D_T),
+                           "sleep": staticmethod(lambda s: None)})
+_sui = dict(id=884, coin_symbol="SUI", entry_usd=1.42, sl_usd=None, tp_usd=2.65,
+            tps_usd="[2.65, 5.36]", tp_ladder_count=2, grade="B", score=52.0,
+            author="CryptoPatel", author_followers=36400, author_hit_rate=0.2,
+            author_hit_count=5, mcap_rank=28, mcap_tier_icon="🥇",
+            post_age_minutes=877.07, collected_at=1790469800.248,
+            source="tradingview", post_url="https://tv.com/sui884",
+            author_self_tp_hits=0, author_self_neff=0.0)
+_sui_kw = dict(sentiment={"btc_dominance": 58.3, "fear_greed": 70.0},
+               week52=(5260.0, 897.0, 52), kimchi_pct=0.159, volume_rank=11,
+               supply=("중립", None), position=("주의", "과열·일RSI75"),
+               adx14=38.28, stwits_bullish_ratio=1.0, stwits_n=7)
+_m_sui = _dtg.render_alert("touch", "SUI", [dict(_sui)], 1590.0, _D_USDT,
+                           rep=None, **_sui_kw)
+_sui_lines = _m_sui.split("\n")
+_i_low = next(i for i, ln in enumerate(_sui_lines) if ln.startswith("    저가"))
+check("DSP1 SUI 884 재현 - 진입 행 병기(현재 -17.7%) + 헤더는 [진입가 터치] 그대로",
+      "    진입:  1,933원 (현재 -17.7%)" in _sui_lines and "[진입가 터치]" in _m_sui
+      and "이탈" not in _m_sui)
+check("DSP1b 목표 = 판정 TP1 · 대표 자기 진입 기준 · '진입+' 라벨 · (장기) 라벨만(억제 없음)",
+      "    목표:  3,607원 진입+86.6%" in _sui_lines
+      and any(ln.strip() == "1/2 (장기)" for ln in _sui_lines))
+check("DSP1c 진행바는 52주 블록 안(구분선 없음) + '52주 범위 중 16% 위치'",
+      _sui_lines[_i_low + 1].strip().startswith("🟩")
+      and "    └ 52주 범위 중 16% 위치" in _sui_lines and "지점" not in _m_sui)
+check("DSP1d 워쳐 소표본(5건) 적중률 숨김 · 소셜 100%(n=7) 숨김 · 추세 아이콘 중립 · 😀",
+      "20%" not in _m_sui and "적중률 소표본" in _m_sui and "소셜" not in _m_sui
+      and "〰️ 추세 강함 (ADX 38)" in _m_sui and "📈" not in _m_sui
+      and "😀 시장심리: 70.0" in _m_sui and "😨" not in _m_sui)
+check("DSP1e 헤더 '글 14시간 전' · 거래대금 11위 · 과열·일RSI75 · 손절 행 없음",
+      "글 14시간 전" in _sui_lines[2] and "    거래대금:  11위" in _sui_lines
+      and "과열·일RSI75" in _m_sui and "손절" not in _m_sui)
+check("DSP1f 모순 없는 렌더 - 가격행 외 전 행 32칼럼 이내(잘림 없음)",
+      all(_dtg._line_width(ln) <= _dtg._MAX_LINE_COLS for ln in _sui_lines
+          if ln != _dtg._SEP and not ln.startswith("🔗")))
+
+# D1 경계: 1% 이내면 병기 없음
+_m_d1 = _dtg.render_alert("touch", "SUI", [dict(_sui)], 1.42 * _D_USDT * 0.995, _D_USDT)
+check("DSP2 진입가 대비 -0.5% 는 병기 없음(1% 초과만)", "(현재" not in _m_d1)
+
+# D3/T9: 클러스터 — 목표 % 분모 = 대표 자기 진입가(클러스터 상단 아님)
+_cl_hi = dict(_sui, id=1, entry_usd=2.0, tp_usd=2.2, tps_usd="[2.2]", author="Hi")
+_cl_lo = dict(_sui, id=2, entry_usd=1.99, tp_usd=2.03, tps_usd="[2.03]", author="Lo")
+_m_d3 = _dtg.render_alert("touch", "X", [_cl_hi, _cl_lo], 2.0 * _D_USDT, _D_USDT,
+                          rep=_cl_lo)
+check("DSP3 목표 % 는 대표 자기 진입가 기준 (2.03/1.99 = +2.0%, 상단 기준 +1.5% 아님)",
+      "진입+2.0%" in _m_d3 and "진입+1.5%" not in _m_d3 and "~" in _m_d3)
+
+# D4/T5: 목표 = 판정 TP 목록 첫 값, N = 그 목록 길이 (FIL 772형)
+_fil = dict(_sui, entry_usd=0.9135, tp_usd=2.0, tps_usd="[0.964, 1.0144, 2.0]",
+            tp_ladder_count=3)
+_m_d4 = _dtg.render_alert("touch", "FIL", [_fil], 0.9135 * _D_USDT, _D_USDT)
+check("DSP4 목표 = TP1(+5.5%) · 1/3 (추출 대표값 2.0=+118.9% 아님)",
+      "진입+5.5%" in _m_d4 and "1/3" in _m_d4 and "118.9" not in _m_d4
+      and "(장기)" not in _m_d4)
+
+# D8: 돈 흐름 라벨 보정 시 근거도 보정 사유로
+check("DSP5 돈 흐름 역전 제거 - 중립(투매)+확인2 → 우호(매수 우위), 우호(자금유입)+경고 → 중립(달러 강세)",
+      _dbn.derive_supply_verdict(0.0, -5.0, -3.0, cvd_ratio=0.2, bid_ask_ratio=2.0)
+      == ("우호", "매수 우위")
+      and _dbn.derive_supply_verdict(0.0, 5.0, 3.0, dxy=106.0) == ("중립", "달러 강세")
+      and _dbn.derive_supply_verdict(0.0, -5.0, -3.0) == ("중립", "투매 진행")
+      and _dbn.derive_supply_verdict(0.0, 5.0, 3.0, dvol=85.0) == ("중립", "변동성 위기"))
+check("DSP5b 보정 사유 문구도 돈 흐름 행 32칼럼 이내",
+      all(_dtg._line_width(f"🧭 돈 흐름: 중립 ({w})") <= _dtg._MAX_LINE_COLS
+          for w in ("매도 우위", "매수 우위", "매도벽", "매수벽", "옵션 쏠림",
+                    "롱 청산 위험", "숏 청산 연료", "달러 강세", "달러 약세",
+                    "위험 회피", "위험 선호", "변동성 위기", "변동성 경계",
+                    "지표 발표", "채굴자 항복", "채굴 회복")))
+
+# D12/D13: 🏅 = 실제 TP 적중(hit) 건수 + n_eff≥5 게이트
+_b = dict(_sui, author_self_wins=14, author_self_losses=9)
+_m_b0 = _dtg.render_alert("touch", "POL", [dict(_b, author_self_tp_hits=0,
+                                                author_self_neff=23.0)], 1933.0, _D_USDT)
+_m_b1 = _dtg.render_alert("touch", "POL", [dict(_b, author_self_tp_hits=3,
+                                                author_self_neff=4.9)], 1933.0, _D_USDT)
+_m_b2 = _dtg.render_alert("touch", "POL", [dict(_b, author_self_tp_hits=3,
+                                                author_self_neff=6.0)], 1933.0, _D_USDT)
+check("DSP6 🏅 배지: 만료·수익만 있는 작성자(TP 적중 0) 무배지 / n_eff<5 숨김 / 통과 시 hit 건수",
+      "🏅" not in _m_b0 and "🏅" not in _m_b1 and "🏅 TP도달: 3회" in _m_b2)
+
+# D10: 소셜 표본 병기·소표본 극단 숨김
+def _soc(r, n):
+    return _dtg.render_alert("touch", "SUI", [dict(_sui)], 1933.0, _D_USDT,
+                             stwits_bullish_ratio=r, stwits_n=n)
+check("DSP7 소셜: 100%·n=12 → '매수 12/12' / 87.5%·n=8 → '매수 7/8' / 0%·n=9 숨김",
+      "💬 소셜 매수 12/12 (매수 유리)" in _soc(1.0, 12)
+      and "💬 소셜 매수 7/8 (매수 유리)" in _soc(0.875, 8)
+      and "소셜" not in _soc(0.0, 9)
+      and "💬 소셜 매도 10/10 (매수 부담)" in _soc(0.0, 10))
+
+# T7: 김프 표시 가드
+_m_k1 = _dtg.render_alert("touch", "BEAM", [dict(_sui)], 1933.0, _D_USDT, kimchi_pct=-97.43)
+_m_k2 = _dtg.render_alert("touch", "LSK", [dict(_sui)], 1933.0, _D_USDT, kimchi_pct=-11.4)
+check("DSP8 김프 |값|>15% 생략(BEAM -97%) · 정상 역프(-11.4%)는 표시",
+      "김프" not in _m_k1 and "❄️ 김프 -11.40%" in _m_k2
+      and _dbn.kimchi_display_ok(15.0) and not _dbn.kimchi_display_ok(-15.01))
+
+# D6: 52주 미만 이력
+_m_w1 = _dtg.render_alert("touch", "TAO", [dict(_sui)], 1933.0, _D_USDT,
+                          week52=(5260.0, 897.0, 28))
+_m_w2 = _dtg.render_alert("touch", "TAO", [dict(_sui)], 1933.0, _D_USDT,
+                          week52=(5260.0, 897.0))
+check("DSP9 주봉 28개면 '상장후' · 2원소(구 호출부)는 '52주'",
+      "\n상장후\n" in _m_w1 and "상장후 범위 중" in _m_w1 and "52주" not in _m_w1
+      and "\n52주\n" in _m_w2)
+
+# D18: 공포탐욕 구간 이모지
+check("DSP10 시장심리 이모지 구간별 (20😱 40😨 50😐 70😀 80🤑)",
+      [_dtg.fng_emoji(v) for v in (20, 40, 50, 70, 80)] == ["😱", "😨", "😐", "😀", "🤑"])
+
+# D15: 표시 등급 = 필터 등급(display_grade 우선)
+_m_g = _dtg.render_alert("touch", "SUI", [dict(_sui, grade="D", display_grade="C")],
+                         1933.0, _D_USDT)
+check("DSP11 표시 등급은 display_grade(필터 등급) 우선", "C등급" in _m_g and "D등급" not in _m_g)
+
+# D11: 워쳐 적중률 — n≥10 이면 출처 명시해 표시
+_m_wt = _dtg.render_alert("touch", "SUI", [dict(_sui, author_hit_count=16,
+                                               author_hit_rate=0.69)], 1933.0, _D_USDT)
+check("DSP12 워쳐 적중률 n≥10 은 '📊 워쳐 적중률: 69% (16건)'",
+      "📊 워쳐 적중률: 69% (16건)" in _m_wt and "평균 적중률" not in _m_wt)
+
+# B1: 알트시즌 공용 라벨 — 알림 문구 불변
+check("DSP13 altseason_label 공용 함수 = 종전 알림 경계 그대로",
+      [_dtg.altseason_label(v) for v in (80, 60, 30, 10)]
+      == ["알트 매수 권장", "알트 매수 고려", "BTC 매수 고려", "BTC 매수 권장"])
+_dtg.time = _d_real_time
+
+# D6: fetch_week52 는 주봉 개수를 함께 돌려준다
+_w52_orig = upbit.requests.get
+upbit.requests.get = lambda *a, **k: _FakeResp(
+    [{"high_price": 10.0 + i, "low_price": 1.0 + i} for i in range(28)])
+try:
+    _w52 = _real_fetch_week52("KRW-TAO", 1.0)
+finally:
+    upbit.requests.get = _w52_orig
+check("DSP14 fetch_week52 → (고가, 저가, 주봉 개수)", _w52 == (37.0, 1.0, 28))
+
+# D12 / P2-15: DB 정의 — tp_hits 는 hit 만(R 무관), 발송 칸은 sent=1 만
+_DSP_DB = "cache/_test_dsp_s2.db"
+if os.path.exists(_DSP_DB):
+    os.remove(_DSP_DB)
+db.init_db(_DSP_DB)
+with db.connect(_DSP_DB) as conn:
+    for i, (oc, r) in enumerate([("hit", None), ("hit", 1.2), ("timeboxed_win", 0.4),
+                                 ("miss", -1.0), ("timeboxed_win", None)]):
+        conn.execute("INSERT INTO levels (signal_key, coin_symbol, ticker, direction, "
+                     "status, collected_at, author, outcome, r_multiple, touched_at, "
+                     "resolved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (f"dsp{i}", "X", "KRW-X", "long", "resolved", _D_T - 9000,
+                      "DspAuthor", oc, r, _D_T - 8000, _D_T - 7000))
+    _dsp_st = db.get_author_self_stats(conn, "DspAuthor")
+    db.record_alert(conn, "X", "touch", [1], "2026-09-27", now=_D_T)
+    db.record_alert(conn, "X", "touch_deep", [2], "2026-09-27", now=_D_T, sent=0)
+    db.record_alert(conn, "X", "touch_no_tp", [3], "2026-09-27", now=_D_T, sent=0)
+    _dsp_sent = db.get_alerts_sent_by_day(conn, days=5)
+    _dsp_rec = db.get_alerts_recorded_by_day(conn, days=5)
+    _dsp_ids = db.get_sent_touch_level_ids(conn)
+    _dsp_obs = db.get_observation_report(conn, days=5)
+check("DSP15 tp_hits = hit 건수(SL 미기재 포함, 만료·수익 제외) · 승률 wins 는 종전 정의",
+      _dsp_st["tp_hits"] == 2 and _dsp_st["wins"] == 2 and _dsp_st["losses"] == 1)
+check("DSP16 발송 칸 sent=1 만(1) · 기록 칸 전체(3) · 발송 터치 레벨 id = {1}",
+      _dsp_sent.get("2026-09-27") == 1 and _dsp_rec.get("2026-09-27") == 3
+      and _dsp_ids == {1}
+      and any(r["alerts_sent"] == 1 and r["alerts_recorded"] == 3 for r in _dsp_obs))
+os.remove(_DSP_DB)
+
+# T10 + T9: 스윙 게이트 승계 — 무TP 형제는 초단타 대표를 승계하지 못한다
+_T10_DB = "cache/_test_dsp_t10.db"
+for _p in (_T10_DB, _alert_ledger.ledger_path(_T10_DB)):
+    if os.path.exists(_p):
+        os.remove(_p)
+db.init_db(_T10_DB)
+_t10_prev_db = settings.SETTINGS["db_path"]
+settings.SETTINGS["db_path"] = _T10_DB
+_t10_now = time.time()
+
+
+def _t10_level(entry, key, tps, tp, followers):
+    with db.connect(_T10_DB) as conn:
+        lv = dict(coin_symbol="TTN", ticker="KRW-TTN", direction="long",
+                  entry_usd=entry, sl_usd=entry * 0.94, tp_usd=tp, rr=1.5,
+                  grade="B", score=60, author=f"T10_{key}",
+                  author_followers=followers, author_hit_rate=None,
+                  author_hit_count=None, author_whitelisted=False,
+                  mcap_rank=50, mcap_tier_icon="🥇",
+                  post_url=f"https://tv.com/{key}", post_age_minutes=10,
+                  collected_at=_t10_now - 3600,
+                  tps_usd=_json.dumps(tps) if tps is not None else None)
+        lv["signal_key"] = db.make_signal_key("TTN", entry, lv["author"], key)
+        db.upsert_level(conn, lv)
+
+
+_t10_level(300.0, "short", [301.0], 301.0, 100000)   # 대표 후보: TP +0.33% (스윙 미달)
+_t10_level(300.3, "notp", None, None, 100000)        # 형제: 무TP(등급 B — 승계 자격은 등급상 충분)
+fake["price"] = 303.0 * USDT_KRW                     # 1회차: 진입가 위(무장)
+fake["low"] = fake["candles"] = None
+price_check.run_once(_t10_now)
+fake["price"] = 299.5 * USDT_KRW                     # 2회차: 두 진입가 모두 관통
+fake["low"] = 299.0 * USDT_KRW
+_t10_before = len(sent_messages)
+_s_t10 = price_check.run_once(_t10_now + 120)
+with db.connect(_T10_DB) as conn:
+    _t10_ds = db.get_daily_stats(conn, days=3)
+_t10_close = sum((r.get("suppressed_tp_too_close") or 0) for r in _t10_ds)
+_t10_grade = sum((r.get("suppressed_grade") or 0) for r in _t10_ds)
+print("   [DSP17 진단]", _s_t10, "tp_too_close", _t10_close, "grade", _t10_grade)
+check("DSP17 T10 무TP 형제는 승계 불가 → 스윙 게이트 억제(suppressed_tp_too_close), 발송 0",
+      _s_t10["touches"] == 0 and len(sent_messages) == _t10_before
+      and _t10_close >= 1 and _t10_grade == 0)
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+settings.SETTINGS["db_path"] = _t10_prev_db
+for _p in (_T10_DB, _alert_ledger.ledger_path(_T10_DB)):
+    if os.path.exists(_p):
+        os.remove(_p)
 
 print()
 print("── 본알림 실제 렌더링 ──")

@@ -431,6 +431,77 @@ def _fmt_followers(count) -> str:
 
 _SELF_STATS_MIN_N = 5  # 자체 표본이 이 이상일 때만 병기 (ACCURACY_DB_PLAN 2단계 발동 조건)
 
+# ── 표시 정합 상수 (2026-09-27 S2, 감사 D 표시 레이어) ──────────────────
+_WATCHER_HIT_MIN_N = 10     # D11 워쳐 적중률 줄 최소 표본(미만이면 숨김)
+_SOCIAL_EXTREME_MIN_N = 10  # D10 소셜 100%/0% 는 태그 표본 이 이상일 때만 표시
+_ENTRY_GAP_SHOW_PCT = 1.0   # 사용자 결정: 현재가가 대표 진입가보다 1% 초과 아래면 병기
+_LONG_TARGET_PCT = 50.0     # 사용자 결정(T6): 목표 ≥ 진입+50% 면 "(장기)" 라벨만
+_VALUE_INDENT = " " * 11    # "    진입:  " 표시폭 — 이어지는 줄을 값 칼럼에 맞춘다
+
+
+def _line_width(s: str) -> int:
+    return sum(_display_width(c) for c in _TAG_RE.sub("", s))
+
+
+def _with_suffix(head: str, suffix: str, sep: str = " ") -> list:
+    """가격 행 + 꼬리표. 한 줄 32칼럼 안이면 한 줄, 넘으면 꼬리표만 다음 줄
+    (값 칼럼 정렬). _cur_price_lines 의 '(전일 …)' 분리와 같은 관례 —
+    가격 행은 절삭 예산이 50이라 안 잘리지만 그룹 채팅에서 줄내림된다."""
+    if not suffix:
+        return [head]
+    single = f"{head}{sep}{suffix}"
+    if _line_width(single) <= _MAX_LINE_COLS:
+        return [single]
+    return [head, _VALUE_INDENT + suffix]
+
+
+def fng_emoji(value) -> str:
+    """시장심리(공포·탐욕 0~100) 구간별 이모지 (2026-09-27 S2 D18).
+    종전엔 값과 무관하게 😨 고정이라 탐욕(≥55) 구간 138/146건이 겁먹은 얼굴이었다.
+    경계는 alternative.me 분류(극단공포 ≤24 / 공포 ≤46 / 중립 ≤54 / 탐욕 ≤75)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "😐"
+    if v <= 24:
+        return "😱"
+    if v <= 46:
+        return "😨"
+    if v <= 54:
+        return "😐"
+    if v <= 75:
+        return "😀"
+    return "🤑"
+
+
+def altseason_label(idx) -> str:
+    """알트시즌 지수 → 알림 라벨 (2026-09-27 S2 B1 공용화).
+
+    감사 D B1: 같은 지수를 아침 브리핑(≥75 알트시즌/≤25 비트시즌/그 외 중립)과
+    알림(4단 매수 권고)이 서로 다른 라벨·경계로 불렀다. 통일하려면 한쪽을 고쳐야
+    하는데 morning_brief.py 는 다른 개발자 작업 중이라, 우선 알림 쪽 규칙을 이
+    공용 함수로 뽑아 두고(알림 문구 불변) 브리핑 적용·어휘 선택은 노트로 넘긴다."""
+    if idx >= 75:
+        return "알트 매수 권장"
+    if idx >= 50:
+        return "알트 매수 고려"
+    if idx >= 25:
+        return "BTC 매수 고려"
+    return "BTC 매수 권장"
+
+
+def _display_tps(rep: dict) -> list:
+    """표시용 유효 TP 목록 — 판정·브리핑·급증 알림과 **같은 출처**
+    (price_check._volume_band_tps, 2026-09-27 S2 D4/T5). 종전엔 추출기 대표값
+    rep.tp_usd 를 따로 읽어 'FIL 목표 +118.9% 1/3(실제 TP1 +5.5%)' 이 났다.
+    순환 import 회피용 지연 로드. 실패하면 [] → '목표: 데이터 없음'."""
+    try:
+        from monitor.price_check import _volume_band_tps
+        return _volume_band_tps(rep)
+    except Exception as e:  # noqa: BLE001 - 렌더는 죽지 않는다
+        logger.warning("[텔레그램] 표시 TP 계산 실패(데이터 없음 처리): %s", e)
+        return []
+
 # 소스 표시 문구 (2026-07-27). levels.source 값 → 알림에 쓸 한국어 라벨.
 # 등록되지 않은 소스는 값 그대로 노출한다(빈칸보다 낫고, 새 소스 추가 시 눈에 띈다).
 _SOURCE_LABEL = {"telegram": "텔레그램 채널", "tradingview": "트레이딩뷰"}
@@ -474,12 +545,24 @@ def _author_block(rep: dict) -> list:
         if touched_n + untouched >= _SELF_STATS_MIN_N:
             self_line += f" 터치율{touched_n / (touched_n + untouched) * 100:.0f}%"
 
+    # 워쳐 적중률 줄 (2026-09-27 S2 D11): 등급 산식은 봇 자체 DB(author_closed_*)를
+    # 쓰는데 이 줄은 워쳐 DB(수집 시점) 값이라 "B등급 · 평균 적중률 20%" 처럼 서로
+    # 부딪혔다. ① 라벨에 출처를 박고 ② 워쳐 표본 10건 미만이면 숨긴다(소표본 극단값
+    # 20%/100% 가 등급과 충돌하던 주원인). ③ 자체 승률(🏹)이 게이트를 넘으면 그 줄을
+    # 먼저 둔다 — 봇이 직접 잰 값이 우선이다.
     hit_rate, hit_count = rep.get("author_hit_rate"), rep.get("author_hit_count")
-    if hit_rate is not None and hit_count:
-        lines.append(f"📊 평균 적중률: {hit_rate * 100:.0f}% (워쳐 {hit_count}건)")
+    watcher_ok = hit_rate is not None and bool(hit_count) and \
+        hit_count >= _WATCHER_HIT_MIN_N
+    watcher_small = hit_rate is not None and bool(hit_count) and not watcher_ok
+    _rate_tail = "적중률 소표본" if watcher_small else None
+    if self_line:
+        lines.append(self_line)
+    if watcher_ok:
+        lines.append(f"📊 워쳐 적중률: {hit_rate * 100:.0f}% ({hit_count}건)")
     elif not self_line:
         if rep.get("author_followers"):
-            lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · 적중률 기록없음")
+            lines.append(f"👥 팔로워 {_fmt_followers(rep['author_followers'])} · "
+                         f"{_rate_tail or '적중률 기록없음'}")
         elif rep.get("source"):
             # 소스별 문구 분기 (2026-07-27 사용자 지시). 워쳐는 TradingView 작성자만
             # 추적하므로 그 밖의 소스는 **영원히** "워쳐 미추적"이다 — 늘 참인 문구는
@@ -488,12 +571,13 @@ def _author_block(rep: dict) -> list:
             # 2026-07-28 확대: TradingView 인데 워쳐에 없는 작성자도 여기로 보낸다
             # (실측 ENA/@Elephantun). "워쳐 미추적 작성자"는 사장님 관점에서 봇 내부
             # 사정일 뿐 — 읽는 사람에게 쓸모 있는 정보는 '어디서 온 신호인가'다.
-            lines.append(f"📡 {_SOURCE_LABEL.get(rep['source'], rep['source'])} · 적중률 미집계")
+            lines.append(f"📡 {_SOURCE_LABEL.get(rep['source'], rep['source'])} · "
+                         f"{_rate_tail or '적중률 미집계'}")
+        elif watcher_small:
+            lines.append("📊 워쳐 적중률: 소표본")
         else:
             # source 가 비어 있는 초기 수집분(컬럼 도입 전)만 여기로 온다.
             lines.append("👥 적중률 기록없음 (워쳐 미추적 작성자)")
-    if self_line:
-        lines.append(self_line)
 
     # 평균 보유기간 (표본 3건↑, 스윙 정렬 참고용)
     # 데이터 이상(resolved_at < touched_at 등)으로 음수가 나오면 표기 생략
@@ -525,14 +609,17 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                  adx14: float = None, dex_stats: dict = None,
                  active_addr_pctile: float = None,
                  stwits_bullish_ratio: float = None,
-                 watcher_coin_sl: dict = None) -> str:
+                 watcher_coin_sl: dict = None,
+                 stwits_n: int = None) -> str:
     """kind: 'touch'|'preview'. cluster: 같은 코인 ±1% 레벨 dict 목록(entry 내림차순).
     sentiment: {btc_dominance, fear_greed, ...}|None. week52: (고가KRW, 저가KRW)|None.
     kimchi_pct: 김프 %|None. volume_rank: 업비트 KRW 거래대금 순위(조회 시점)|None.
     rep: 호출부가 확정한 대표 레벨 (S9 통합감사 M-1, 2026-07-31) — run_once 는
     재채점·B안 승계까지 반영해 대표를 고르는데, 여기서 수집 score 로 재선정하면
     표시 대표(작성자·등급)와 필터·밴드 대표가 갈릴 수 있다. 미전달 시(직접 호출·
-    구버전 경로) 종전대로 score 최대 멤버 폴백."""
+    구버전 경로) 종전대로 score 최대 멤버 폴백.
+    stwits_n: StockTwits 태그 표본 수(bullish+bearish)|None — 소셜 배지 표본 병기용.
+    week52: (고가, 저가) 또는 (고가, 저가, 주봉 개수) — 개수 < 52 면 '상장후' 표기."""
     if rep is None:
         rep = max(cluster, key=lambda l: l.get("score") or 0)
     current_usd = (current_krw / usdt_krw) if (current_krw and usdt_krw) else None
@@ -545,21 +632,32 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     rank = rep.get("mcap_rank")
     rank_part = f"{tier} 시총 {rank}위" if rank else ""
     kind_kr = "🎯 <b>[진입가 터치]</b>" if kind == "touch" else "⚠️ <b>[진입가 접근]</b>"
-    grade = f"{rep['grade']}등급" if rep.get("grade") else ""
-
-    head_meta = " · ".join(x for x in [rank_part, grade,
-                                       _fmt_age(_fresh_age_min(rep))] if x)
+    # 표시 등급 = 발송 필터가 본 등급 (2026-09-27 S2 D15). price_check 가 F3
+    # 재조정 전 등급을 display_grade 로 남긴다 — 미주입(구 경로·테스트)이면 grade.
+    _g = rep.get("display_grade") or rep.get("grade")
+    grade = f"{_g}등급" if _g else ""
+    # D16: 글 나이의 주어 명시 — 대표 글 게시 시각 기준(클러스터 최신 글 아님).
+    _age = _fmt_age(_fresh_age_min(rep))
+    _hm = [x for x in [rank_part, grade, f"글 {_age}" if _age else ""] if x]
+    head_meta = " · ".join(_hm)
+    # "글 " 두 글자로 헤더가 32칼럼을 넘으면(두 자리 순위+시간 단위면 35) 구분자
+    # 양옆 공백만 뺀다 — 잘려서 '전'이 사라지는 것보다 낫다.
+    if _line_width(head_meta) > _MAX_LINE_COLS:
+        head_meta = "·".join(_hm)
 
     lines = [
         _SEP,
         f"{kind_kr} <b>{html.escape(coin_symbol)}</b>",
         head_meta,
     ]
-    # TP 도달 훈장 — 작성자의 자체 적중 1회 이상이면 상단에 배지 표시.
-    # author_self_wins 는 price_check.py 가 db.get_author_self_stats 로 주입한다.
-    _tp_wins = rep.get("author_self_wins") or 0
-    if _tp_wins >= 1:
-        lines.append(f"🏅 TP도달: {_tp_wins}회")
+    # TP 도달 훈장 (2026-09-27 S2 D12·D13·W3 재정의): 작성자의 **실제 TP 적중**
+    # (outcome='hit', 판정 방식 무관) 건수. 종전 값(author_self_wins)은 만료·수익
+    # (timeboxed_win)까지 셌고 SL 미기재 작성자의 적중은 빠졌다. 게이트는 승률 줄과
+    # 같은 n_eff≥5 — 배지 표본(전 종결)의 유효표본 author_self_neff 기준. 승만 보이고
+    # 패는 가려지는 소표본 배지를 막는다.
+    _tp_hits = rep.get("author_self_tp_hits") or 0
+    if _tp_hits >= 1 and (rep.get("author_self_neff") or 0.0) >= _SELF_STATS_MIN_N:
+        lines.append(f"🏅 TP도달: {_tp_hits}회")
     lines.extend(_author_block(rep))
     lines.append(_SEP)
 
@@ -576,61 +674,72 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     lines.append("타점")
     if current_usd and _krw(current_usd):
         lines.append(f"    현재:  {_krw(current_usd)}원")
+    # 대표 **자신의** 진입가 (2026-09-27 S2 D3/T9). 목표 %·이탈 병기의 기준.
+    # 종전엔 클러스터 상단(hi)이라 대표의 TP 를 다른 멤버 진입가로 나눴다.
+    own_entry = rep.get("entry_usd") or entry_rep
+    # 진입가 이탈 병기 (2026-09-27 사용자 결정 — 병기만, 헤더 불변): 터치는 캔들
+    # 저가로, '현재'는 실시간가로 재서 급락 중 발송이면 "진입가 터치"인데 현재가가
+    # 한참 아래였다(감사 D1 45/150). 대표 진입가보다 1% 초과 아래면 진입 행에 붙인다.
+    gap_txt = ""
+    if current_usd and own_entry and own_entry > 0:
+        _gap = (current_usd - own_entry) / own_entry * 100
+        if _gap < -_ENTRY_GAP_SHOW_PCT:
+            gap_txt = f"(현재 {_gap:+.1f}%)"
     if lo is not None and hi is not None and hi > lo and _krw(lo):
-        lines.append(f"    진입:  {_krw(lo)}~{_krw(hi)}원")
+        lines.extend(_with_suffix(f"    진입:  {_krw(lo)}~{_krw(hi)}원", gap_txt))
     elif entry_rep and _krw(entry_rep):
-        lines.append(f"    진입:  {_krw(entry_rep)}원")
+        lines.extend(_with_suffix(f"    진입:  {_krw(entry_rep)}원", gap_txt))
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)
-    # 표시 직전 최종 가드(2026-07-23 SOL 실전 사고): 파서 수정 '이전'에 수집돼 DB에
-    # 남아있는 오염값(서수 오인 tp=1.0 등)이 다음 수집의 자동 치유 전까지 알림에
-    # 노출되는 걸 막는다 - 진입가 대비 4배/0.25배 밖 목표는 '데이터 없음' 처리.
-    tp = rep.get("tp_usd")
-    if tp and entry_rep and not (entry_rep * 0.25 <= tp <= entry_rep * 4):
-        tp = None
-    if tp and entry_rep:
-        pct = (tp - entry_rep) / entry_rep * 100
-        # 다단계 목표 표기 (2026-07-27 사용자 승인, A안): 소스가 "TARGETS: 0.059 -
-        # 0.0615 - … - 0.085" 처럼 사다리로 주면 우리는 **첫 목표(TP1)만** 쓴다 —
-        # 적중 판정("TP1 도달=승")과 TP 거리 배점이 그 축이라 바꾸면 기존 표본과
-        # 축이 어긋난다. 그래서 판정은 그대로 두고 "1/8단계"만 덧붙여, 위로 더
-        # 있다는 사실을 알린다(정확한 상단은 출처 링크의 원문에 있다).
-        # 단계가 1개뿐이거나 미상이면 종전과 완전히 동일한 한 줄이 나간다.
-        n_tp = rep.get("tp_ladder_count") or 0
-        # 2026-08-08 사용자 결정: "단계" 글자 삭제(그룹 채팅 폭 절약).
-        # 2026-08-15: 표시 상한 12 를 추출기(_LADDER_MAX_STEPS)에서 이리로 이동 —
-        # 실측(원문 103건) 분포는 8단에서 끝나 13단+ 는 산문 오염 가능성이 크다.
-        # '틀린 단계 수를 보여주느니 안 보여준다'는 컷은 유지하되, 저장값은 v5
-        # 등급 산식이 쓰므로 참 개수를 유지하고 표시만 자른다. 12 이하 사다리의
-        # 알림 양식은 종전과 바이트 단위로 동일(13단+ 는 종전에도 0 저장 → 무표기).
-        step = f"  1/{n_tp}" if 1 < n_tp <= 12 else ""
+    # 목표 = 판정용 유효 TP 목록의 첫 값 (2026-09-27 S2 D4/T5 — 단일 출처).
+    # 오염값 가드(entry < tp <= entry*4)도 그 목록이 이미 건다 — 종전 표시 직전
+    # 가드(0.25~4배, 2026-07-23 SOL 사고)는 이 출처로 흡수됐다.
+    tps = _display_tps(rep)
+    tp = tps[0] if tps else None
+    if tp and own_entry:
+        pct = (tp - own_entry) / own_entry * 100
+        # 다단계 목표 표기 (2026-07-27 사용자 승인, A안): 사다리면 **첫 목표(TP1)만**
+        # 보이고 "1/N" 으로 위가 더 있음을 알린다. N = 같은 유효 TP 목록 길이(D4).
+        # 2026-08-15 표시 상한 12(13단+ 는 산문 오염 가능성 — 무표기) 유지.
+        n_tp = len(tps)
+        tail = []
+        if 1 < n_tp <= 12:
+            tail.append(f"1/{n_tp}")
+        # 비현실 목표 (2026-09-27 사용자 결정 T6): 억제하지 않고 "(장기)" 라벨만.
+        if pct >= _LONG_TARGET_PCT:
+            tail.append("(장기)")
         _tp_krw = _krw(tp)
-        if _tp_krw:
-            # 2026-08-08 사용자 결정: 원 이후 띄어쓰기 삭제(그룹 채팅 폭 절약).
-            lines.append(f"    목표:  {_tp_krw}원({pct:+.1f}%){step}")
-        else:
-            lines.append(f"    목표:  ({pct:+.1f}%){step}")
+        # D2: % 기준을 라벨로 명시 — "진입+86.6%" (현재가 기준으로 오독 방지).
+        # 괄호 없이 한 칸 띄움 — "1,322원 진입+5.5% 1/3" 이 32칼럼에 들어간다
+        # (괄호형은 1천원대 사다리부터 34칼럼으로 넘쳤다).
+        head = (f"    목표:  {_tp_krw}원 진입{pct:+.1f}%" if _tp_krw
+                else f"    목표:  진입{pct:+.1f}%")
+        lines.extend(_with_suffix(head, " ".join(tail)))
     else:
         lines.append("    목표:  데이터 없음")
     if volume_rank:
-        lines.append(f"    거래:  {volume_rank}위")
+        # D17: 주간 리포트 '거래대금' 어휘와 통일 (시총 순위와 혼동 방지).
+        lines.append(f"    거래대금:  {volume_rank}위")
 
     # ── 52주 고저 + 현재 위치 바 (워쳐 notifier.py 표기 그대로, 2026-07-23 #9) ──
-    # 2026-08-17 UX: (1) 타점 블록 직후 빈줄 제거 (52주 바로 붙임), (2) 저가↔바
-    # 사이 빈줄 → _SEP 로 승격해 다른 블록 간 구분선과 시각적 일관성.
+    # 2026-09-27 S2 D5: 08-17 UX 때 저가↔바 사이에 넣은 _SEP 를 **뺐다** — 구분선이
+    # 바를 52주 블록에서 떼어 놓아 "└ 현재 16% 지점" 이 목표 진행률로 읽혔다
+    # (사용자 포함, 150/150). 바는 52주 범위 안 현재가 위치이고 라벨도 그대로 쓴다.
+    # D6: 주봉이 52개 미만(상장 1년 미만)이면 '52주' 대신 '상장후'.
     if week52 and current_krw:
-        high52, low52 = week52
+        high52, low52 = week52[0], week52[1]
+        _nw = week52[2] if len(week52) > 2 else None
+        blk = "상장후" if (_nw is not None and _nw < 52) else "52주"
         if high52 and low52 and high52 > 0 and low52 > 0:
             from_high = (current_krw - high52) / high52 * 100
             from_low = (current_krw - low52) / low52 * 100
-            lines.append("52주")
+            lines.append(blk)
             lines.append(f"    고가  {from_high:+.1f}% ({_fmt_krw(high52)}원)")
             lines.append(f"    저가  {from_low:+.1f}% ({_fmt_krw(low52)}원)")
             if high52 > low52:
                 pos = max(0, min(100, (current_krw - low52) / (high52 - low52) * 100))
                 filled = max(0, min(10, round(pos / 10)))
-                lines.append(_SEP)
                 lines.append("    " + "🟩" * filled + "⬜" * (10 - filled))
-                lines.append(f"    └ 현재 {pos:.0f}% 지점")
+                lines.append(f"    └ {blk} 범위 중 {pos:.0f}% 위치")
 
     # Zone 1 배지 재배치 (2026-08-17 E1, 사용자 결정 — 리스크 우선):
     # 세 그룹으로 버퍼링 후 순서대로 렌더 (라인 수 불변, 순서만 변경).
@@ -664,17 +773,34 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # StockTwits 소셜 심리 (2026-08-17). SOL/SUI/APT/TAO/WLD/TIA 등 최근 유행 알트
     # 커버 (Coin Metrics 미커버 자산 상당수 보완). 태그된 표본 <5는 이미 fetch
     # 단계에서 None 반환. ≥0.75 강한 매수 심리 / ≤0.30 강한 매도 심리.
+    # 2026-09-27 S2 D10: 표본 수 병기 + 소표본 극단값 숨김. 100%(또는 0%)인데
+    # 태그 표본이 10건 미만이면 배지를 내지 않는다(감사: 36/150 이 '100%' 였다).
+    # 표기는 "매수 7/8" 분수형 — 분모가 곧 n 이다. "(n=7)" 괄호형은 이 배지 줄을
+    # 32칼럼 밖으로 밀어 잘린다(실측 34~36칼럼). n 미상(구 호출부)이면 종전 % 표기.
     if stwits_bullish_ratio is not None:
-        if stwits_bullish_ratio >= 0.75:
-            positive_badges.append(
-                f"💬 소셜 매수세 {stwits_bullish_ratio*100:.0f}% (매수 유리)")
-        elif stwits_bullish_ratio <= 0.30:
-            risk_badges.append(
-                f"💬 소셜 매도세 {(1-stwits_bullish_ratio)*100:.0f}% (매수 부담)")
+        _sn = stwits_n if (stwits_n or 0) > 0 else None
+        _extreme = stwits_bullish_ratio >= 0.999 or stwits_bullish_ratio <= 0.001
+        _hide = _extreme and _sn is not None and _sn < _SOCIAL_EXTREME_MIN_N
+        if not _hide and stwits_bullish_ratio >= 0.75:
+            if _sn:
+                _k = round(stwits_bullish_ratio * _sn)
+                positive_badges.append(f"💬 소셜 매수 {_k}/{_sn} (매수 유리)")
+            else:
+                positive_badges.append(
+                    f"💬 소셜 매수세 {stwits_bullish_ratio*100:.0f}% (매수 유리)")
+        elif not _hide and stwits_bullish_ratio <= 0.30:
+            if _sn:
+                _k = round((1 - stwits_bullish_ratio) * _sn)
+                risk_badges.append(f"💬 소셜 매도 {_k}/{_sn} (매수 부담)")
+            else:
+                risk_badges.append(
+                    f"💬 소셜 매도세 {(1-stwits_bullish_ratio)*100:.0f}% (매수 부담)")
 
-    # 추세장 (2026-08-17 F3): ADX(14) ≥25 일 때만 표시. 라벨 없는 정보 배지.
+    # 추세 강도 (2026-08-17 F3): ADX(14) ≥25 일 때만 표시. 라벨 없는 정보 배지.
+    # 2026-09-27 S2 D9: ADX 에는 방향이 없는데 📈 가 상승을 암시해 '하락세'와
+    # 같이 뜨는 모순(14/150)이 났다 — 방향 중립 아이콘·문구로 교체.
     if adx14 is not None and adx14 >= 25:
-        info_badges.append(f"📈 추세장 (ADX {adx14:.0f})")
+        info_badges.append(f"〰️ 추세 강함 (ADX {adx14:.0f})")
 
     # RSI 자리 판정 (2026-08-07). 라벨 없는 정보 배지.
     if position and position[0]:
@@ -707,6 +833,14 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # funding_regime_flip 도 세퍼레이터 조건에 포함 (2026-08-03 R1 감사): 다른
     # 세 지표가 다 실패한 상태에서 레짐 배지만 있으면 세퍼레이터가 안 붙어
     # 목표가 행에 바로 이어지는 렌더 이슈가 있었다.
+    # 김프 표시 가드 (2026-09-27 S2 T7): 업비트·바이낸스 동명 다른 자산(BEAM −97%)
+    # 은 절대값이 터무니없다 — 설정 한도 초과면 행을 생략하고 경고 로그만 남긴다.
+    if kimchi_pct is not None:
+        from monitor.binance import kimchi_display_ok
+        if not kimchi_display_ok(kimchi_pct):
+            logger.warning("[텔레그램] %s 김프 %.2f%% 비정상(심볼 충돌 의심) - 표시 생략",
+                           coin_symbol, kimchi_pct)
+            kimchi_pct = None
     if (sentiment or kimchi_pct is not None or funding_rate is not None
             or (funding_regime_flip and funding_regime_flip.get("flipped"))
             or supply):
@@ -752,22 +886,15 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
         if btc_d is not None:
             lines.append(f"🌍 비트 점유율: {btc_d}%")
         if alt_s is not None:
-            if alt_s >= 75:
-                alt_label = "알트 매수 권장"
-            elif alt_s >= 50:
-                alt_label = "알트 매수 고려"
-            elif alt_s >= 25:
-                alt_label = "BTC 매수 고려"
-            else:
-                alt_label = "BTC 매수 권장"
-            lines.append(f"🪙 알트장: {alt_s} ({alt_label})")
+            lines.append(f"🪙 알트장: {alt_s} ({altseason_label(alt_s)})")
         if fng is not None:
             label_kr = _FNG_KR.get(sentiment.get("fear_greed_label", ""),
                                    sentiment.get("fear_greed_label", ""))
+            _fe = fng_emoji(fng)  # D18: 값 구간별 이모지(종전 😨 고정)
             if label_kr:
-                lines.append(f"😨 시장심리: {fng} ({label_kr})")
+                lines.append(f"{_fe} 시장심리: {fng} ({label_kr})")
             else:
-                lines.append(f"😨 시장심리: {fng}")
+                lines.append(f"{_fe} 시장심리: {fng}")
 
     # ── 출처 (URL 노출 없이 하이퍼링크, 최신순, 최대 5) ──
     lines.append(_SEP)
@@ -879,7 +1006,9 @@ def _pct(v) -> str:
 _WEEKLY_KST = timezone(timedelta(hours=9))
 
 # 각주 (plan §3 R5 / db_final_review §2-1) — 숫자는 실측 누적 종결률.
-_WEEKLY_FOOTNOTE = "ℹ️ 결과 확인 기준: 터치 후 7일 (168h 내 종결 57%)"
+# 2026-09-27 S2 W2: 종전 "터치 후 7일" 은 사실과 달랐다 — 판정창은 레벨별(720h 창
+# 57개, 가변창 다수)이라 만료·수익 40건 전부가 168h 를 넘겼다(보유 356h 표기와 충돌).
+_WEEKLY_FOOTNOTE = "ℹ️ 결과 확인 기준: 판정창 7~30일(레벨별)"
 
 
 def _kst_md(ts: float) -> str:
@@ -993,7 +1122,7 @@ def _outcome_stats_section(stats: dict, pool_days: int) -> list:
     return lines
 
 
-def _calibration_compact(cal: dict, ver: str = None) -> list:
+def _calibration_compact(cal: dict, ver: str = None, span: tuple = None) -> list:
     """🎚️ 등급 캘리브레이션 — 수학은 종전(analytics.calibration) 그대로, 표시만
     1줄/등급으로 압축한 판. 구 산식 병기는 제거했다(grade_ver 최신 표본만 본다).
 
@@ -1007,6 +1136,11 @@ def _calibration_compact(cal: dict, ver: str = None) -> list:
     vtxt = f"{ver} 표본, " if ver else ""
     lines = [_SEP, f"🎚️ <b>등급 캘리브레이션</b> ({vtxt}TP1 도달률, "
                    f"종결 {pooled['n']}건)"]
+    # W4 (2026-09-27 S2): 표본 기간·등급 기준 명시 — 같은 화면의 '판정 사유별'은
+    # 최근 N일 창이고 이 표는 grade_ver 전체 기간·수집 시점 등급이다.
+    _span = (f"{_kst_md(span[0])}~{_kst_md(span[1])} 수집분"
+             if span else "전체 기간")
+    lines.append(f"  (표본: {ver + ' ' if ver else ''}{_span} · 등급=수집 시점)")
     for g in cal.get("order") or ():
         b = (cal.get("buckets") or {}).get(g) or {}
         if not b.get("n"):
@@ -1176,6 +1310,7 @@ def render_weekly_report(rows_by_author: dict = None, now: float = None,
                          pool_days: int = None, milestones: list = None,
                          outcome_stats: dict = None, calibration_ver: str = None,
                          period: tuple = None, min_n: int = None,
+                         calibration_span: tuple = None,
                          top_authors: int = None, max_chars: int = None) -> str:
     """주간 성적 리포트 (2026-09-22 v2 — 지표 나열형 → 의사결정형).
 
@@ -1187,7 +1322,7 @@ def render_weekly_report(rows_by_author: dict = None, now: float = None,
       ⑤ 📋 판정 사유별 집계 (freqtrade /stats 형: n·비중·보유시간·실현%)
       ⑥ 🏆 작성자 랭킹 (E_LB 수학 불변, 표시만 상위 N + 역신호 확정)
       ⑦ 🎚️ 등급 캘리브레이션 (grade_ver 최신 표본만, 1줄/등급)
-      ⑨ 각주 1줄 (결과 확인 기준: 터치 후 7일)
+      ⑨ 각주 1줄 (결과 확인 기준: 판정창 7~30일, 레벨별)
 
     v2 인자(전부 선택):
       current / previous  — analytics.weekly.summary(...) 결과 + {"alerts": N}
@@ -1225,7 +1360,10 @@ def render_weekly_report(rows_by_author: dict = None, now: float = None,
     if current:
         alerts = current.get("alerts")
         head = f"알림 {alerts}건 · " if alerts is not None else ""
-        lines.append(f"📦 표본: {head}종결 {current.get('closed', 0)}건")
+        # W1 (2026-09-27 S2): 종결은 억제 터치까지 포함한 모집단이라 알림분을 병기
+        _ca = current.get("closed_alerted")
+        _ca_txt = f"(알림분 {_ca})" if _ca is not None else ""
+        lines.append(f"📦 표본: {head}종결 {current.get('closed', 0)}건{_ca_txt}")
     else:
         lines.append(f"📦 표본: 작성자 {len(rows_by_author)}명 · 종결 {total_rows}건")
 
@@ -1243,7 +1381,8 @@ def render_weekly_report(rows_by_author: dict = None, now: float = None,
                                  top_authors, reverse_confirmed))
 
     # ⑦ 등급 캘리브레이션 (최신 grade_ver 표본만, 1줄/등급)
-    lines.extend(_calibration_compact(calibration_result, calibration_ver))
+    lines.extend(_calibration_compact(calibration_result, calibration_ver,
+                                      calibration_span))
 
     # ⑨ 각주
     lines.append(_SEP)
