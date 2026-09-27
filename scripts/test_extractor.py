@@ -1017,6 +1017,28 @@ for _desc, _passed in _RV2_EX:
         ok += 1
 TOTAL_EXTRA += len(_RV2_EX)
 
+# 2026-09-27 사용자 제보(ARB 891): "Invalidation: $0.202" 는 작성자가 명시한 손절선 → SL 로 인식.
+# 산문 "invalidation of the setup" 은 라벨이 아니므로 SL 로 줍지 않는다.
+_inv_cases = [
+    ("- Entry zone: around $0.223\n- Invalidation: $0.202\n- Target: $0.278", 0.223,
+     dict(entry=0.223, sl=0.202, tp=0.278)),
+    ("Entry: 100\nInvalidation level: 94\nTarget: 115", 100.0, dict(entry=100.0, sl=94.0, tp=115.0)),
+    ("Entry 100. A daily close below 90 would mean invalidation of the setup. Target 115", 100.0,
+     dict(entry=100.0, sl=None, tp=115.0)),
+]
+for _txt, _cur, _want in _inv_cases:
+    _r = parse_setup(_txt, current_price=_cur)
+    _ok = (_r is not None and _close(_r["entry"], _want["entry"])
+           and ((_want["sl"] is None and _r.get("sl") is None)
+                or (_want["sl"] is not None and _r.get("sl") is not None
+                    and _close(_r["sl"], _want["sl"])))
+           and _close(_r["tp"], _want["tp"]))
+    print(("✅" if _ok else "❌"), "Invalidation 라벨 = SL:", _txt.splitlines()[1][:40] if "\n" in _txt else _txt[:40])
+    print(f"    → {_r}")
+    if _ok:
+        ok += 1
+TOTAL_EXTRA += len(_inv_cases)
+
 TOTAL = (len(CASES) + len(REAL_BUG_CASES) + TOTAL_EXTRA + len(TF_CASES)
          + len(WINDOW_CASES) + len(LADDER_CASES) + len(FAKE_NUMBER_CASES)
          + len(LADDER_N_CASES) + len(TPSALL_CASES))

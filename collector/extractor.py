@@ -67,7 +67,12 @@ _SL_LABEL = re.compile(
     # (실측 2건: BTC id=120 S→D 등급 폭락 → min_grade 필터에 막혀 알림 미발송).
     # (?:\s*\([^)]*\))? — "Stop Loss (SL): $1,820" 괄호 주석이 라벨·콜론 사이에 있어도
     # m.group(0) 에 콜론이 포함되어 is_spec=True 로 올바르게 분류된다.
-    r"(stop\s*loss|stop|\bsl\b|손절가?|손절|스탑|스톱)(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
+    # 2026-09-27 사용자 제보(ARB 891): "Invalidation: $0.202" 는 작성자가 명시한 손절선인데
+    # SL 라벨로 인식되지 않아 sl=None → judgment_mode tp_only·등급 R:R 미반영. 라벨형
+    # (뒤에 콜론/=)일 때만 인정 — 산문 "invalidation of the setup" 은 제외.
+    r"(stop\s*loss|stop|\bsl\b|손절가?|손절|스탑|스톱"
+    r"|invalidation(?:\s*(?:level|point|price|zone))?(?=\s*(?:\([^)]*\))?\s*[:=]))"
+    r"(?:\s*\([^)]*\))?\s*[:=]?\s*", re.I,
 )
 # 복수형 "TARGETS:" 도 받는다 (2026-07-27). 예전엔 `target(?!s)` 로 복수형을 배제했는데,
 # "Take-Profit Targets:" 헤더가 매칭돼 그 뒤 "TP1: 5.298" 대신 라벨 번호를 가리키던
