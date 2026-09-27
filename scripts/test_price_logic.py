@@ -4864,21 +4864,33 @@ _c1_idea = dict(title="ARMC long setup", url="https://tv.com/c1", author="ARM_au
                 description="Entry: 100\nStop loss: 94\nTarget 1: 115\nTarget 2: 130",
                 direction="long", age_minutes=30)
 with db.connect(_c1_path) as conn:
+    # 09-27 디버깅: 기준가는 가격체크와 같은 업비트 환산가(upbit_usd). CoinGecko 가는 달라도 무시.
+    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=97.0,
+                                    upbit_usd=101.0, rank=80, tier_icon="🥈"),
+                         dict(_c1_idea), {}, 5.0, lookup_followers=False)
+    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=101.0,
+                                    upbit_usd=97.0, rank=80, tier_icon="🥈"),
+                         dict(_c1_idea, url="https://tv.com/c2"), {}, 5.0,
+                         lookup_followers=False)
+    # 업비트가 없고 CoinGecko 만 있을 때: 진입가 ±3% 안 → 보류(None), 밖 → 판정.
     _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=101.0,
                                     rank=80, tier_icon="🥈"),
-                         dict(_c1_idea), {}, 5.0, lookup_followers=False)
-    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=97.0,
+                         dict(_c1_idea, url="https://tv.com/c3"), {}, 5.0,
+                         lookup_followers=False)
+    _rc_arm._ingest_idea(conn, dict(symbol="ARMC", ticker="KRW-ARMC", price_usd=110.0,
                                     rank=80, tier_icon="🥈"),
-                         dict(_c1_idea, url="https://tv.com/c2"), {}, 5.0,
+                         dict(_c1_idea, url="https://tv.com/c4"), {}, 5.0,
                          lookup_followers=False)
     conn.commit()
     _c1_rows = [dict(r) for r in conn.execute(
         "SELECT post_url, armed, armed_at, collected_at FROM levels ORDER BY id")]
 _arm_close(_c1_path)
 check("RV1-1 수집 시 현재가≥진입가 → armed=1·armed_at=collected_at / 아래 → armed=0",
-      len(_c1_rows) == 2
+      len(_c1_rows) == 4
       and _c1_rows[0]["armed"] == 1 and _c1_rows[0]["armed_at"] == _c1_rows[0]["collected_at"]
       and _c1_rows[1]["armed"] == 0 and _c1_rows[1]["armed_at"] is None)
+check("RV1-1b 업비트가 없고 CoinGecko 가 진입가 ±3% 안 → 무장 보류(가격체크 첫 판정) / 밖 → 판정",
+      len(_c1_rows) == 4 and _c1_rows[2]["armed"] is None and _c1_rows[3]["armed"] == 1)
 
 # RV1-2 (리뷰 #2): TradingView 행은 재파싱에서 텍스트가 숏이어도 만료하지 않는다
 # (수집 때 작성자 태그 long 이 우선했다). 텔레그램 행은 종전대로 reparse_invalid.
