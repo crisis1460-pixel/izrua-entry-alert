@@ -24,6 +24,7 @@
   동일 - 호출부는 아직 수정하지 않는다(활성화는 사용자 확정 후 별도 작업).
 """
 
+import math
 import html
 import json
 import logging
@@ -829,16 +830,17 @@ def format_social(social: Optional[dict]) -> Optional[str]:
 
 
 def _krw_fmt(v: float) -> str:
-    """원화 가격 표기 — 업비트 호가 단위 자릿수(2026-09-28 골든셋 발견: 100원 미만 코인이
-    정수로 반올림돼 '진입 9원 → 목표 9원 +1.8%' 처럼 값이 구분되지 않았다).
-    100원 이상 정수, 10~100원 소수 2자리, 1~10원 3자리, 1원 미만 4자리."""
+    """원화 가격 표기 — **업비트 KRW 호가 단위와 같은 자릿수**(2026-09-28 골든셋 발견: 100원
+    미만 코인이 정수로 반올림돼 '진입 9원 → 목표 9원 +1.8%' 처럼 값이 구분되지 않았다).
+    업비트 /v1/orderbook/instruments 실측(09-28): 100원 이상 호가 1원+ → 정수, 그 아래는
+    가격 자릿수보다 두 단계 아래가 호가 단위 — 10~100원 0.1 · 1~10원 0.01 · 0.1~1원 0.001 ·
+    0.001~0.01원 0.00001(PEPE) · 0.0001~0.001원 0.000001(BTT)."""
+    if not v or v <= 0:
+        return f"{v or 0:,.0f}"
     if v >= 100:
         return f"{v:,.0f}"
-    if v >= 10:
-        return f"{v:.2f}"
-    if v >= 1:
-        return f"{v:.3f}"
-    return f"{v:.4f}"
+    decimals = max(0, 2 - math.floor(math.log10(v)))
+    return f"{v:.{decimals}f}"
 
 
 def _krw_short_range(lo: float, hi: float) -> str:
@@ -856,7 +858,7 @@ def _krw_short(v: float) -> str:
         return f"{v / 1e8:.2f}억"
     if v >= 1e5:
         return f"{v / 1e4:,.0f}만"
-    return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+    return _krw_fmt(v)
 
 
 def _fit_price(base: str, tails: list, fallback: str = None, allow_bare: bool = True) -> str:
@@ -1823,8 +1825,8 @@ def render_volume_spike_alert(coin: str, multiplier: float,
 
 
 def _fmt_krw(v: float) -> str:
-    """1원 미만(SHIB 등)은 소수 표기, 이상은 정수 콤마."""
-    return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+    """원화 가격 — _krw_fmt(업비트 호가 단위 자릿수)와 같은 규칙(09-28 통일)."""
+    return _krw_fmt(v)
 
 
 def _fmt_usd_notional(v: float) -> str:
