@@ -828,6 +828,28 @@ def format_social(social: Optional[dict]) -> Optional[str]:
     return f"💬 소셜: 매도 우세 · {V_CAUTION}"
 
 
+def _krw_fmt(v: float) -> str:
+    """원화 가격 표기 — 업비트 호가 단위 자릿수(2026-09-28 골든셋 발견: 100원 미만 코인이
+    정수로 반올림돼 '진입 9원 → 목표 9원 +1.8%' 처럼 값이 구분되지 않았다).
+    100원 이상 정수, 10~100원 소수 2자리, 1~10원 3자리, 1원 미만 4자리."""
+    if v >= 100:
+        return f"{v:,.0f}"
+    if v >= 10:
+        return f"{v:.2f}"
+    if v >= 1:
+        return f"{v:.3f}"
+    return f"{v:.4f}"
+
+
+def _krw_short_range(lo: float, hi: float) -> str:
+    """범위 짧은 표기 'a~b'. 두 값이 같은 문자열로 뭉개지면(BTC '1.06억~1.06억',
+    09-28 골든셋 발견) 억 단위 자릿수를 3자리로 늘리고, 그래도 같으면 한 값만 쓴다."""
+    a, b = _krw_short(lo), _krw_short(hi)
+    if a == b and lo >= 1e8:
+        a, b = f"{lo / 1e8:.3f}억", f"{hi / 1e8:.3f}억"
+    return a if a == b else f"{a}~{b}"
+
+
 def _krw_short(v: float) -> str:
     """진입 범위가 32칼럼을 넘을 때만 쓰는 짧은 원화 표기(1.30억·1,234만·1,234)."""
     if v >= 1e8:
@@ -930,8 +952,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     def _krw(usd_value):
         if not usd_value or not usdt_krw:
             return None
-        v = usd_value * usdt_krw
-        return f"{v:,.0f}" if v >= 1 else f"{v:.4f}"
+        return _krw_fmt(usd_value * usdt_krw)
 
     # 가격 블록 v3c (2026-09-27 대표 확정 — 줄넘김 0, '오와 열'): 라벨 앞 2칸·콜론 뒤 1칸
     # ('  현재: ') — 현재·진입·목표 값이 같은 칼럼(8)에서 시작하고 52주 하위 줄
@@ -954,8 +975,7 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
                          f" (현재{_gap:+.0f}%)", f" ({_gap:+.0f}%)"]
     if lo is not None and hi is not None and hi > lo and _krw(lo):
         lines.append(_fit_price(f"  진입: {_krw(lo)}~{_krw(hi)}원", gap_tails,
-                                fallback=f"  진입: {_krw_short(lo * usdt_krw)}"
-                                         f"~{_krw_short(hi * usdt_krw)}원"))
+                                fallback=f"  진입: {_krw_short_range(lo * usdt_krw, hi * usdt_krw)}원"))
     elif entry_rep and _krw(entry_rep):
         lines.append(_fit_price(f"  진입: {_krw(entry_rep)}원", gap_tails))
     # 손절 행은 표시하지 않는다(사용자 결정 - 데이터는 저장·등급 계산에 계속 사용)

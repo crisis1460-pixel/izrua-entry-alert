@@ -26,7 +26,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -35,33 +35,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
 
-      # 각 파일을 별도 프로세스로 실행한다. 테스트들이 settings.SETTINGS 를 전역으로
-      # 덮어쓰기 때문에(특히 db_path) 한 프로세스에 모으면 서로 오염된다 —
-      # 2026-07-26 감사에서 "파일별 독립 실행이 전제"임이 확인됐다.
-      # 하나가 실패해도 나머지를 마저 돌려 전체 그림을 보고 끝에 종합 판정한다.
-      - name: 테스트 9종
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          set +e
-          FAILED=""
-          for t in test_extractor test_grading test_price_logic test_ranking \
-                   test_weekly_report test_cycle test_show_status test_resilience \
-                   test_infra; do
-            echo "::group::$t"
-            python "scripts/$t.py"
-            code=$?
-            echo "::endgroup::"
-            if [ $code -ne 0 ]; then
-              FAILED="$FAILED $t"
-              echo "::error::$t 실패 (exit $code)"
-            fi
-          done
-          if [ -n "$FAILED" ]; then
-            echo "실패한 테스트:$FAILED"
-            exit 1
-          fi
-          echo "테스트 9종 전부 통과"
+      # 2026-09-28 최종안 #1: 테스트 **전부**(scripts/test_*.py 자동 수집) — 목록·판정은
+      # scripts/run_tests.sh 한 곳에서(로컬과 동일). exit code 와 줄 머리 ❌ 를 둘 다 본다.
+      # push 후 초록 확인 필수, 빨간불이면 30분 내 수리 또는 되돌림, 초록 전 다음 배포 금지.
+      - name: 테스트 전체
+        run: bash scripts/run_tests.sh
 
       - name: 비밀값 스캔
         run: python scripts/check_secrets.py

@@ -42,3 +42,7 @@ Thumbs.db
 # 사내 문서 보관소 (2026-09-27 대표 결정: 공개 저장소 비공개 전환 — 앞으로만).
 # 로컬 izrua_company/ 는 그대로 쓰되 커밋하지 않는다. 백업: Desktop\izrua_company\entry_alert_docs
 izrua_company/
+
+# SQLite WAL 부속 파일 — 읽기 전용 열람(건강표·분석)에서도 생긴다. 커밋 금지(2026-09-28).
+data/*.db-shm
+data/*.db-wal

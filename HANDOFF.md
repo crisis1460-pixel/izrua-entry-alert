@@ -1,3 +1,6 @@
+> **2026-09-28: 이 문서는 더 이상 갱신하지 않는다.** 현재 상태는 로컬 `izrua_company/CURRENT.md`(비공개),
+> 결정 이력은 `izrua_company/DECISIONS.md`. 테스트는 `bash scripts/run_tests.sh`.
+
 # 인수인계 — izrua-entry-alert 고도화 세션용 컨텍스트
 
 > 새 세션 시작: "C:\Users\User\Desktop\izrua_entry_alert\HANDOFF.md 읽고 시작해" 한 줄.

@@ -1,0 +1,36 @@
+name: health-report
+
+# 주간 건강표 (2026-09-28 대표 승인 개발 절차 #4, CTO 내부용).
+# 레포에 커밋된 data/levels.db 를 **읽기 전용**으로 열어 지표 표를 step summary 에만
+# 남긴다. 텔레그램 발송 없음(대표 결정 — 건강/CI 정보는 대표에게 보내지 않는다),
+# data/ 커밋백 없음 — DB 라이터는 price-check.yml 하나뿐이라는 불변식 유지.
+on:
+  schedule:
+    - cron: "30 0 * * 1"   # 매주 월 00:30 UTC (= 09:30 KST)
+  workflow_dispatch:
+
+concurrency:
+  group: health-report
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # CI 상태(tests.yml 최신 결론) 조회용 — 기본 GITHUB_TOKEN 만 사용
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"  # tests.yml / price-check.yml 과 일치
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 주간 건강표
+        env:
+          PYTHONIOENCODING: utf-8
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/health_report.py

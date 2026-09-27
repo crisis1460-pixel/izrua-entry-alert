@@ -804,8 +804,11 @@ _repo_root = Path(__file__).resolve().parent.parent
 _tests_yml = (_repo_root / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 check("수리6: tests.yml 이 python 3.12 를 사용(price-check.yml/weekly-report.yml 과 일치)",
       'python-version: "3.12"' in _tests_yml)
-check("수리6(등록 확인): tests.yml 테스트 목록에 test_resilience 등록됨",
-      "test_resilience" in _tests_yml)
+# 2026-09-28: tests.yml 은 scripts/run_tests.sh 로 scripts/test_*.py 를 자동 수집한다.
+_runner = (_repo_root / "scripts" / "run_tests.sh").read_text(encoding="utf-8")
+check("수리6(등록 확인): tests.yml → run_tests.sh 가 scripts/test_*.py 전부 수집(test_resilience 포함)",
+      "scripts/run_tests.sh" in _tests_yml and "scripts/test_*.py" in _runner
+      and (_repo_root / "scripts" / "test_resilience.py").exists())
 
 _pc_yml = (_repo_root / ".github" / "workflows" / "price-check.yml").read_text(encoding="utf-8")
 check("수리7: push 3회 실패 시 ::warning 대신 ::error 로 실패를 표면화",

@@ -1,0 +1,2457 @@
+[
+ {
+  "id": "r367",
+  "inputs": {
+   "alert_id": 367,
+   "kind": "touch",
+   "coin_symbol": "ONDO",
+   "now": 1787984656.105216,
+   "current_krw": 484.41499999999996,
+   "usdt_krw": 1390.0,
+   "cluster": [
+    {
+     "id": 480,
+     "coin_symbol": "ONDO",
+     "entry_usd": 0.3485,
+     "sl_usd": 0.315,
+     "tp_usd": 0.3675,
+     "tps_usd": "[0.3675, 0.385, 0.405, 0.43, 0.46, 0.5, 0.55, 0.6]",
+     "tp_ladder_count": 8,
+     "score": 44.0,
+     "grade": "C",
+     "mcap_tier_icon": "🥇",
+     "mcap_rank": 50,
+     "post_age_minutes": 227.6768214503924,
+     "collected_at": 1787552096.6137214,
+     "author": "BitmexSignalsFee",
+     "author_followers": null,
+     "author_hit_rate": null,
+     "author_hit_count": null,
+     "source": "telegram",
+     "post_url": "https://t.me/BitmexSignalsFee/9449"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.9,
+    "fear_greed": 68
+   },
+   "week52": [
+    1138.37525,
+    300.3373,
+    52
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": -0.2573936267771937,
+   "volume_rank": 14,
+   "funding_rate": -0.004,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "주의",
+    "하락세·RSI45"
+   ],
+   "adx14": 13.6851391544933,
+   "dex_stats": {
+    "liquidity_usd": 1413370.05,
+    "buy_ratio_24h": 0.453
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ONDO</b>\n🥇 시총 50위 · C등급 · 글 5일 전\n✍️ @BitmexSignalsFee\n📡 텔레그램 채널 · 적중률 미집계\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 484원\n  진입: 484원\n  목표: 511원 진입+5.5% 1/8\n  거래대금: 14위\n52주\n  고가: -57.4% (1,138원)\n  저가: +61.3% (300원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 52주 범위 중 22% 위치\n🌡️ 자리: 하락세·RSI45 · 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 58.9%\n😀 시장심리: 68 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://t.me/BitmexSignalsFee/9449\">출처1</a>"
+ },
+ {
+  "id": "r374",
+  "inputs": {
+   "alert_id": 374,
+   "kind": "touch",
+   "coin_symbol": "UNI",
+   "now": 1788017707.2123888,
+   "current_krw": 6338.4,
+   "usdt_krw": 1390.0,
+   "cluster": [
+    {
+     "id": 551,
+     "coin_symbol": "UNI",
+     "entry_usd": 4.56,
+     "sl_usd": 4.2366,
+     "tp_usd": 4.7843,
+     "tps_usd": "[4.7843, 4.9501]",
+     "tp_ladder_count": 2,
+     "score": 47.0,
+     "grade": "C",
+     "mcap_tier_icon": "🥇",
+     "mcap_rank": 35,
+     "post_age_minutes": 1486.2662136832873,
+     "collected_at": 1788017622.975833,
+     "author": "Terminator_Crypto_Analyst",
+     "author_followers": 26,
+     "author_hit_rate": 0.3,
+     "author_hit_count": 10,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/UNIUSDT/dPtsRFZ4-UNI-USDT-H3-Testing-KEY-highs/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.0,
+    "fear_greed": 68
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.053219456520362245,
+   "volume_rank": 71,
+   "funding_rate": 0.01,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI62"
+   ],
+   "adx14": 32.428706963031054,
+   "dex_stats": {
+    "liquidity_usd": 35837650.01,
+    "buy_ratio_24h": 0.447
+   },
+   "active_addr_pctile": 100.0,
+   "stwits_bullish_ratio": 0.882,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 35.0,
+    "rvol_d20": 0.7,
+    "low30_pct": 2.4,
+    "upbit_warning": null,
+    "post_move_pct": 1.0,
+    "social": {
+     "bull_ratio": 0.42,
+     "n": 25,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>UNI</b>\n🥇 시총 35위 · C등급 · 글 1일 전\n✍️ @Terminator_Crypto_Analyst\n📊 워쳐 적중률: 30% (10건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 6,338원\n  진입: 6,338원\n  목표: 6,650원 진입+4.9% 1/2\n  거래대금: 71위\n💬 소셜: 매도 우세 · 주의\n〰️ 추세: 강함 (ADX 32)\n🌡️ 자리: 상승세·RSI62 · 관망\n🔊 거래량: 0.7배 · 관망\n📏 30일 저점: +2% · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.0% · 알트↑35%\n😀 시장심리: 68 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/UNIUSDT/dPtsRFZ4-UNI-USDT-H3-Testing-KEY-highs/\">출처1</a>"
+ },
+ {
+  "id": "r375",
+  "inputs": {
+   "alert_id": 375,
+   "kind": "touch",
+   "coin_symbol": "VET",
+   "now": 1788032338.9162307,
+   "current_krw": 9.424025,
+   "usdt_krw": 1391.0,
+   "cluster": [
+    {
+     "id": 552,
+     "coin_symbol": "VET",
+     "entry_usd": 0.006775,
+     "sl_usd": null,
+     "tp_usd": 0.006948,
+     "tps_usd": "[0.006948, 0.007208, 0.007515]",
+     "tp_ladder_count": 3,
+     "score": 58.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥈",
+     "mcap_rank": 93,
+     "post_age_minutes": 311.6833146929741,
+     "collected_at": 1788031762.000524,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/VETUSDT/7FXse6Mv-VETUSDT-Traders-watch-VeChain-10-upside/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.0,
+    "fear_greed": 68
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.04212738942787458,
+   "volume_rank": 80,
+   "funding_rate": -0.007,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "주의",
+    "과열·RSI74"
+   ],
+   "adx14": 42.48665273145574,
+   "dex_stats": null,
+   "active_addr_pctile": 100.0,
+   "stwits_bullish_ratio": 0.875,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.875,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>VET</b>\n🥈 시총 93위·B등급·글 5시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 9.424원\n  진입: 9.424원\n  목표: 9.665원 진입+2.6% 1/3\n  거래대금: 80위\n〰️ 추세: 강함 (ADX 42)\n🌡️ 자리: 과열·RSI74 · 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.0%\n😀 시장심리: 68 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/VETUSDT/7FXse6Mv-VETUSDT-Traders-watch-VeChain-10-upside/\">출처1</a>"
+ },
+ {
+  "id": "r381",
+  "inputs": {
+   "alert_id": 381,
+   "kind": "touch",
+   "coin_symbol": "JTO",
+   "now": 1788090661.6594598,
+   "current_krw": 673.5272,
+   "usdt_krw": 1387.0,
+   "cluster": [
+    {
+     "id": 560,
+     "coin_symbol": "JTO",
+     "entry_usd": 0.4856,
+     "sl_usd": null,
+     "tp_usd": 0.496,
+     "tps_usd": "[0.496, 0.5113, 0.5273]",
+     "tp_ladder_count": 3,
+     "score": 50.0,
+     "grade": "C",
+     "mcap_tier_icon": "🥉",
+     "mcap_rank": 143,
+     "post_age_minutes": 180.41416852474214,
+     "collected_at": 1788090078.8515055,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/JTOUSDT/5WtGpFyO-JTOUSDT-Forming-Bullish-Wave/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.5,
+    "fear_greed": 69
+   },
+   "week52": [
+    1582.78892,
+    417.586864,
+    30
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": 0.033270324722823694,
+   "volume_rank": 114,
+   "funding_rate": -0.004,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "주의",
+    "하락세·RSI39"
+   ],
+   "adx14": 15.961029004609696,
+   "dex_stats": {
+    "liquidity_usd": 1599177.39,
+    "buy_ratio_24h": 0.616
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>JTO</b>\n🥉 시총 143위·C등급·글 3시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 674원\n  진입: 674원\n  목표: 688원 진입+2.1% 1/3\n  거래대금: 114위\n상장후\n  고가: -57.4% (1,583원)\n  저가: +61.3% (418원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 상장후 범위 중 22% 위치\n🌡️ 자리: 하락세·RSI39 · 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.5%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/JTOUSDT/5WtGpFyO-JTOUSDT-Forming-Bullish-Wave/\">출처1</a>"
+ },
+ {
+  "id": "r387",
+  "inputs": {
+   "alert_id": 387,
+   "kind": "touch",
+   "coin_symbol": "OP",
+   "now": 1788119770.7816238,
+   "current_krw": 123.7698,
+   "usdt_krw": 1386.0,
+   "cluster": [
+    {
+     "id": 562,
+     "coin_symbol": "OP",
+     "entry_usd": 0.0893,
+     "sl_usd": null,
+     "tp_usd": 0.0927,
+     "tps_usd": "[0.0927, 0.0968, 0.1015]",
+     "tp_ladder_count": 3,
+     "score": 60.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥉",
+     "mcap_rank": 168,
+     "post_age_minutes": 454.6189617276192,
+     "collected_at": 1788104825.1387596,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/OPUSDT/WrnjeV1X-OPUSDT-may-continue-its-trend-after-correction/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.5,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.2763714628121494,
+   "volume_rank": 155,
+   "funding_rate": 0.001,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "주의",
+    "하락세·RSI41"
+   ],
+   "adx14": 25.06021805579042,
+   "dex_stats": {
+    "liquidity_usd": 1080672.6,
+    "buy_ratio_24h": 0.491
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 55.0,
+    "rvol_d20": 1.24,
+    "low30_pct": 9.6,
+    "upbit_warning": [
+     "TRADING_VOLUME_SOARING"
+    ],
+    "post_move_pct": 12.0,
+    "social": null
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>OP</b> ⚠️급증·관심\n🥉 시총 168위·B등급·글 11시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 124원\n  진입: 124원\n  목표: 128원 진입+3.8% 1/3\n  거래대금: 155위\n〰️ 추세: 강함 (ADX 25)\n🌡️ 자리: 하락세·RSI41 · 주의\n🔊 거래량: 1.2배 · 매수 우호\n📏 30일 저점: +10% · 매수 우호\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.5% · 알트↑55%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/OPUSDT/WrnjeV1X-OPUSDT-may-continue-its-trend-after-correction/\">출처1</a>"
+ },
+ {
+  "id": "r389",
+  "inputs": {
+   "alert_id": 389,
+   "kind": "touch",
+   "coin_symbol": "TAO",
+   "now": 1788132254.5327437,
+   "current_krw": 319930.0,
+   "usdt_krw": 1391.0,
+   "cluster": [
+    {
+     "id": 538,
+     "coin_symbol": "TAO",
+     "entry_usd": 230.0,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 20.0,
+     "grade": "D",
+     "mcap_tier_icon": "🥇",
+     "mcap_rank": 42,
+     "post_age_minutes": 441.23692626158396,
+     "collected_at": 1787915634.2194445,
+     "author": "Hamzatheinsider",
+     "author_followers": 308,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/TAOUSDT/AaeoAXzx-TAO-4H-SWING-TRADE/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.6,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.13270934470278084,
+   "volume_rank": 95,
+   "funding_rate": 0.0,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "RSI56"
+   ],
+   "adx14": 34.13489186567133,
+   "dex_stats": null,
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 0.929,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.929,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>TAO</b>\n🥇 시총 42위 · D등급 · 글 2일 전\n✍️ @Hamzatheinsider\n👥 팔로워 308 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 319,930원\n  진입: 319,930원\n  목표: 데이터 없음\n  거래대금: 95위\n〰️ 추세: 강함 (ADX 34)\n🌡️ 자리: RSI56 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.6%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/TAOUSDT/AaeoAXzx-TAO-4H-SWING-TRADE/\">출처1</a>"
+ },
+ {
+  "id": "r390",
+  "inputs": {
+   "alert_id": 390,
+   "kind": "touch",
+   "coin_symbol": "BTC",
+   "now": 1788132254.5327437,
+   "current_krw": 108298252.39999999,
+   "usdt_krw": 1391.0,
+   "cluster": [
+    {
+     "id": 554,
+     "coin_symbol": "BTC",
+     "entry_usd": 77856.4,
+     "sl_usd": 77739.8,
+     "tp_usd": 78389.7,
+     "tps_usd": "[78389.7]",
+     "tp_ladder_count": 0,
+     "score": 42.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 554.017913977305,
+     "collected_at": 1788061116.0822144,
+     "author": "davidjulien369",
+     "author_followers": 1200,
+     "author_hit_rate": 0.7647058823529411,
+     "author_hit_count": 17,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT.P/iW4iod6l-Long-trade/"
+    },
+    {
+     "id": 556,
+     "coin_symbol": "BTC",
+     "entry_usd": 77600.0,
+     "sl_usd": null,
+     "tp_usd": 77860.0,
+     "tps_usd": "[77860.0, 78712.0, 79548.0]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 826.8845806439717,
+     "collected_at": 1788061116.2363257,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/XT47u8IR-BTCUSDT-LONG-SET-UP-ALERT/"
+    },
+    {
+     "id": 558,
+     "coin_symbol": "BTC",
+     "entry_usd": 77150.0,
+     "sl_usd": 76300.0,
+     "tp_usd": 79500.0,
+     "tps_usd": "[79500.0, 80500.0, 82000.0]",
+     "tp_ladder_count": 3,
+     "score": 44.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 1074.8845806439717,
+     "collected_at": 1788061116.2441247,
+     "author": "James_fx1",
+     "author_followers": 112,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/jFuPmSUs-BTC-USDT-4H-Liquidity-Sweep-Before-The-Next-Leg/"
+    }
+   ],
+   "rep_index": 1,
+   "sentiment": {
+    "btc_dominance": 59.6,
+    "fear_greed": 69
+   },
+   "week52": [
+    254500893.14,
+    67144916.488,
+    52
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": 0.009536393212208822,
+   "volume_rank": 8,
+   "funding_rate": 0.008,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "주의",
+    "과열·RSI71"
+   ],
+   "adx14": 52.29153934450958,
+   "dex_stats": null,
+   "active_addr_pctile": 16.7,
+   "stwits_bullish_ratio": 0.75,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.75,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>BTC</b>\n💎 시총 1위 · B등급 · 글 1일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 108,298,252원\n  진입: 1.07억~1.08억원\n  목표: 108,303,260원 +0% 1/3\n  거래대금: 8위\n52주\n  고가: -57.4% (254,500,893원)\n  저가: +61.3% (67,144,916원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 52주 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 52)\n🌡️ 자리: 과열·RSI71 · 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.6%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/BTCUSDT.P/iW4iod6l-Long-trade/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/BTCUSDT/XT47u8IR-BTCUSDT-LONG-SET-UP-ALERT/\">출처2</a> · <a href=\"https://www.tradingview.com/chart/BTCUSDT/jFuPmSUs-BTC-USDT-4H-Liquidity-Sweep-Before-The-Next-Leg/\">출처3</a>"
+ },
+ {
+  "id": "r391",
+  "inputs": {
+   "alert_id": 391,
+   "kind": "touch",
+   "coin_symbol": "DOT",
+   "now": 1788132976.8253775,
+   "current_krw": 1146.4389999999999,
+   "usdt_krw": 1393.0,
+   "cluster": [
+    {
+     "id": 553,
+     "coin_symbol": "DOT",
+     "entry_usd": 0.823,
+     "sl_usd": 0.75,
+     "tp_usd": 0.86,
+     "tps_usd": "[0.86, 0.9, 0.95, 1.0, 1.06, 1.13, 1.21, 1.3, 1.4]",
+     "tp_ladder_count": 9,
+     "score": 34.0,
+     "grade": "D",
+     "mcap_tier_icon": "🥈",
+     "mcap_rank": 57,
+     "post_age_minutes": 32.005496760209404,
+     "collected_at": 1788032307.3345551,
+     "author": "BitmexSignalsFee",
+     "author_followers": null,
+     "author_hit_rate": null,
+     "author_hit_count": null,
+     "source": "telegram",
+     "post_url": "https://t.me/BitmexSignalsFee/9454"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.6,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.06052672325210884,
+   "volume_rank": 123,
+   "funding_rate": 0.006,
+   "supply": [
+    "우호",
+    "투매 진행"
+   ],
+   "position": [
+    "주의",
+    "하락세·RSI45"
+   ],
+   "adx14": 26.011418567502705,
+   "dex_stats": null,
+   "active_addr_pctile": 10.0,
+   "stwits_bullish_ratio": 0.75,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 72.0,
+    "rvol_d20": 1.9,
+    "low30_pct": 22.0,
+    "upbit_warning": [
+     "DEPOSIT_AMOUNT_SOARING",
+     "PRICE_FLUCTUATIONS"
+    ],
+    "post_move_pct": -7.0,
+    "social": {
+     "bull_ratio": 0.42,
+     "n": 25,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>DOT</b> ⚠️입금·주의\n🥈 시총 57위 · D등급 · 글 1일 전\n✍️ @BitmexSignalsFee\n📡 텔레그램 채널 · 적중률 미집계\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 1,146원\n  진입: 1,146원\n  목표: 1,198원 진입+4.5% 1/9\n  거래대금: 123위\n💬 소셜: 매도 우세 · 주의\n〰️ 추세: 강함 (ADX 26)\n🌡️ 자리: 하락세·RSI45 · 주의\n🔊 거래량: 1.9배 · 과열 주의\n📏 30일 저점: +22% · 추격 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 매수 우호\n🌍 비트 점유율: 59.6% · 알트↑72%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://t.me/BitmexSignalsFee/9454\">출처1</a>"
+ },
+ {
+  "id": "r392",
+  "inputs": {
+   "alert_id": 392,
+   "kind": "touch",
+   "coin_symbol": "AWE",
+   "now": 1788133456.0454772,
+   "current_krw": 84.72226,
+   "usdt_krw": 1393.0,
+   "cluster": [
+    {
+     "id": 527,
+     "coin_symbol": "AWE",
+     "entry_usd": 0.06082,
+     "sl_usd": null,
+     "tp_usd": 0.08738,
+     "tps_usd": "[0.08738]",
+     "tp_ladder_count": 0,
+     "score": 30.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": 231,
+     "post_age_minutes": 1497.8845895210902,
+     "collected_at": 1787842832.075926,
+     "author": "Jesbryan",
+     "author_followers": 37,
+     "author_hit_rate": 1.0,
+     "author_hit_count": 4,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/AWEUSDT.P/gYN78IIV-AWE/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.6,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.032226297700009725,
+   "volume_rank": 194,
+   "funding_rate": 0.005,
+   "supply": [
+    "우호",
+    "투매 진행"
+   ],
+   "position": [
+    "최적",
+    "60일지지·상승세"
+   ],
+   "adx14": 9.62598414071268,
+   "dex_stats": {
+    "liquidity_usd": 427477.09,
+    "buy_ratio_24h": 0.364
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>AWE</b>\n· 시총 231위 · D등급 · 글 4일 전\n✍️ @Jesbryan\n👥 팔로워 37 · 적중률 소표본\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 84.72원\n  진입: 84.72원\n  목표: 122원 진입+43.7%\n  거래대금: 194위\n🌡️ 자리: 60일지지 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 매수 우호\n🌍 비트 점유율: 59.6%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/AWEUSDT.P/gYN78IIV-AWE/\">출처1</a>"
+ },
+ {
+  "id": "r394",
+  "inputs": {
+   "alert_id": 394,
+   "kind": "touch",
+   "coin_symbol": "ETH",
+   "now": 1788178285.9470475,
+   "current_krw": 3375792.0,
+   "usdt_krw": 1379.0,
+   "cluster": [
+    {
+     "id": 569,
+     "coin_symbol": "ETH",
+     "entry_usd": 2448.0,
+     "sl_usd": null,
+     "tp_usd": 2481.0,
+     "tps_usd": "[2481.0]",
+     "tp_ladder_count": 0,
+     "score": 32.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 1409.5948482672372,
+     "collected_at": 1788177718.6968827,
+     "author": "the_exploiter",
+     "author_followers": 68,
+     "author_hit_rate": 0.0,
+     "author_hit_count": 1,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/FfjLqiVj-Ethereum-Intraday-Long-Setup/"
+    },
+    {
+     "id": 567,
+     "coin_symbol": "ETH",
+     "entry_usd": 2430.0,
+     "sl_usd": null,
+     "tp_usd": 2468.0,
+     "tps_usd": "[2468.0, 2517.0, 2568.0]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 251.94484826723735,
+     "collected_at": 1788177718.6925135,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/dHDkE4dr-ETHUSDT-Descending-Wedge-High-R-R-Zone/"
+    }
+   ],
+   "rep_index": 1,
+   "sentiment": {
+    "btc_dominance": 59.7,
+    "fear_greed": 62
+   },
+   "week52": [
+    7933111.2,
+    2092991.04,
+    30
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": -0.00845144160719638,
+   "volume_rank": 5,
+   "funding_rate": 0.002,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승중·RSI68"
+   ],
+   "adx14": 46.631932494955706,
+   "dex_stats": null,
+   "active_addr_pctile": 36.7,
+   "stwits_bullish_ratio": 0.333,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.333,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ETH</b>\n💎 시총 2위·B등급·글 4시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 3,375,792원\n  진입: 3,350,970~3,375,792원\n  목표: 3,403,372원 진입+2% 1/3\n  거래대금: 5위\n상장후\n  고가: -57.4% (7,933,111원)\n  저가: +61.3% (2,092,991원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 상장후 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 47)\n🌡️ 자리: 상승중·RSI68 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.7%\n😀 시장심리: 62 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ETHUSDT/dHDkE4dr-ETHUSDT-Descending-Wedge-High-R-R-Zone/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/ETHUSDT/FfjLqiVj-Ethereum-Intraday-Long-Setup/\">출처2</a>"
+ },
+ {
+  "id": "r400",
+  "inputs": {
+   "alert_id": 400,
+   "kind": "touch",
+   "coin_symbol": "LPT",
+   "now": 1788192692.5287888,
+   "current_krw": 1847.8600000000001,
+   "usdt_krw": 1379.0,
+   "cluster": [
+    {
+     "id": 570,
+     "coin_symbol": "LPT",
+     "entry_usd": 1.34,
+     "sl_usd": null,
+     "tp_usd": 1.36,
+     "tps_usd": "[1.36, 1.4, 1.445]",
+     "tp_ladder_count": 3,
+     "score": 36.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 429.85304201046625,
+     "collected_at": 1788192277.1834252,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/LPTUSDT/LBOBgPRY-LPTUSDT-It-can-go-up-from-this-zone/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.2,
+    "fear_greed": 62
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.2688010817471487,
+   "volume_rank": 267,
+   "funding_rate": 0.005,
+   "supply": [
+    "우호",
+    "투매 진행"
+   ],
+   "position": [
+    "우호",
+    "장기바닥·주RSI29"
+   ],
+   "adx14": 28.249651657459133,
+   "dex_stats": {
+    "liquidity_usd": 31569.4,
+    "buy_ratio_24h": 0.36
+   },
+   "active_addr_pctile": 93.3,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 100.0,
+    "rvol_d20": 3.35,
+    "low30_pct": -3.1,
+    "upbit_warning": null,
+    "post_move_pct": 4.0,
+    "social": null
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>LPT</b>\nD등급 · 글 7시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 1,848원\n  진입: 1,848원\n  목표: 1,875원 진입+1.5% 1/3\n  거래대금: 267위\n〰️ 추세: 강함 (ADX 28)\n🌡️ 자리: 장기바닥 · 매수 우호\n🔊 거래량: 3.4배 · 과열 주의\n📏 30일 저점: -3% · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 매수 우호\n🌍 비트 점유율: 59.2%\n😀 시장심리: 62 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/LPTUSDT/LBOBgPRY-LPTUSDT-It-can-go-up-from-this-zone/\">출처1</a>"
+ },
+ {
+  "id": "r403",
+  "inputs": {
+   "alert_id": 403,
+   "kind": "touch",
+   "coin_symbol": "RAY",
+   "now": 1788207300.1795626,
+   "current_krw": 1376.0,
+   "usdt_krw": 1376.0,
+   "cluster": [
+    {
+     "id": 572,
+     "coin_symbol": "RAY",
+     "entry_usd": 1.0,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 23.0,
+     "grade": "D",
+     "mcap_tier_icon": "🥉",
+     "mcap_rank": 163,
+     "post_age_minutes": 408.76281053622563,
+     "collected_at": 1788207190.7690258,
+     "author": "ilia.gobadze",
+     "author_followers": 578,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/RAYUSDT/Hbb84b3q-RAYUSDT-Buy/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.2,
+    "fear_greed": 62
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.24369431910216122,
+   "volume_rank": 238,
+   "funding_rate": -0.00899728638204,
+   "supply": [
+    "주의",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승중·RSI67"
+   ],
+   "adx14": 41.46868503085254,
+   "dex_stats": {
+    "liquidity_usd": 10383565.42,
+    "buy_ratio_24h": 0.529
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>RAY</b>\n🥉 시총 163위·D등급·글 6시간 전\n✍️ @ilia.gobadze\n👥 팔로워 578 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 1,376원\n  진입: 1,376원\n  목표: 데이터 없음\n  거래대금: 238위\n〰️ 추세: 강함 (ADX 41)\n🌡️ 자리: 상승중·RSI67 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 주의 · 주의\n🌍 비트 점유율: 59.2%\n😀 시장심리: 62 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/RAYUSDT/Hbb84b3q-RAYUSDT-Buy/\">출처1</a>"
+ },
+ {
+  "id": "r410",
+  "inputs": {
+   "alert_id": 410,
+   "kind": "touch",
+   "coin_symbol": "ZRO",
+   "now": 1788236104.8033326,
+   "current_krw": 1417.28,
+   "usdt_krw": 1376.0,
+   "cluster": [
+    {
+     "id": 576,
+     "coin_symbol": "ZRO",
+     "entry_usd": 1.03,
+     "sl_usd": null,
+     "tp_usd": 1.05,
+     "tps_usd": "[1.05, 1.09, 1.13]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥉",
+     "mcap_rank": 117,
+     "post_age_minutes": 1164.8122508446374,
+     "collected_at": 1788236058.7359865,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ZROUSDT/u6f3NlBJ-ZROUSDT-is-currently-strongly-bullish/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.2,
+    "fear_greed": 69
+   },
+   "week52": [
+    3330.608,
+    878.7136,
+    52
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": 0.4616963064295418,
+   "volume_rank": 87,
+   "funding_rate": 0.005,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "RSI53"
+   ],
+   "adx14": 36.20419758766877,
+   "dex_stats": {
+    "liquidity_usd": 554752.24,
+    "buy_ratio_24h": 0.489
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ZRO</b>\n🥉 시총 117위·B등급·글 19시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 1,417원\n  진입: 1,417원\n  목표: 1,445원 진입+1.9% 1/3\n  거래대금: 87위\n52주\n  고가: -57.4% (3,331원)\n  저가: +61.3% (879원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 52주 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 36)\n🌡️ 자리: RSI53 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.2%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ZROUSDT/u6f3NlBJ-ZROUSDT-is-currently-strongly-bullish/\">출처1</a>"
+ },
+ {
+  "id": "r411",
+  "inputs": {
+   "alert_id": 411,
+   "kind": "touch",
+   "coin_symbol": "ZORA",
+   "now": 1788236104.8033326,
+   "current_krw": 41280.0,
+   "usdt_krw": 1376.0,
+   "cluster": [
+    {
+     "id": 575,
+     "coin_symbol": "ZORA",
+     "entry_usd": 30.0,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 22.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 1169.6353649775187,
+     "collected_at": 1788236042.1241484,
+     "author": "CryptoPatel",
+     "author_followers": 36300,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ZORAUSDT/lyfxE4ri-ZORA-IS-REPEATING-THE-2025-FRACTAL-1000-MOVE-NEXT/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.2,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": null,
+   "volume_rank": 8,
+   "funding_rate": -0.169,
+   "supply": [
+    "중립",
+    "반등 여지"
+   ],
+   "position": [
+    "중립",
+    "하락세·RSI69"
+   ],
+   "adx14": 41.41874921997,
+   "dex_stats": {
+    "liquidity_usd": 240872.44,
+    "buy_ratio_24h": 0.495
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 35.0,
+    "rvol_d20": 0.7,
+    "low30_pct": 2.4,
+    "upbit_warning": null,
+    "post_move_pct": 1.0,
+    "social": {
+     "bull_ratio": 0.42,
+     "n": 25,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ZORA</b>\nD등급 · 글 19시간 전\n✍️ @CryptoPatel\n👥 팔로워 36.3K · 적중률 기록없\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 41,280원\n  진입: 41,280원\n  목표: 데이터 없음\n  거래대금: 8위\n💬 소셜: 매도 우세 · 주의\n〰️ 추세: 강함 (ADX 41)\n🌡️ 자리: 하락세·RSI69 · 관망\n🔊 거래량: 0.7배 · 관망\n📏 30일 저점: +2% · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 반등 여지 · 관망\n🌍 비트 점유율: 59.2% · 알트↑35%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ZORAUSDT/lyfxE4ri-ZORA-IS-REPEATING-THE-2025-FRACTAL-1000-MOVE-NEXT/\">출처1</a>"
+ },
+ {
+  "id": "r414",
+  "inputs": {
+   "alert_id": 414,
+   "kind": "touch",
+   "coin_symbol": "SOL",
+   "now": 1788251775.7847443,
+   "current_krw": 140760.0,
+   "usdt_krw": 1380.0,
+   "cluster": [
+    {
+     "id": 573,
+     "coin_symbol": "SOL",
+     "entry_usd": 102.0,
+     "sl_usd": null,
+     "tp_usd": 104.67,
+     "tps_usd": "[104.67, 106.64, 108.91]",
+     "tp_ladder_count": 3,
+     "score": 58.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 7,
+     "post_age_minutes": 923.8980205734571,
+     "collected_at": 1788221393.8871708,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/SOLUSDT/FuywhhH0-SOLUSDT-Final-Liquidity-Zone-Before-Expansion/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 69
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.030443986604644164,
+   "volume_rank": 15,
+   "funding_rate": -0.005,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승중·RSI67"
+   ],
+   "adx14": 49.2715485278239,
+   "dex_stats": null,
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 0.9,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.9,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>SOL</b>\n💎 시총 7위·B등급·글 23시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 140,760원\n  진입: 140,760원\n  목표: 144,445원 진입+2.6% 1/3\n  거래대금: 15위\n〰️ 추세: 강함 (ADX 49)\n🌡️ 자리: 상승중·RSI67 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.1%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/SOLUSDT/FuywhhH0-SOLUSDT-Final-Liquidity-Zone-Before-Expansion/\">출처1</a>"
+ },
+ {
+  "id": "r421",
+  "inputs": {
+   "alert_id": 421,
+   "kind": "touch",
+   "coin_symbol": "ADA",
+   "now": 1788280824.653199,
+   "current_krw": 271.12559999999996,
+   "usdt_krw": 1384.0,
+   "cluster": [
+    {
+     "id": 577,
+     "coin_symbol": "ADA",
+     "entry_usd": 0.1959,
+     "sl_usd": null,
+     "tp_usd": 0.2004,
+     "tps_usd": "[0.2004, 0.2065, 0.214]",
+     "tp_ladder_count": 3,
+     "score": 58.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥇",
+     "mcap_rank": 19,
+     "post_age_minutes": 1410.1646285454433,
+     "collected_at": 1788249987.8799517,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ADAUSDT/8BzlUoUL-ADAUSDT-1-H-Spot-LONG/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 69
+   },
+   "week52": [
+    637.14516,
+    168.097872,
+    30
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": 0.17995696298406513,
+   "volume_rank": 39,
+   "funding_rate": 0.0,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "조정중·RSI49"
+   ],
+   "adx14": 28.915826557382672,
+   "dex_stats": null,
+   "active_addr_pctile": 63.3,
+   "stwits_bullish_ratio": 0.895,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.895,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ADA</b>\n🥇 시총 19위 · B등급 · 글 1일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 271원\n  진입: 271원\n  목표: 277원 진입+2.3% 1/3\n  거래대금: 39위\n상장후\n  고가: -57.4% (637원)\n  저가: +61.3% (168원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 상장후 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 29)\n🌡️ 자리: 조정중·RSI49 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.1%\n😀 시장심리: 69 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ADAUSDT/8BzlUoUL-ADAUSDT-1-H-Spot-LONG/\">출처1</a>"
+ },
+ {
+  "id": "r426",
+  "inputs": {
+   "alert_id": 426,
+   "kind": "touch",
+   "coin_symbol": "PEPE",
+   "now": 1788308818.0876741,
+   "current_krw": 0.0048405,
+   "usdt_krw": 1383.0,
+   "cluster": [
+    {
+     "id": 584,
+     "coin_symbol": "PEPE",
+     "entry_usd": 3.5e-06,
+     "sl_usd": null,
+     "tp_usd": 3.57e-06,
+     "tps_usd": "[3.57e-06, 3.67e-06, 3.8e-06]",
+     "tp_ladder_count": 3,
+     "score": 58.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥈",
+     "mcap_rank": 57,
+     "post_age_minutes": 897.0680602788925,
+     "collected_at": 1788308545.0858307,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/PEPEUSDT/rIDN5YsU-PEPEUSDT-Testing-Wedge-Breakout-Amid-Key-Support/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 63
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.4745638749677983,
+   "volume_rank": 93,
+   "funding_rate": 0.01,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "20일지지·RSI53"
+   ],
+   "adx14": 33.07191318248353,
+   "dex_stats": {
+    "liquidity_usd": 29015587.12,
+    "buy_ratio_24h": 0.581
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 0.905,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 55.0,
+    "rvol_d20": 1.24,
+    "low30_pct": 9.6,
+    "upbit_warning": [
+     "TRADING_VOLUME_SOARING"
+    ],
+    "post_move_pct": 12.0,
+    "social": {
+     "bull_ratio": 0.905,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[터치]</b> <b>PEPE</b> · ⚠️급증 · 관심\n🥈 시총 57위·B등급·글 15시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 0.0048원\n  진입: 0.0048원\n  목표: 0.0049원 진입+2.0% 1/3\n  거래대금: 93위\n〰️ 추세: 강함 (ADX 33)\n🌡️ 자리: 20일지지·RSI53 · 관망\n🔊 거래량: 1.2배 · 매수 우호\n📏 30일 저점: +10% · 매수 우호\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.1% · 알트↑55%\n😀 시장심리: 63 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/PEPEUSDT/rIDN5YsU-PEPEUSDT-Testing-Wedge-Breakout-Amid-Key-Support/\">출처1</a>"
+ },
+ {
+  "id": "r432",
+  "inputs": {
+   "alert_id": 432,
+   "kind": "touch",
+   "coin_symbol": "AUCTION",
+   "now": 1788361240.5246675,
+   "current_krw": 4517.17,
+   "usdt_krw": 1373.0,
+   "cluster": [
+    {
+     "id": 591,
+     "coin_symbol": "AUCTION",
+     "entry_usd": 3.29,
+     "sl_usd": null,
+     "tp_usd": 3.41,
+     "tps_usd": "[3.41, 3.57, 3.81]",
+     "tp_ladder_count": 3,
+     "score": 40.0,
+     "grade": "C",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 1655.44662296772,
+     "collected_at": 1788352072.7987003,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/AUCTIONUSDT/eFOVT81f-AUCTIONUSDT-Major-Accumulation-or-Bearish-Continuation/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.0,
+    "fear_greed": 63
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.04544597435304311,
+   "volume_rank": 113,
+   "funding_rate": 0.005,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "하락세·RSI52"
+   ],
+   "adx14": 45.64037856854397,
+   "dex_stats": {
+    "liquidity_usd": 14434.12,
+    "buy_ratio_24h": 0.464
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": null
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>AUCTION</b>\nC등급 · 글 1일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 4,517원\n  진입: 4,517원\n  목표: 4,682원 진입+3.6% 1/3\n  거래대금: 113위\n〰️ 추세: 강함 (ADX 46)\n🌡️ 자리: 하락세·RSI52 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.0%\n😀 시장심리: 63 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/AUCTIONUSDT/eFOVT81f-AUCTIONUSDT-Major-Accumulation-or-Bearish-Continuation/\">출처1</a>"
+ },
+ {
+  "id": "r439",
+  "inputs": {
+   "alert_id": 439,
+   "kind": "touch",
+   "coin_symbol": "BTC",
+   "now": 1788368656.5661361,
+   "current_krw": 106172000.0,
+   "usdt_krw": 1375.0,
+   "cluster": [
+    {
+     "id": 596,
+     "coin_symbol": "BTC",
+     "entry_usd": 77216.0,
+     "sl_usd": 76374.0,
+     "tp_usd": 81452.0,
+     "tps_usd": "[81452.0]",
+     "tp_ladder_count": 0,
+     "score": 53.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 1082.7235252141952,
+     "collected_at": 1788366278.5776432,
+     "author": "Miketubarao",
+     "author_followers": 71,
+     "author_hit_rate": 1.0,
+     "author_hit_count": 1,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT.P/D3itIZiO-BTC-LONG-POSSIBLE-5RR/"
+    },
+    {
+     "id": 595,
+     "coin_symbol": "BTC",
+     "entry_usd": 76900.0,
+     "sl_usd": null,
+     "tp_usd": 77900.0,
+     "tps_usd": "[77900.0, 78530.0, 79175.0]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 412.3068585475286,
+     "collected_at": 1788366278.5733879,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9120879120879121,
+     "author_hit_count": 91,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/4HnJVynr-BTCUSDT-LONG-SET-UP-ALERT/"
+    }
+   ],
+   "rep_index": 1,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 63
+   },
+   "week52": [
+    249504200.0,
+    65826640.0,
+    52
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": 0.055982526326128705,
+   "volume_rank": 2,
+   "funding_rate": 0.003,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승중·RSI62"
+   ],
+   "adx14": 51.7541172151166,
+   "dex_stats": null,
+   "active_addr_pctile": 66.7,
+   "stwits_bullish_ratio": 0.789,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.789,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>BTC</b>\n💎 시총 1위·B등급·글 7시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 91% (91건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 106,172,000원\n  진입: 1.057억~1.062억원\n  목표: 107,112,500원 +1% 1/3\n  거래대금: 2위\n52주\n  고가: -57.4% (249,504,200원)\n  저가: +61.3% (65,826,640원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 52주 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 52)\n🌡️ 자리: 상승중·RSI62 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.1%\n😀 시장심리: 63 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/BTCUSDT/4HnJVynr-BTCUSDT-LONG-SET-UP-ALERT/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/BTCUSDT.P/D3itIZiO-BTC-LONG-POSSIBLE-5RR/\">출처2</a>"
+ },
+ {
+  "id": "r506",
+  "inputs": {
+   "alert_id": 506,
+   "kind": "touch",
+   "coin_symbol": "IOST",
+   "now": 1788685863.5437164,
+   "current_krw": 1.1457600000000001,
+   "usdt_krw": 1364.0,
+   "cluster": [
+    {
+     "id": 623,
+     "coin_symbol": "IOST",
+     "entry_usd": 0.00084,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 22.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 813.6938463687897,
+     "collected_at": 1788685799.6321335,
+     "author": "pullbacksignal",
+     "author_followers": 37300,
+     "author_hit_rate": 1.0,
+     "author_hit_count": 11,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/IOSTUSDT/2YerwKCL-IOST-Exhaustion-Phase-Complete-How-to-Manage-the-Transition/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.2,
+    "fear_greed": 73
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -1.459969097846298,
+   "volume_rank": 16,
+   "funding_rate": 0.01,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "위험",
+    "하락세·4h과열"
+   ],
+   "adx14": 32.239409818846,
+   "dex_stats": {
+    "liquidity_usd": 46.83,
+    "buy_ratio_24h": 0.453
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 72.0,
+    "rvol_d20": 1.9,
+    "low30_pct": 22.0,
+    "upbit_warning": [
+     "DEPOSIT_AMOUNT_SOARING",
+     "PRICE_FLUCTUATIONS"
+    ],
+    "post_move_pct": -7.0,
+    "social": {
+     "bull_ratio": 0.42,
+     "n": 25,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[터치]</b> <b>IOST</b> · ⚠️입금 · 주의\nD등급 · 글 13시간 전\n✍️ @pullbacksignal\n📊 워쳐 적중률: 100% (11건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 1.146원\n  진입: 1.146원\n  목표: 데이터 없음\n  거래대금: 16위\n💬 소셜: 매도 우세 · 주의\n〰️ 추세: 강함 (ADX 32)\n🌡️ 자리: 하락세 · 매수 보류\n🔊 거래량: 1.9배 · 과열 주의\n📏 30일 저점: +22% · 추격 주의\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.2% · 알트↑72%\n😀 시장심리: 73 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/IOSTUSDT/2YerwKCL-IOST-Exhaustion-Phase-Complete-How-to-Manage-the-Transition/\">출처1</a>"
+ },
+ {
+  "id": "r519",
+  "inputs": {
+   "alert_id": 519,
+   "kind": "touch",
+   "coin_symbol": "DOOD",
+   "now": 1788775236.7362404,
+   "current_krw": 3.0622499999999997,
+   "usdt_krw": 1361.0,
+   "cluster": [
+    {
+     "id": 635,
+     "coin_symbol": "DOOD",
+     "entry_usd": 0.00225,
+     "sl_usd": 0.00185,
+     "tp_usd": 0.00345,
+     "tps_usd": "[0.00345]",
+     "tp_ladder_count": 0,
+     "score": 21.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 205.84570634762446,
+     "collected_at": 1788773197.7466693,
+     "author": "cryptosignals0rg",
+     "author_followers": null,
+     "author_hit_rate": null,
+     "author_hit_count": null,
+     "source": "telegram",
+     "post_url": "https://t.me/cryptosignals0rg/19542"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 71
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": null,
+   "volume_rank": 8,
+   "funding_rate": 0.021,
+   "supply": [
+    "주의",
+    "추격 위험"
+   ],
+   "position": [
+    "위험",
+    "하락세·4h과열"
+   ],
+   "adx14": 35.580660716032234,
+   "dex_stats": {
+    "liquidity_usd": 773796.66,
+    "buy_ratio_24h": 0.505
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": null
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>DOOD</b>\nD등급 · 글 3시간 전\n✍️ @cryptosignals0rg\n📡 텔레그램 채널 · 적중률 미집계\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 3.062원\n  진입: 3.062원\n  목표: 4.695원 장기+53.3%\n  거래대금: 8위\n〰️ 추세: 강함 (ADX 36)\n🌡️ 자리: 하락세 · 매수 보류\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 추격 위험 · 주의\n🌍 비트 점유율: 59.1%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://t.me/cryptosignals0rg/19542\">출처1</a>"
+ },
+ {
+  "id": "r522",
+  "inputs": {
+   "alert_id": 522,
+   "kind": "touch",
+   "coin_symbol": "ETH",
+   "now": 1788787874.4351652,
+   "current_krw": 3439206.17,
+   "usdt_krw": 1361.0,
+   "cluster": [
+    {
+     "id": 637,
+     "coin_symbol": "ETH",
+     "entry_usd": 2526.97,
+     "sl_usd": 2439.75,
+     "tp_usd": 2540.0,
+     "tps_usd": "[2540.0]",
+     "tp_ladder_count": 0,
+     "score": 35.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 1527.9904571731886,
+     "collected_at": 1788787365.556592,
+     "author": "gongroupvn",
+     "author_followers": 90,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/ieaJTK5m-ETHUSD-1H-Range-Breakout-Liquidity-Sweep-Reclaim-Long-Setup/"
+    },
+    {
+     "id": 636,
+     "coin_symbol": "ETH",
+     "entry_usd": 2506.0,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 26.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 784.4737905065218,
+     "collected_at": 1788787365.555281,
+     "author": "soheil_deris",
+     "author_followers": 7,
+     "author_hit_rate": null,
+     "author_hit_count": null,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/8ctQdqme-H1-Analysis/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 59.1,
+    "fear_greed": 71
+   },
+   "week52": [
+    8082134.4995,
+    2132307.8254,
+    30
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": -0.03847273310210734,
+   "volume_rank": 6,
+   "funding_rate": 0.004,
+   "supply": [
+    "우호",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI63"
+   ],
+   "adx14": 49.087155827489816,
+   "dex_stats": null,
+   "active_addr_pctile": 80.0,
+   "stwits_bullish_ratio": 0.684,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.684,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ETH</b>\n💎 시총 2위 · D등급 · 글 1일 전\n✍️ @gongroupvn\n👥 팔로워 90 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 3,439,206원\n  진입: 3,410,666~3,439,206원\n  목표: 3,456,940원 진입+0.5%\n  거래대금: 6위\n상장후\n  고가: -57.4% (8,082,134원)\n  저가: +61.3% (2,132,308원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 상장후 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 49)\n🌡️ 자리: 상승세·RSI63 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 우호 · 매수 우호\n🌍 비트 점유율: 59.1%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ETHUSDT/8ctQdqme-H1-Analysis/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/ETHUSDT/ieaJTK5m-ETHUSD-1H-Range-Breakout-Liquidity-Sweep-Reclaim-Long-Setup/\">출처2</a>"
+ },
+ {
+  "id": "r628",
+  "inputs": {
+   "alert_id": 628,
+   "kind": "touch",
+   "coin_symbol": "BEAM",
+   "now": 1789393939.4396002,
+   "current_krw": 2.2865175,
+   "usdt_krw": 1359.0,
+   "cluster": [
+    {
+     "id": 724,
+     "coin_symbol": "BEAM",
+     "entry_usd": 0.0016825,
+     "sl_usd": 0.001552,
+     "tp_usd": 0.0018,
+     "tps_usd": "[0.0018]",
+     "tp_ladder_count": 0,
+     "score": 33.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 239.5456930557887,
+     "collected_at": 1789393027.7429361,
+     "author": "MarkhorTrader",
+     "author_followers": 83,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BEAMUSDT/19qjFN6G-BEAM-USDT-Accumulation-Range-Breakout-Support-Retest-Setup/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.5,
+    "fear_greed": 57
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -97.4268340578827,
+   "volume_rank": 123,
+   "funding_rate": null,
+   "supply": null,
+   "position": [
+    "중립",
+    "RSI58"
+   ],
+   "adx14": 46.548968095452764,
+   "dex_stats": {
+    "liquidity_usd": 4136067.68,
+    "buy_ratio_24h": 0.461
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 1.0,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 100.0,
+    "rvol_d20": 3.35,
+    "low30_pct": -3.1,
+    "upbit_warning": null,
+    "post_move_pct": 4.0,
+    "social": {
+     "bull_ratio": 1.0,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>BEAM</b>\nD등급 · 글 4시간 전\n✍️ @MarkhorTrader\n👥 팔로워 83 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 2.287원\n  진입: 2.287원\n  목표: 2.446원 진입+7.0%\n  거래대금: 123위\n〰️ 추세: 강함 (ADX 47)\n🌡️ 자리: RSI58 · 관망\n🔊 거래량: 3.4배 · 과열 주의\n📏 30일 저점: -3% · 관망\n━━━━━━━━━━━━━━━━━\n🌍 비트 점유율: 58.5%\n😀 시장심리: 57 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/BEAMUSDT/19qjFN6G-BEAM-USDT-Accumulation-Range-Breakout-Support-Retest-Setup/\">출처1</a>"
+ },
+ {
+  "id": "r679",
+  "inputs": {
+   "alert_id": 679,
+   "kind": "touch",
+   "coin_symbol": "ASTR",
+   "now": 1789684760.4742615,
+   "current_krw": 8.7216,
+   "usdt_krw": 1380.0,
+   "cluster": [
+    {
+     "id": 755,
+     "coin_symbol": "ASTR",
+     "entry_usd": 0.00632,
+     "sl_usd": null,
+     "tp_usd": 0.006435,
+     "tps_usd": "[0.006435, 0.006669, 0.00695]",
+     "tp_ladder_count": 3,
+     "score": 36.0,
+     "grade": "D",
+     "mcap_tier_icon": "·",
+     "mcap_rank": null,
+     "post_age_minutes": 865.061366713047,
+     "collected_at": 1789684427.683359,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9230769230769231,
+     "author_hit_count": 104,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ASTRUSDT/2YPBl6gB-ASTRUSDT-Major-Accumulation-or-Bearish-Continuation/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.1,
+    "fear_greed": 50
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.2802746092391521,
+   "volume_rank": 52,
+   "funding_rate": -0.015,
+   "supply": [
+    "우호",
+    "반등 여지"
+   ],
+   "position": [
+    "중립",
+    "RSI58"
+   ],
+   "adx14": 42.138743584278075,
+   "dex_stats": {
+    "liquidity_usd": 1120.24,
+    "buy_ratio_24h": 0.286
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 0.875,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.875,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ASTR</b>\nD등급 · 글 14시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 92% (104건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 8.722원\n  진입: 8.722원\n  목표: 8.880원 진입+1.8% 1/3\n  거래대금: 52위\n〰️ 추세: 강함 (ADX 42)\n🌡️ 자리: RSI58 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 매수 우호\n🌍 비트 점유율: 58.1%\n😐 시장심리: 50 · 매수 우호\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ASTRUSDT/2YPBl6gB-ASTRUSDT-Major-Accumulation-or-Bearish-Continuation/\">출처1</a>"
+ },
+ {
+  "id": "r757",
+  "inputs": {
+   "alert_id": 757,
+   "kind": "touch",
+   "coin_symbol": "INJ",
+   "now": 1790128336.4991171,
+   "current_krw": 10416.0,
+   "usdt_krw": 1344.0,
+   "cluster": [
+    {
+     "id": 820,
+     "coin_symbol": "INJ",
+     "entry_usd": 7.75,
+     "sl_usd": null,
+     "tp_usd": 8.04,
+     "tps_usd": "[8.04, 8.53, 9.01]",
+     "tp_ladder_count": 3,
+     "score": 52.0,
+     "grade": "B",
+     "mcap_tier_icon": "🥈",
+     "mcap_rank": 90,
+     "post_age_minutes": 2455.025321817398,
+     "collected_at": 1790120860.521075,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.937984496124031,
+     "author_hit_count": 129,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/INJUSDT/2fL2ohv4-INJUSDT-Holding-the-Last-Fortres-Recovery-or-Final-B/"
+    },
+    {
+     "id": 819,
+     "coin_symbol": "INJ",
+     "entry_usd": 7.7,
+     "sl_usd": 4.56,
+     "tp_usd": 15.79,
+     "tps_usd": "[15.79, 25.0]",
+     "tp_ladder_count": 2,
+     "score": 36.0,
+     "grade": "D",
+     "mcap_tier_icon": "🥈",
+     "mcap_rank": 90,
+     "post_age_minutes": 2102.941988484065,
+     "collected_at": 1790120860.520231,
+     "author": "rakeshmalviya5995",
+     "author_followers": 6,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/INJUSDT/gn4NLNus-INJ-USDT-1D-Macro-Trendline-Breakout-Base-Reversal-Setup/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.7,
+    "fear_greed": 71
+   },
+   "week52": [
+    24477.6,
+    6457.92,
+    52
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": -0.0318054428792688,
+   "volume_rank": 93,
+   "funding_rate": 0.01,
+   "supply": [
+    "중립",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승중·RSI68"
+   ],
+   "adx14": 43.47707308682021,
+   "dex_stats": {
+    "liquidity_usd": 753539.03,
+    "buy_ratio_24h": 0.489
+   },
+   "active_addr_pctile": null,
+   "stwits_bullish_ratio": 0.957,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.957,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>INJ</b>\n🥈 시총 90위 · B등급 · 글 1일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 94% (129건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 10,416원\n  진입: 10,349~10,416원\n  목표: 10,806원 진입+3.7% 1/3\n  거래대금: 93위\n52주\n  고가: -57.4% (24,478원)\n  저가: +61.3% (6,458원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 52주 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 43)\n🌡️ 자리: 상승중·RSI68 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 중립 · 관망\n🌍 비트 점유율: 58.7%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/INJUSDT/gn4NLNus-INJ-USDT-1D-Macro-Trendline-Breakout-Base-Reversal-Setup/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/INJUSDT/2fL2ohv4-INJUSDT-Holding-the-Last-Fortres-Recovery-or-Final-B/\">출처2</a>"
+ },
+ {
+  "id": "r763",
+  "inputs": {
+   "alert_id": 763,
+   "kind": "touch",
+   "coin_symbol": "BTC",
+   "now": 1790172734.4712262,
+   "current_krw": 116195750.0,
+   "usdt_krw": 1363.0,
+   "cluster": [
+    {
+     "id": 813,
+     "coin_symbol": "BTC",
+     "entry_usd": 85250.0,
+     "sl_usd": 81500.0,
+     "tp_usd": 88800.0,
+     "tps_usd": "[88800.0, 93200.0, 98500.0]",
+     "tp_ladder_count": 3,
+     "score": 42.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 481.92467142740884,
+     "collected_at": 1790105825.4959826,
+     "author": "Rajkuta",
+     "author_followers": 7,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT.P/D8w6XXZb-BTC-USDT-Bullish-Continuation-Retest-Strategy-85-2k-to-98K/"
+    },
+    {
+     "id": 792,
+     "coin_symbol": "BTC",
+     "entry_usd": 84900.0,
+     "sl_usd": 84800.0,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 25.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 202.94842657645543,
+     "collected_at": 1790004359.1122997,
+     "author": "TechnicalAnarchist",
+     "author_followers": 464,
+     "author_hit_rate": null,
+     "author_hit_count": null,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/c4a7qZQR-BTC-Ultimate-Swing-Short-Rev-2/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.7,
+    "fear_greed": 71
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": -0.051080075330259385,
+   "volume_rank": 2,
+   "funding_rate": 0.002,
+   "supply": [
+    "중립",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI69"
+   ],
+   "adx14": 39.97169902942607,
+   "dex_stats": null,
+   "active_addr_pctile": 66.7,
+   "stwits_bullish_ratio": 0.667,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 35.0,
+    "rvol_d20": 0.7,
+    "low30_pct": 2.4,
+    "upbit_warning": null,
+    "post_move_pct": 1.0,
+    "social": {
+     "bull_ratio": 0.42,
+     "n": 25,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>BTC</b>\n💎 시총 1위 · C등급 · 글 1일 전\n✍️ @Rajkuta\n👥 팔로워 7 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 116,195,750원\n  진입: 1.157억~1.162억원\n  목표: 121,034,400원 +4% 1/3\n  거래대금: 2위\n💬 소셜: 매도 우세 · 주의\n〰️ 추세: 강함 (ADX 40)\n🌡️ 자리: 상승세·RSI69 · 관망\n🔊 거래량: 0.7배 · 관망\n📏 30일 저점: +2% · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 중립 · 관망\n🌍 비트 점유율: 58.7% · 알트↑35%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/BTCUSDT.P/D8w6XXZb-BTC-USDT-Bullish-Continuation-Retest-Strategy-85-2k-to-98K/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/BTCUSDT/c4a7qZQR-BTC-Ultimate-Swing-Short-Rev-2/\">출처2</a>"
+ },
+ {
+  "id": "r766",
+  "inputs": {
+   "alert_id": 766,
+   "kind": "touch",
+   "coin_symbol": "XRP",
+   "now": 1790178739.6663086,
+   "current_krw": 2062.66,
+   "usdt_krw": 1366.0,
+   "cluster": [
+    {
+     "id": 806,
+     "coin_symbol": "XRP",
+     "entry_usd": 1.51,
+     "sl_usd": null,
+     "tp_usd": 1.53,
+     "tps_usd": "[1.53, 1.56, 1.61]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "A",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 5,
+     "post_age_minutes": 213.28218655188877,
+     "collected_at": 1790076782.9324775,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6100,
+     "author_hit_rate": 0.9365079365079365,
+     "author_hit_count": 126,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/XRPUSDT/ky9OPDMo-XRPUSDT-Bulls-Return-Gaining-an-Edge/"
+    },
+    {
+     "id": 807,
+     "coin_symbol": "XRP",
+     "entry_usd": 1.4968,
+     "sl_usd": 1.3901,
+     "tp_usd": 1.7231,
+     "tps_usd": "[1.7231]",
+     "tp_ladder_count": 0,
+     "score": 41.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 5,
+     "post_age_minutes": 1483.2655198852221,
+     "collected_at": 1790076782.9360456,
+     "author": "TradeKarYaar",
+     "author_followers": 25,
+     "author_hit_rate": 1.0,
+     "author_hit_count": 1,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/XRPUSDT/wIeMsvHS-XRP-USDT/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.8,
+    "fear_greed": 71
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.01859841960923653,
+   "volume_rank": 1,
+   "funding_rate": 0.008,
+   "supply": [
+    "중립",
+    "투매 진행"
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI62"
+   ],
+   "adx14": 39.11757604673294,
+   "dex_stats": null,
+   "active_addr_pctile": 33.3,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": null
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>XRP</b>\n💎 시총 5위 · A등급 · 글 1일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 94% (126건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 2,063원\n  진입: 2,045~2,063원\n  목표: 2,090원 진입+1.3% 1/3\n  거래대금: 1위\n〰️ 추세: 강함 (ADX 39)\n🌡️ 자리: 상승세·RSI62 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 투매 진행 · 관망\n🌍 비트 점유율: 58.8%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/XRPUSDT/ky9OPDMo-XRPUSDT-Bulls-Return-Gaining-an-Edge/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/XRPUSDT/wIeMsvHS-XRP-USDT/\">출처2</a>"
+ },
+ {
+  "id": "r790",
+  "inputs": {
+   "alert_id": 790,
+   "kind": "touch",
+   "coin_symbol": "BTC",
+   "now": 1790295800.7153609,
+   "current_krw": 115574553.0,
+   "usdt_krw": 1362.0,
+   "cluster": [
+    {
+     "id": 850,
+     "coin_symbol": "BTC",
+     "entry_usd": 84856.5,
+     "sl_usd": 80196.52,
+     "tp_usd": 95267.43,
+     "tps_usd": "[95267.43]",
+     "tp_ladder_count": 0,
+     "score": 53.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 465.50682522058486,
+     "collected_at": 1790295696.4146724,
+     "author": "rakeshmalviya5995",
+     "author_followers": 6,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/Zf0ayjTD-BTC-USDT-4H-Breakout-Retest-Macro-Expansion-Setup/"
+    },
+    {
+     "id": 849,
+     "coin_symbol": "BTC",
+     "entry_usd": 84050.0,
+     "sl_usd": null,
+     "tp_usd": null,
+     "tps_usd": "[]",
+     "tp_ladder_count": 0,
+     "score": 33.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 1,
+     "post_age_minutes": 289.20682522058485,
+     "collected_at": 1790295696.4108233,
+     "author": "XAUxBTC_Pro",
+     "author_followers": 3400,
+     "author_hit_rate": 0.38461538461538464,
+     "author_hit_count": 13,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/BTCUSDT/qeIB4Dnk-BTCUSDT-BUY-SETUP/"
+    }
+   ],
+   "rep_index": 0,
+   "sentiment": {
+    "btc_dominance": 58.6,
+    "fear_greed": 71
+   },
+   "week52": [
+    271600199.55,
+    71656222.86,
+    30
+   ],
+   "week52_synthetic": true,
+   "kimchi_pct": -0.053070036670879464,
+   "volume_rank": 3,
+   "funding_rate": 0.001,
+   "supply": [
+    "주의",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI67"
+   ],
+   "adx14": 41.118392387063935,
+   "dex_stats": null,
+   "active_addr_pctile": 40.0,
+   "stwits_bullish_ratio": 0.923,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": {
+     "bull_ratio": 0.923,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>BTC</b>\n💎 시총 1위·B등급·글 7시간 전\n✍️ @rakeshmalviya5995\n👥 팔로워 6 · 적중률 기록없음\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 115,574,553원\n  진입: 1.14억~1.16억원\n  목표: 129,754,240원 진입+12.3%\n  거래대금: 3위\n상장후\n  고가: -57.4% (271,600,200원)\n  저가: +61.3% (71,656,223원)\n  🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜\n  └ 상장후 범위 중 22% 위치\n〰️ 추세: 강함 (ADX 41)\n🌡️ 자리: 상승세·RSI67 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 주의 · 주의\n🌍 비트 점유율: 58.6%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/BTCUSDT/qeIB4Dnk-BTCUSDT-BUY-SETUP/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/BTCUSDT/Zf0ayjTD-BTC-USDT-4H-Breakout-Retest-Macro-Expansion-Setup/\">출처2</a>"
+ },
+ {
+  "id": "r793",
+  "inputs": {
+   "alert_id": 793,
+   "kind": "touch",
+   "coin_symbol": "ETH",
+   "now": 1790310190.147158,
+   "current_krw": 3681377.7,
+   "usdt_krw": 1365.0,
+   "cluster": [
+    {
+     "id": 856,
+     "coin_symbol": "ETH",
+     "entry_usd": 2696.98,
+     "sl_usd": 2663.55,
+     "tp_usd": 2764.36,
+     "tps_usd": "[2764.36]",
+     "tp_ladder_count": 0,
+     "score": 37.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 829.7096111615499,
+     "collected_at": 1790310076.5817935,
+     "author": "Forex_King_0786",
+     "author_followers": 78,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/seG6KIE2-ETH-USDT-BUY-UPDATE/"
+    },
+    {
+     "id": 857,
+     "coin_symbol": "ETH",
+     "entry_usd": 2687.0,
+     "sl_usd": null,
+     "tp_usd": 2725.0,
+     "tps_usd": "[2725.0, 2772.0, 2823.0]",
+     "tp_ladder_count": 3,
+     "score": 56.0,
+     "grade": "A",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 1202.5096111615499,
+     "collected_at": 1790310076.5911124,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6200,
+     "author_hit_rate": 0.9411764705882353,
+     "author_hit_count": 136,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/pOvARWoO-Ethereum-ETHUSDT-Descending-Wedge-High-R-R-Zone/"
+    },
+    {
+     "id": 855,
+     "coin_symbol": "ETH",
+     "entry_usd": 2675.0,
+     "sl_usd": 2447.19,
+     "tp_usd": 3400.0,
+     "tps_usd": "[3400.0]",
+     "tp_ladder_count": 0,
+     "score": 45.0,
+     "grade": "C",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 2,
+     "post_age_minutes": 733.5096111615499,
+     "collected_at": 1790310076.581032,
+     "author": "rakeshmalviya5995",
+     "author_followers": 6,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/ETHUSDT/AmJs4W0K-ETH-USDT-4H-Retest-of-Range-Breakout-Upside-Continuation-S/"
+    }
+   ],
+   "rep_index": 1,
+   "sentiment": {
+    "btc_dominance": 58.6,
+    "fear_greed": 71
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.011976523167274765,
+   "volume_rank": 5,
+   "funding_rate": 0.006,
+   "supply": [
+    "중립",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI64"
+   ],
+   "adx14": 44.18326378413685,
+   "dex_stats": null,
+   "active_addr_pctile": 10.0,
+   "stwits_bullish_ratio": 0.8,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": 55.0,
+    "rvol_d20": 1.24,
+    "low30_pct": 9.6,
+    "upbit_warning": [
+     "TRADING_VOLUME_SOARING"
+    ],
+    "post_move_pct": 12.0,
+    "social": {
+     "bull_ratio": 0.8,
+     "n": null,
+     "source": "stocktwits"
+    }
+   },
+   "items_synthetic": true
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>ETH</b> ⚠️급증·관심\n💎 시총 2위·A등급·글 20시간 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 94% (136건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 3,681,378원\n  진입: 3,651,375~3,681,378원\n  목표: 3,719,625원 진입+1% 1/3\n  거래대금: 5위\n〰️ 추세: 강함 (ADX 44)\n🌡️ 자리: 상승세·RSI64 · 관망\n🔊 거래량: 1.2배 · 매수 우호\n📏 30일 저점: +10% · 매수 우호\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 중립 · 관망\n🌍 비트 점유율: 58.6% · 알트↑55%\n😀 시장심리: 71 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/ETHUSDT/AmJs4W0K-ETH-USDT-4H-Retest-of-Range-Breakout-Upside-Continuation-S/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/ETHUSDT/seG6KIE2-ETH-USDT-BUY-UPDATE/\">출처2</a> · <a href=\"https://www.tradingview.com/chart/ETHUSDT/pOvARWoO-Ethereum-ETHUSDT-Descending-Wedge-High-R-R-Zone/\">출처3</a>"
+ },
+ {
+  "id": "r819",
+  "inputs": {
+   "alert_id": 819,
+   "kind": "touch",
+   "coin_symbol": "XRP",
+   "now": 1790453537.8095324,
+   "current_krw": 2063.2338,
+   "usdt_krw": 1359.0,
+   "cluster": [
+    {
+     "id": 843,
+     "coin_symbol": "XRP",
+     "entry_usd": 1.5182,
+     "sl_usd": 1.4859,
+     "tp_usd": 1.5876,
+     "tps_usd": "[1.5876]",
+     "tp_ladder_count": 0,
+     "score": 31.0,
+     "grade": "D",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 5,
+     "post_age_minutes": 339.04480410814284,
+     "collected_at": 1790280933.6887832,
+     "author": "Forex_King_0786",
+     "author_followers": 78,
+     "author_hit_rate": null,
+     "author_hit_count": 0,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/XRPUSDT/Jyll1Dj4-XRP-USDT-BUY-UPDATE/"
+    },
+    {
+     "id": 844,
+     "coin_symbol": "XRP",
+     "entry_usd": 1.51,
+     "sl_usd": null,
+     "tp_usd": 1.53,
+     "tps_usd": "[1.53, 1.56, 1.61]",
+     "tp_ladder_count": 3,
+     "score": 48.0,
+     "grade": "B",
+     "mcap_tier_icon": "💎",
+     "mcap_rank": 5,
+     "post_age_minutes": 709.7781374414761,
+     "collected_at": 1790280933.6897929,
+     "author": "CryptoAnalystSignal",
+     "author_followers": 6200,
+     "author_hit_rate": 0.9432624113475178,
+     "author_hit_count": 141,
+     "source": "tradingview",
+     "post_url": "https://www.tradingview.com/chart/XRPUSDT/zrg4sknM-XRPUSDT-Bulls-Return-Gaining-an-Edge/"
+    }
+   ],
+   "rep_index": 1,
+   "sentiment": {
+    "btc_dominance": 58.3,
+    "fear_greed": 74
+   },
+   "week52": null,
+   "week52_synthetic": false,
+   "kimchi_pct": 0.03289217132413146,
+   "volume_rank": 1,
+   "funding_rate": 0.01,
+   "supply": [
+    "중립",
+    null
+   ],
+   "position": [
+    "중립",
+    "상승세·RSI60"
+   ],
+   "adx14": 41.37794329698853,
+   "dex_stats": null,
+   "active_addr_pctile": 63.3,
+   "stwits_bullish_ratio": null,
+   "stwits_n": null,
+   "items": {
+    "alt_breadth": null,
+    "rvol_d20": null,
+    "low30_pct": null,
+    "upbit_warning": null,
+    "post_move_pct": null,
+    "social": null
+   },
+   "items_synthetic": false
+  },
+  "expected": "━━━━━━━━━━━━━━━━━\n🎯 <b>[진입가 터치]</b> <b>XRP</b>\n💎 시총 5위 · B등급 · 글 2일 전\n✍️ @CryptoAnalystSignal\n📊 워쳐 적중률: 94% (141건)\n━━━━━━━━━━━━━━━━━\n타점\n  현재: 2,063원\n  진입: 2,052~2,063원\n  목표: 2,079원 진입+1.3% 1/3\n  거래대금: 1위\n〰️ 추세: 강함 (ADX 41)\n🌡️ 자리: 상승세·RSI60 · 관망\n━━━━━━━━━━━━━━━━━\n🧭 돈 흐름: 중립 · 관망\n🌍 비트 점유율: 58.3%\n😀 시장심리: 74 · 관망\n━━━━━━━━━━━━━━━━━\n🔗 <a href=\"https://www.tradingview.com/chart/XRPUSDT/Jyll1Dj4-XRP-USDT-BUY-UPDATE/\">출처1</a> · <a href=\"https://www.tradingview.com/chart/XRPUSDT/zrg4sknM-XRPUSDT-Bulls-Return-Gaining-an-Edge/\">출처2</a>"
+ }
+]
