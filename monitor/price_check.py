@@ -297,6 +297,18 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def _arm_floor(lv: dict) -> float:
+    """터치 판정에 인정할 캔들의 시작 시각 하한 (2026-09-27 무장 게이트 ①).
+
+    종전엔 collected_at 하나였다(레벨이 존재하기 전 가격으로 터치되던 문제 방어).
+    무장 게이트가 붙은 뒤로는 **무장 이후** 캔들만 인정해야 한다: 진입가 아래에서
+    수집된 레벨이 나중에 진입가 위로 올라와 무장하면, 무장 전 저가(=수집 당시의
+    낮은 가격)가 캔들 창에 그대로 남아 있어 무장 직후 회차에서 곧바로 '터치'로
+    읽힌다 — 버그를 한 회차 늦게 재현하는 셈이다. 그래서 하한은 두 시각의 **큰
+    쪽**이다. armed_at 이 NULL(스위치 OFF·레거시 관용 경로)이면 종전과 동일."""
+    return max(float(lv.get("collected_at") or 0.0), float(lv.get("armed_at") or 0.0))
+
+
 def _touch_quality(candles, collected_at: float, trigger_krw: float, now: float):
     """터치 캔들의 관통 깊이(%)·종가 이탈(0/1) — (2026-08-15 Tier1) **기록 전용**.
 
@@ -776,6 +788,104 @@ def run_once(now: float | None = None) -> dict:
                 except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
                     logger.warning("[체크] 진입가 sanity 만료 실패(무시하고 진행): %s", e)
 
+        # ── 무장(arming) 게이트 (2026-09-27 즉시터치 버그 수리 ①) ──────────────
+        # 버그: 터치 판정이 "수집 이후 저가 ≤ 진입가" 하나뿐이라, **수집 시점에
+        # 이미 현재가가 진입가 아래인 롱 레벨**이 2분 뒤 회차에서 곧바로 '터치'로
+        # 발송됐다. 돌파 트리거 글("$1.42 BREAKOUT", 현재가 $1.17)이 전형 —
+        # 1.42 를 위로 뚫으라는 뜻인데 판정부는 "저가 1.17 ≤ 1.42" 로 읽는다.
+        # 실사례 SUI id=884: 진입 1,933원 vs 현재 1,590원(관통 17.5%)으로 발송.
+        # 실측: 즉시터치(<10분)&관통>10% 33건 종결 승률 4.3% vs 정상 터치 60.9%.
+        #
+        # 규칙: 롱은 현재가가 진입가 **위**에 있는 것을 한 번 확인(=무장)한 뒤에만
+        # 터치·예고 판정 대상이 된다. 그러면 "위에서 내려와 닿았다"는 터치의 원래
+        # 의미가 회복되고, 돌파 트리거 글은 실제로 돌파할 때까지 기다린다.
+        #
+        # 위치는 진입가 sanity **뒤**, 클러스터 구성 **앞**이다. sanity 뒤인 이유:
+        # 이미 만료된 오염 레벨에 무장 상태를 찍을 이유가 없다(set_armed 가 활성
+        # 행만 갱신하므로 무해하지만, 로그가 지저분해진다). 클러스터 앞인 이유:
+        # 무장 안 된 레벨이 클러스터에 섞이면 그 레벨의 엔트리가 상단(top_krw)이
+        # 되어 클러스터 전체의 터치 판정 기준을 오염시킨다.
+        #
+        # 배포 첫 회차가 곧 백필이다 — armed IS NULL 인 기존 행이 아래 규칙으로
+        # 자동 판정되므로 별도 스크립트가 필요 없다. 다만 NULL 첫 판정에만
+        # watch_arm_tolerance_pct(2%) 관용을 둔다: 진입가 바로 아래에서 정상
+        # 대기(예고 밴드 체류 등)하던 레벨까지 armed=0 으로 잠그면 정상 대기를
+        # 벌주는 셈이다. 0 → 1 승격에는 관용이 없다(있으면 진입가 2% 아래에서
+        # 무장해 버그가 축소 재발한다).
+        #
+        # short 는 대칭(current <= entry 로 무장). 현재 collect_short_enabled=False
+        # 라 표본이 없지만, 켜질 때 이 게이트가 빠져 있으면 같은 버그가 반대
+        # 방향으로 재발하므로 로직은 지금 넣어 둔다.
+        #
+        # 시세 미확보 티커는 판단보류(fail-open, sanity 와 같은 관례) — 다만 무장
+        # 판정이 안 된 레벨은 아래 필터에서 이번 회차 대상에서 빠진다. 업비트
+        # 장애로 시세가 없으면 애초에 터치 판정도 못 하므로 손실이 없다.
+        if cfg_get("watch_arming_enabled"):
+            _arm_tol = (cfg_get("watch_arm_tolerance_pct") or 0.0) / 100.0
+            _arm_ids, _wait_ids = [], []
+            for _tkr, _tlevels in by_ticker.items():
+                _cur = prices.get(_tkr)
+                if not _cur or _cur <= 0:
+                    continue
+                for _lv in _tlevels:
+                    if _lv.get("armed") == 1:
+                        continue          # 이미 무장 — 되돌리지 않는다
+                    _e_usd = _lv.get("entry_usd")
+                    if not _e_usd or _e_usd <= 0:
+                        continue          # 진입가 없는 행은 어차피 클러스터에서 탈락
+                    _e_krw = _e_usd * usdt_krw
+                    _first = _lv.get("armed") is None   # 레거시 관용 대상
+                    if _lv.get("direction") == "short":
+                        _thr = _e_krw * (1 + _arm_tol) if _first else _e_krw
+                        _armed_now = _cur <= _thr
+                    else:
+                        _thr = _e_krw * (1 - _arm_tol) if _first else _e_krw
+                        _armed_now = _cur >= _thr
+                    if _armed_now:
+                        # armed_at 은 첫 판정이면 collected_at, 승격(0 → 1)이면 now.
+                        # 이 값이 터치 판정 캔들의 하한(_arm_floor)이 되므로 구분이
+                        # 중요하다.
+                        #  · 첫 판정(NULL → 1): 현재가가 진입가 위에 있는 정상 대기
+                        #    레벨이다. 무장 조건을 수집 시점부터 만족했다고 보고
+                        #    collected_at 을 쓴다 → 터치 판정 축이 **종전과 완전히
+                        #    동일**해진다(이 기능 배포로 정상 레벨의 소급 터치 검출이
+                        #    줄어들지 않는다). now 를 쓰면 매 신규 레벨이 수집 후 첫
+                        #    회차의 소급 구간을 통째로 잃는다.
+                        #  · 승격(0 → 1): 이 레벨은 **진입가 아래에 있었음이 기록으로
+                        #    확정**돼 있다. 그 시절 저가로 터치되면 고치려는 버그가
+                        #    한 회차 늦게 재현되므로 반드시 now 다.
+                        _at = (_lv.get("collected_at") or now) if _first else now
+                        _arm_ids.append((_lv["id"], _at))
+                        _lv["armed"], _lv["armed_at"] = 1, _at
+                        logger.info(
+                            "[체크] 무장: %s id=%s 현재가 %.6g원 vs 진입가 %.6g원%s",
+                            _lv.get("coin_symbol"), _lv["id"], _cur, _e_krw,
+                            " (레거시 관용 %.1f%%)" % (_arm_tol * 100) if _first and _arm_tol else "")
+                    elif _first:
+                        _wait_ids.append((_lv["id"], None))
+                        _lv["armed"] = 0
+                        logger.info(
+                            "[체크] 무장 대기: %s id=%s 현재가 %.6g원 < 진입가 %.6g원 "
+                            "(진입가 위로 올라올 때까지 터치 판정 제외)",
+                            _lv.get("coin_symbol"), _lv["id"], _cur, _e_krw)
+            try:
+                if _arm_ids:
+                    db.set_armed(conn, _arm_ids, 1)
+                if _wait_ids:
+                    db.set_armed(conn, _wait_ids, 0)
+                if _arm_ids or _wait_ids:
+                    conn.commit()
+                    summary["armed"] = len(_arm_ids)
+                    summary["arm_waiting"] = len(_wait_ids)
+            except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+                logger.warning("[체크] 무장 상태 기록 실패(무시하고 진행): %s", e)
+            # 무장 안 된 레벨은 이번 회차 터치·예고 판정에서 제외한다. 감시
+            # 상태(watching/previewed)는 유지되고 타임프레임 만료도 종전대로 —
+            # 다음 회차에 진입가 위로 올라오면 무장하고 정상 경로로 복귀한다.
+            by_ticker = {t: [l for l in lvs if l.get("armed") == 1]
+                         for t, lvs in by_ticker.items()}
+            by_ticker = {t: lvs for t, lvs in by_ticker.items() if lvs}
+
         # 순환 import 방지 지연 로드. grade_from_score 는 grading.py 를 고치지 않고
         # 이미 있는 순수 함수를 읽기 전용으로 재사용하는 용도(TP 감점 되돌림 판정).
         from collector.grading import grade_from_score, meets_min_grade, regrade_current
@@ -924,10 +1034,11 @@ def run_once(now: float | None = None) -> dict:
             candles = _get_range(ticker, 30) if need_low else None
 
             def _eff_low(lv_):
-                """레벨별 유효 저가 — 수집(collected_at) 이후 시작한 캔들만 인정.
+                """레벨별 유효 저가 — max(collected_at, armed_at) 이후 시작한 캔들만 인정.
                 (2026-07-26 감사 major3: 레벨이 존재하기 전 가격으로 터치·종결되던
-                문제 — 다운타임 15분봉 폴백(최대 50h 소급) 직후 수집 시 재발 구조)"""
-                col = lv_.get("collected_at") or 0
+                문제 — 다운타임 15분봉 폴백(최대 50h 소급) 직후 수집 시 재발 구조.
+                2026-09-27 ①: 무장 전 저가 배제 — 사유는 _arm_floor 주석 참고)"""
+                col = _arm_floor(lv_)
                 lows = [c[3] for c in (candles or []) if c[0] >= col]
                 return min([current] + lows)
 
@@ -1122,6 +1233,35 @@ def run_once(now: float | None = None) -> dict:
                         db.record_alert(conn, coin, "touch_no_tp", ids, day, now, sent=0)
                     except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
                         logger.warning("[체크] %s no_tp 무음 기록 실패(무시): %s", coin, e)
+
+                # 관통 깊이 게이트 (2026-09-27 즉시터치 버그 수리 ② — **안전망**).
+                # 무장 게이트(①)가 근본 원인을 막지만, 그 스위치가 꺼졌거나 수집
+                # 경로가 또 바뀌어 진입가 한참 아래의 레벨이 다시 새면 알림 직전에
+                # 한 번 더 끊는다. 두 겹으로 두는 것이 사용자 결정(①+② 동시 적용).
+                #
+                # 기준은 **현재가**다: pen = (진입가상단 - 현재가)/진입가상단 × 100.
+                # touch_penetration_pct(_touch_quality)를 쓰지 않는 이유는 그 값이
+                # 완성 캔들만 인정해 실시간 터치에서 대부분 NULL 이기 때문 —
+                # 게이트의 입력으로는 쓸 수 없다(항상 통과해 버린다).
+                # 억제 관례는 no_tp 게이트와 완전히 동일: send_ok=False + 무음
+                # 기록 kind='touch_deep'(sent=0). 'touch' 로 쓰면 일일 상한·재발송
+                # 차단·TP 단계 게이트가 이 행을 발송분으로 오인한다.
+                # 터치 기록·판정·MFE 추적은 아래에서 그대로 수행된다.
+                _pen_max = cfg_get("alert_touch_max_penetration_pct") or 0
+                if send_ok and kind == "touch" and _pen_max > 0 and top_krw > 0:
+                    _pen_now = (top_krw - current) / top_krw * 100.0
+                    if _pen_now > _pen_max:
+                        logger.info("[체크] %s 관통 %.1f%% > %.1f%% - 알림 억제"
+                                    "(touch_deep, 진입가 %.6g원 vs 현재가 %.6g원)",
+                                    coin, _pen_now, _pen_max, top_krw, current)
+                        send_ok = False
+                        summary["suppressed_deep_touch"] = \
+                            summary.get("suppressed_deep_touch", 0) + 1
+                        try:
+                            db.record_alert(conn, coin, "touch_deep", ids, day, now, sent=0)
+                        except Exception as e:  # noqa: BLE001 - 기록 실패가 터치 경로를 죽이면 안 됨
+                            logger.warning("[체크] %s touch_deep 무음 기록 실패(무시): %s",
+                                           coin, e)
 
                 if send_ok and kind == "touch" and \
                         db.count_alerts_today(conn, coin, day, kind="touch") >= daily_cap:
@@ -1659,7 +1799,10 @@ def run_once(now: float | None = None) -> dict:
                         t_anchor = now
                         if reached:
                             for c in candles or []:
-                                if c[0] >= (lv.get("collected_at") or 0) and c[3] <= e_krw:
+                                # 하한은 _eff_low 와 **같은 축**이어야 한다
+                                # (2026-09-27 ①: 무장 전 캔들이 앵커가 되면
+                                #  touched_at 이 무장보다 앞서 기록된다)
+                                if c[0] >= _arm_floor(lv) and c[3] <= e_krw:
                                     t_anchor = c[1]
                                     break
                         touches.append((lv["id"], e_krw if reached else None, t_anchor))
@@ -1702,9 +1845,12 @@ def run_once(now: float | None = None) -> dict:
                         _snap_rows = []
                         for lv, (_lid, _price, _t_anchor) in zip(cluster, touches):
                             if _price is not None:
+                                # 기준 시각은 _eff_low·앵커와 동일한 _arm_floor
+                                # (2026-09-27 ①) — 무장 전 캔들의 관통 깊이를
+                                # 기록하면 오염 표본 판별축(STALE_TOUCH_COND)이
+                                # 자기 자신을 못 알아본다.
                                 _pen_pct, _closed_below = _touch_quality(
-                                    candles, lv.get("collected_at") or 0,
-                                    _price, now)
+                                    candles, _arm_floor(lv), _price, now)
                             else:  # 섀도 터치 — 자기 엔트리 미도달, 품질 무의미
                                 _pen_pct, _closed_below = None, None
                             _snap_rows.append(

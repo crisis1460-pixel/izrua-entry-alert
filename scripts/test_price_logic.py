@@ -3834,6 +3834,15 @@ with db.connect(_EI_DB) as conn:
         _ei_ids[_tag] = conn.execute(
             "SELECT id FROM levels WHERE signal_key=?", (_lvei["signal_key"],)
         ).fetchone()["id"]
+    # 2026-09-27 무장 게이트(①) 도입에 따른 픽스처 보강 — EI8 의 계약은 그대로다.
+    # crash 는 "회차가 길게 끊긴 사이 가격이 진입가 아래로 반토막 난 **정상 대기
+    # 레벨**"을 뜻한다. 정상 대기였다는 말은 곧 급락 **전에** 현재가가 진입가 위에
+    # 있었다는 뜻이고, 그 시점에 무장이 이미 끝나 있다(armed=1). 그래서 실운영
+    # 재현에는 armed=1 을 심어야 맞다 — 심지 않으면 이 픽스처는 EI8 이 말하려는
+    # 상황이 아니라 **무장 게이트가 잡아야 하는 바로 그 버그**(수집 시점에 이미
+    # 진입가 아래)를 재현하게 된다. 그 반대 케이스는 ARM1 이 따로 못박는다.
+    conn.execute("UPDATE levels SET armed=1, armed_at=? WHERE id=?",
+                 (_ei_now - 3600, _ei_ids["crash"]))
 
 _ei_saved = (fake["price"], fake["candles"], fake["high"], fake["low"])
 fake["price"] = _EI_CUR_USD * USDT_KRW
@@ -4508,6 +4517,235 @@ fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
 for _p in (_RX_DB, _rx_ledger):
     if os.path.exists(_p):
         os.remove(_p)
+
+# ══════════════════════════════════════════════════════════════════════
+# ARM* / DEEP* / STALE*: 무장 게이트 + 관통 깊이 게이트 (2026-09-27)
+# ══════════════════════════════════════════════════════════════════════
+# 버그: 터치 판정이 "수집 이후 저가 ≤ 진입가" 하나뿐이라, **수집 시점에 이미
+# 현재가가 진입가 아래인 롱 레벨**이 2분 뒤 회차에서 곧바로 '터치'로 발송됐다.
+# 돌파 트리거 글("$1.42 BREAKOUT", 현재가 $1.17)이 전형 — 1.42 를 위로 뚫으라는
+# 뜻인데 판정부는 "저가 1.17 ≤ 1.42" 로 읽는다. 실사례 SUI id=884(진입 1,933원 vs
+# 현재 1,590원, 관통 17.5%). 운영 DB 실측: 즉시터치(<10분)&관통>10% 33건 · 발송
+# 14건 · 종결 승률 4.3%(1/23) vs 정상 터치(관통≤2%) 60.9%.
+# 수리는 두 겹(사용자 결정): ① 무장 상태 ② 관통 깊이 게이트(안전망).
+_ARM_T0 = now + 90000
+_arm_prev_db = settings.SETTINGS["db_path"]
+
+
+def _arm_open(tag):
+    """빈 DB + 원장 초기화 후 경로 반환 (원장은 DB 밖 파일이라 따로 지운다)."""
+    path = "cache/_test_arm_%s.db" % tag
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+    db.init_db(path)
+    settings.SETTINGS["db_path"] = path
+    return path
+
+
+def _arm_close(path):
+    settings.SETTINGS["db_path"] = _arm_prev_db
+    for p in (path, _alert_ledger.ledger_path(path)):
+        if os.path.exists(p):
+            os.remove(p)
+
+
+def _arm_seed(path, tag, collected_at, entry=100.0, tp=115.0, armed=None):
+    """롱 레벨 1건 삽입 → level_id. armed 를 주면 그 상태를 직접 심는다
+    (게이트 ② 단독 검증용 — ①을 통과한 상태를 재현한다)."""
+    lv = dict(coin_symbol="ARMC", ticker="KRW-ARMC", direction="long",
+              entry_usd=entry, sl_usd=entry * 0.94, tp_usd=tp, rr=2.4,
+              grade="B", score=62, author="ARM_auth", author_followers=50000,
+              author_hit_rate=0.67, author_hit_count=12, author_whitelisted=False,
+              mcap_rank=80, mcap_tier_icon="🥈",
+              post_url="https://tv.com/arm", post_age_minutes=600,
+              collected_at=collected_at)
+    lv["signal_key"] = db.make_signal_key("ARMC", entry, "ARM_auth", tag)
+    with db.connect(path) as conn:
+        db.upsert_level(conn, lv)
+        lid = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                           (lv["signal_key"],)).fetchone()["id"]
+        if armed is not None:
+            conn.execute("UPDATE levels SET armed=?, armed_at=? WHERE id=?",
+                         (armed, collected_at if armed else None, lid))
+        conn.commit()
+    return lid
+
+
+def _arm_cycle(t, price, candles=None):
+    """한 회차 돌리고 이번 회차에 발송된 메시지 수 반환."""
+    fake["price"] = price
+    fake["candles"] = candles
+    fake["high"] = fake["low"] = None
+    _before = len(sent_messages)
+    price_check.run_once(t)
+    return len(sent_messages) - _before
+
+
+def _arm_row(path, lid):
+    with db.connect(path) as conn:
+        r = conn.execute(
+            "SELECT armed, armed_at, status, touched_at, touch_score, "
+            "touch_penetration_pct FROM levels WHERE id=?", (lid,)).fetchone()
+        return dict(r)
+
+
+def _arm_logs(path):
+    with db.connect(path) as conn:
+        return [(r["kind"], r["sent"]) for r in
+                conn.execute("SELECT kind, sent FROM alerts_log ORDER BY id")]
+
+
+_ARM_E = 100.0 * USDT_KRW   # 진입가(KRW)
+
+# ── ARM1~ARM3: 수집 시 진입가 아래 → 대기, 위로 올라오면 무장, 그 뒤 터치 ──
+_a_path = _arm_open("basic")
+_a_id = _arm_seed(_a_path, "basic", _ARM_T0 - 120)
+# 회차1: 현재가가 진입가보다 12% 아래 = 버그를 일으키던 바로 그 상태.
+_a_sent1 = _arm_cycle(_ARM_T0, _ARM_E * 0.88)
+_a_row1 = _arm_row(_a_path, _a_id)
+# 회차2: 가격이 진입가 위로 올라왔다 → 무장(승격이므로 armed_at = 회차 시각).
+_a_t2 = _ARM_T0 + 300
+# 예고 밴드(1%) 밖의 가격을 쓴다 — 무장만 단독으로 검증하려면 예고 알림이
+# 끼어들면 안 된다(이 파일은 preview_alert_enabled=True 로 돌린다).
+_a_sent2 = _arm_cycle(_a_t2, _ARM_E * 1.03)
+_a_row2 = _arm_row(_a_path, _a_id)
+# 회차3: 무장 이후 캔들에서 진입가로 내려왔다 → 진짜 터치.
+_a_t3 = _ARM_T0 + 600
+_a_sent3 = _arm_cycle(_a_t3, _ARM_E * 1.001,
+                      candles=[(_a_t2 + 60, _a_t3 - 60, _ARM_E * 1.03,
+                                _ARM_E * 0.999, _ARM_E * 1.001)])
+_a_row3 = _arm_row(_a_path, _a_id)
+_a_logs = _arm_logs(_a_path)
+_arm_close(_a_path)
+
+check("ARM1 수집 시 현재가<진입가 → armed=0 대기 · 터치 안 됨 · 알림 0건",
+      _a_row1["armed"] == 0 and _a_row1["armed_at"] is None
+      and _a_row1["status"] == "watching" and _a_row1["touched_at"] is None
+      and _a_sent1 == 0)
+check("ARM2 현재가가 진입가 위로 올라오면 armed=1 (승격 armed_at = 그 회차 시각)",
+      _a_row2["armed"] == 1
+      and _a_row2["armed_at"] is not None
+      and abs(_a_row2["armed_at"] - _a_t2) < 1e-6)
+check("ARM3 무장 후 내려와 닿으면 터치 + 본알림 (정상 경로 복귀)",
+      _a_row3["status"] == "touched" and _a_row3["touched_at"] is not None
+      and _a_sent3 == 1 and _a_logs == [("touch", 1)]
+      and _a_sent2 == 0)
+
+# ── ARM4: 무장 전 캔들 저가는 터치로 인정되지 않는다 ──────────────────────
+# 핵심: 하한이 collected_at 하나면, armed=0 시절의 낮은 저가가 캔들 창에 남아
+# 무장 직후 회차에서 곧바로 '터치'로 읽힌다 = 버그가 한 회차 늦게 재현된다.
+_a4_path = _arm_open("prearm")
+_a4_id = _arm_seed(_a4_path, "prearm", _ARM_T0 - 120)
+_arm_cycle(_ARM_T0, _ARM_E * 0.88)                   # armed=0
+_a4_t2 = _ARM_T0 + 300
+_arm_cycle(_a4_t2, _ARM_E * 1.03)                    # armed=1 (armed_at=_a4_t2)
+# 회차3: 저가가 진입가를 한참 뚫은 캔들이지만 **무장보다 앞**(c[0] < armed_at).
+_a4_sent = _arm_cycle(_ARM_T0 + 600, _ARM_E * 1.03,
+                      candles=[(_a4_t2 - 240, _a4_t2 - 180, _ARM_E * 1.0,
+                                _ARM_E * 0.88, _ARM_E * 0.9)])
+_a4_row = _arm_row(_a4_path, _a4_id)
+_arm_close(_a4_path)
+check("ARM4 무장 전 캔들 저가는 무시된다 (하한 = max(collected_at, armed_at))",
+      _a4_row["status"] == "watching" and _a4_row["touched_at"] is None
+      and _a4_sent == 0)
+
+# ── ARM5: 레거시 관용 — armed IS NULL & 밴드(2%) 안이면 1 로 판정 ────────
+# 배포 첫 회차에 진입가 바로 아래에서 정상 대기 중인 레벨까지 잠그면 정상 대기를
+# 벌주는 셈이다. 첫 판정의 armed_at 은 collected_at — 터치 판정 축이 종전과
+# 동일해져 소급 터치 검출이 줄지 않는다.
+_a5_path = _arm_open("legacy")
+_a5_col = _ARM_T0 - 3600
+_a5_id = _arm_seed(_a5_path, "legacy", _a5_col)
+_arm_cycle(_ARM_T0, _ARM_E * 0.99)      # 진입가 1% 아래 = 관용 밴드(2%) 안
+_a5_row = _arm_row(_a5_path, _a5_id)
+_arm_close(_a5_path)
+check("ARM5 레거시 관용: armed NULL & 진입가 -1%(밴드 내) → armed=1, "
+      "armed_at=collected_at",
+      _a5_row["armed"] == 1 and _a5_row["armed_at"] is not None
+      and abs(_a5_row["armed_at"] - _a5_col) < 1e-6)
+
+# ── ARM6: 롤백 스위치 — 두 게이트 OFF 면 완전한 종전 동작 ────────────────
+_a6_path = _arm_open("off")
+_a6_id = _arm_seed(_a6_path, "off", _ARM_T0 - 120)
+settings.SETTINGS["watch_arming_enabled"] = False
+settings.SETTINGS["alert_touch_max_penetration_pct"] = 0.0
+_a6_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.88)
+settings.SETTINGS["watch_arming_enabled"] = True
+settings.SETTINGS["alert_touch_max_penetration_pct"] = 10.0
+_a6_row = _arm_row(_a6_path, _a6_id)
+_a6_logs = _arm_logs(_a6_path)
+_arm_close(_a6_path)
+check("ARM6 스위치 OFF — 종전 동작(즉시 터치 + 발송), armed 컬럼 미기록",
+      _a6_row["armed"] is None and _a6_row["armed_at"] is None
+      and _a6_row["status"] == "touched" and _a6_sent == 1
+      and _a6_logs == [("touch", 1)])
+
+# ── DEEP1~DEEP4: 관통 깊이 게이트 (②, 안전망) ───────────────────────────
+# ①이 새더라도 알림 직전에 한 번 더 끊는다. 기준은 **현재가**
+# (touch_penetration_pct 는 완성 캔들만 인정해 실시간 터치에선 대부분 NULL —
+# 게이트 입력으로 쓰면 항상 통과한다). 억제 관례는 no_tp 게이트와 동일:
+# send_ok=False + alerts_log kind='touch_deep' · sent=0.
+_d1_path = _arm_open("deep12")
+_d1_id = _arm_seed(_d1_path, "deep12", _ARM_T0 - 120, armed=1)  # ①은 통과한 상태
+_d1_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.88)   # 관통 12% > 10%
+_d1_row = _arm_row(_d1_path, _d1_id)
+_d1_logs = _arm_logs(_d1_path)
+_arm_close(_d1_path)
+
+_d2_path = _arm_open("deep3")
+_d2_id = _arm_seed(_d2_path, "deep3", _ARM_T0 - 120, armed=1)
+_d2_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.97)   # 관통 3% <= 10%
+_d2_row = _arm_row(_d2_path, _d2_id)
+_d2_logs = _arm_logs(_d2_path)
+_arm_close(_d2_path)
+
+check("DEEP1 관통 12% — 알림 억제 + alerts_log kind='touch_deep' · sent=0",
+      _d1_sent == 0 and _d1_logs == [("touch_deep", 0)])
+check("DEEP2 관통 3% — 종전대로 발송 (정상 터치를 죽이지 않는다)",
+      _d2_sent == 1 and _d2_logs == [("touch", 1)]
+      and _d2_row["status"] == "touched")
+check("DEEP3 억제돼도 터치 기록·재채점 판정은 그대로 진행 (데이터는 계속 쌓인다)",
+      _d1_row["status"] == "touched" and _d1_row["touched_at"] is not None
+      and _d1_row["touch_score"] is not None)
+check("DEEP4 무음 기록은 'touch' 가 아니다 — 일일 상한·재발송·TP 게이트 무손상",
+      all(k != "touch" for k, _ in _d1_logs))
+
+# ── STALE1~3: 오염 표본 배제 조건이 분석 조회에 실제로 걸려 있는가 (③) ────
+# 소급 수정은 하지 않는다 — 조회에서만 뺀다. NULL 관통(억제 터치·백필 대기·
+# 구세대 행)이 SQL 3값 논리로 조용히 사라지지 않는 것까지 함께 못박는다.
+_st_path = _arm_open("stale")
+with db.connect(_st_path) as conn:
+    for _tag, _pen, _gap in [("clean", 1.0, 7200), ("stale", 17.5, 120),
+                             ("nullpen", None, 120), ("deepslow", 17.5, 7200)]:
+        _c = _ARM_T0 - 100000
+        conn.execute(
+            "INSERT INTO levels (coin_symbol, ticker, direction, entry_usd, "
+            "sl_usd, tp_usd, grade, score, author, signal_key, collected_at, "
+            "status, touched_at, resolved_at, outcome, r_multiple, "
+            "touch_penetration_pct, grade_ver) VALUES "
+            "('STL','KRW-STL','long',100,94,115,'B',62,'STL_auth',?,?,"
+            "'touched',?,?,'hit',2.0,?,'vSTALE')",
+            ("stl-" + _tag, _c, _c + _gap, _c + _gap + 3600, _pen))
+    conn.commit()
+    _st_author = db.author_closed_stats(conn, "STL_auth")
+    _st_rows = db.get_author_outcome_rows(conn, "STL_auth")
+    _st_r = db.get_closed_r_rows(conn)
+    _st_hold = db.get_closed_holding_rows(conn)
+    _st_between = db.get_resolved_rows_between(conn, _ARM_T0 - 200000, _ARM_T0)
+    _st_cal = db.get_weekly_calibration_rows(conn, "vSTALE")
+_arm_close(_st_path)
+check("STALE1 즉시터치(관통>10% & <10분) 1건이 6개 분석 조회에서 전부 빠진다",
+      _st_author == (3, 3) and len(_st_rows) == 3 and len(_st_r) == 3
+      and len(_st_hold) == 3 and len(_st_between) == 3 and len(_st_cal) == 3)
+check("STALE2 관통 NULL 행은 배제되지 않는다 (SQL 3값 논리 함정 — COALESCE 방어)",
+      all(any(True for _ in x) for x in (_st_rows, _st_r, _st_hold))
+      and len(_st_rows) == 3)
+check("STALE3 조건은 AND — 관통이 깊어도 느린 터치(뉴스 급락 등)는 정상 표본",
+      db.STALE_TOUCH_COND.count(" AND ") == 1 and db.NOT_STALE.startswith("NOT "))
+
+fake["price"] = fake["candles"] = fake["high"] = fake["low"] = None
+settings.SETTINGS["db_path"] = _arm_prev_db
 
 print()
 print("── 본알림 실제 렌더링 ──")

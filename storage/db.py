@@ -497,7 +497,37 @@ _EXTRA_COLUMNS = {
     # 같은 message_id 를 공유하는 클러스터 형제 전원에 동일 값이 찍힌다
     # (반응은 레벨이 아니라 **메시지**의 속성).
     "touch_reaction": "TEXT",
+    # 무장(arming) 상태 (2026-09-27 즉시터치 버그 수리 ①).
+    #   NULL = 미판정(이 기능 배포 이전 수집분 포함) — 첫 회차에 자동 판정된다.
+    #   0    = 대기: 수집 시점에 이미 현재가가 진입가 **아래**인 롱 레벨.
+    #          터치·예고 판정 대상에서 제외한다("$1.42 돌파" 글이 현재가 $1.17
+    #          에서 2분 뒤 '즉시 터치'로 발송되던 버그 — SUI id=884 관통 17.5%).
+    #   1    = 무장: 현재가가 진입가 위로 올라온 사실을 한 번 확인했다 → 이제
+    #          내려와 닿으면 진짜 터치다.
+    # 소급 UPDATE 없음 — 배포 첫 회차에 규칙대로 자동 판정되는 것이 백필이다.
+    "armed": "INTEGER",
+    # 무장 확정 시각(epoch). 터치 판정의 캔들 하한이 max(collected_at, armed_at)
+    # 이 되어 **무장 전 캔들 저가로는 터치되지 않는다**. armed=0/NULL 이면 NULL.
+    "armed_at": "REAL",
 }
+
+# ── 오염 터치(즉시터치) 표본 배제 조건 (2026-09-27) ───────────────────────────
+# 버그 정의: 터치 판정이 "수집 이후 저가 ≤ 진입가" 하나뿐이라, 수집 시점에 이미
+# 현재가가 진입가 아래인 롱 레벨이 다음 회차에서 곧바로 '터치'로 기록됐다.
+# 운영 DB 실측: 즉시터치(<10분) & 관통>10% 33건의 종결 승률 4.3%(1/23) vs
+# 정상 터치(관통≤2%) 60.9% — 같은 표에 섞으면 승률·캘리브레이션·작성자 가점이
+# 전부 아래로 끌려간다. **행은 소급 수정하지 않는다**(원천 보존 원칙) — 분석
+# 조회에서만 배제한다. 즉시터치가 아닌 깊은 관통(뉴스 급락 등)은 정상 표본이므로
+# 두 조건의 **AND** 여야 한다.
+#
+# COALESCE 가 필수다(설계안의 평문 비교에서 의도적으로 보강): SQL 3값 논리에서
+# touch_penetration_pct 가 NULL 이면 `NULL > 10` = NULL → `NOT (NULL AND TRUE)`
+# = NULL → **그 행이 조회에서 조용히 사라진다**. 관통 깊이는 억제 터치·백필
+# 대기·구세대 행에서 흔히 NULL 이라, 보강 없이 붙이면 오염 33건을 빼려다
+# 정상 표본 수백 건을 날린다. NULL 은 "오염 아님"(fail-open)으로 읽는다.
+STALE_TOUCH_COND = ("(COALESCE(touch_penetration_pct, 0) > 10 "
+                    "AND (COALESCE(touched_at, 0) - COALESCE(collected_at, 0)) < 600)")
+NOT_STALE = "NOT " + STALE_TOUCH_COND
 
 
 def _migrate(conn) -> None:
@@ -793,6 +823,33 @@ def get_active_levels(conn, direction: Optional[str] = "long") -> list:
         q += " AND direction = ?"
         params = (direction,)
     return [dict(r) for r in conn.execute(q, params).fetchall()]
+
+
+def set_armed(conn, rows, armed: int) -> int:
+    """무장 상태 기록 (2026-09-27 ①). rows = [(level_id, armed_at|None), ...].
+
+    armed_at 을 행마다 받는 이유: 호출부(price_check)가 **첫 판정**(armed IS NULL)
+    과 **승격**(0 → 1)에 다른 시각을 쓴다. 첫 판정은 collected_at(수집 시점부터
+    무장 조건을 만족했다고 본다 — 종전 터치 판정 축과 동일), 승격은 now(그전엔
+    진입가 아래에 있었음이 기록으로 확정돼 있다). 자세한 근거는 그쪽 주석.
+
+    활성(watching/previewed) 행만 갱신한다 — 이미 터치·만료된 행의 상태를 뒤늦게
+    바꾸면 과거 판정의 근거가 흔들린다. armed=0 은 armed_at NULL 을 유지한다
+    (대기 상태에는 '무장 시각'이 없다). 되돌림(1 → 0)은 호출부에서 하지 않는다:
+    한 번 무장한 레벨은 만료까지 무장 상태로 남는 것이 설계다(가격이 다시 진입가
+    위로 갔다 내려오는 것은 정상 터치이고, 재무장을 요구하면 정작 유효한 터치를
+    놓친다)."""
+    if not rows:
+        return 0
+    n = 0
+    for lid, at in rows:
+        cur = conn.execute(
+            "UPDATE levels SET armed=?, armed_at=? WHERE id=? "
+            "AND status IN ('watching','previewed')",
+            (int(armed), float(at) if (armed and at) else None, lid),
+        )
+        n += cur.rowcount or 0
+    return n
 
 
 def mark_previewed(conn, level_id: int, now: Optional[float] = None) -> None:
@@ -1189,12 +1246,16 @@ def get_ret_pending(conn, now: Optional[float] = None) -> list:
 
 def get_author_outcome_rows(conn, author: Optional[str]) -> list:
     """작성자의 종결 표본 원천 행 — analytics.ranking 계산용 (작성자 통계는 저장하지
-    않고 매번 집계, ACCURACY_DB_PLAN 원천 보존 원칙). 섀도 터치는 자동 제외."""
+    않고 매번 집계, ACCURACY_DB_PLAN 원천 보존 원칙). 섀도 터치는 자동 제외.
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE)도 제외 — 무장 버그가 만든 승률
+    4.3% 터치가 작성자 랭킹을 끌어내린다."""
     if not author:
         return []
     return [dict(r) for r in conn.execute(
         "SELECT outcome, r_multiple, touched_at, author_hit_rate, author_hit_count "
-        "FROM levels WHERE author=? AND outcome IS NOT NULL AND touched_at IS NOT NULL",
+        "FROM levels WHERE author=? AND outcome IS NOT NULL AND touched_at IS NOT NULL "
+        f"AND {NOT_STALE}",
         (author,)).fetchall()]
 
 
@@ -1206,13 +1267,17 @@ def author_closed_stats(conn, author: Optional[str]) -> tuple:
     분모 = outcome 확정 전체(타임박스 포함), 분자 = outcome='hit' 만
     (timeboxed_win 은 목표가를 실제로 찍은 게 아니라 분자에서 제외).
     작성자 없음/미상은 (0, 0) = 가점 0(중립). E_LB(ranking, R 트랙·최신성 가중)와는
-    다른 축이다 — 등급 가점은 게이트 있는 고정 배점표라 단순 원시 비율을 쓴다."""
+    다른 축이다 — 등급 가점은 게이트 있는 고정 배점표라 단순 원시 비율을 쓴다.
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE) 제외 — 이 값은 **등급 가점의 입력**
+    이라, 오염된 승률이 들어가면 그대로 알림 판정에 실린다."""
     if not author:
         return 0, 0
     row = conn.execute(
         "SELECT COUNT(*) AS n, "
         "SUM(CASE WHEN outcome='hit' THEN 1 ELSE 0 END) AS h "
-        "FROM levels WHERE author=? AND outcome IN ('hit','miss','timeboxed_win','timeboxed_loss')",
+        "FROM levels WHERE author=? AND outcome IN ('hit','miss','timeboxed_win','timeboxed_loss') "
+        f"AND {NOT_STALE}",
         (author,)).fetchone()
     return row["n"] or 0, row["h"] or 0
 
@@ -1323,21 +1388,27 @@ def get_ret24_values(conn) -> list:
 def get_closed_r_rows(conn) -> list:
     """R-멀티플 분포 분석용 원천 행 (2026-08-01 내부기능강화 리서치, analytics.distribution
     이 소비). r_multiple 이 NULL(SL 미기재 tp_only 표본)인 행은 그 지표 자체가 R 트랙
-    표본만 다루므로 여기서부터 제외 — E_LB(ranking.py)와 동일한 축 원칙."""
+    표본만 다루므로 여기서부터 제외 — E_LB(ranking.py)와 동일한 축 원칙.
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE) 제외 — 진입가보다 한참 아래에서
+    체결된 것으로 기록된 R 값은 실현 가능한 분포가 아니다."""
     return [dict(r) for r in conn.execute(
         "SELECT r_multiple, grade FROM levels WHERE r_multiple IS NOT NULL "
-        "AND outcome IS NOT NULL"
+        f"AND outcome IS NOT NULL AND {NOT_STALE}"
     ).fetchall()]
 
 
 def get_closed_holding_rows(conn) -> list:
     """보유기간(터치~종결 경과시간) 분석용 원천 행 (2026-08-01 내부기능강화 리서치,
     analytics.distribution 이 소비). 섀도 터치(touched_at NULL)는 애초에 종결
-    판정 대상이 아니라 자동 제외된다(get_unresolved_touched 와 동일 표본 기준)."""
+    판정 대상이 아니라 자동 제외된다(get_unresolved_touched 와 동일 표본 기준).
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE) 제외 — 즉시 터치 건은 보유기간
+    분포의 좌측 꼬리를 인위적으로 늘린다."""
     return [dict(r) for r in conn.execute(
         "SELECT touched_at, resolved_at, outcome FROM levels "
         "WHERE touched_at IS NOT NULL AND resolved_at IS NOT NULL "
-        "AND outcome IS NOT NULL"
+        f"AND outcome IS NOT NULL AND {NOT_STALE}"
     ).fetchall()]
 
 
@@ -1385,11 +1456,15 @@ def get_resolved_rows_between(conn, start_ts: float, end_ts: float) -> list:
     표본 기준은 기존 통계(get_author_outcome_rows·fetch_calibration_rows)와 동일 —
     미종결(outcome NULL)·섀도 터치(touched_at NULL)는 표본이 아니다.
     resolved_at 전용 인덱스는 두지 않는다(levels 는 1천 행대이고, 이 조회는 주 1회
-    리포트 경로에서만 돈다 — 2분 핫패스가 아니다)."""
+    리포트 경로에서만 돈다 — 2분 핫패스가 아니다).
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE) 제외 — 주간 리포트의 승률·PF·
+    등급별 표가 이 조회 하나에서 나온다."""
     return [dict(r) for r in conn.execute(
         f"SELECT {_WEEKLY_ROW_COLS} FROM levels "
         "WHERE outcome IS NOT NULL AND touched_at IS NOT NULL "
-        "AND resolved_at IS NOT NULL AND resolved_at >= ? AND resolved_at < ?",
+        "AND resolved_at IS NOT NULL AND resolved_at >= ? AND resolved_at < ? "
+        f"AND {NOT_STALE}",
         (float(start_ts), float(end_ts))
     ).fetchall()]
 
@@ -1429,11 +1504,14 @@ def get_weekly_calibration_rows(conn, ver: str) -> list:
     """등급 캘리브레이션 표본 [(touch_grade 아닌 grade, outcome, ambiguous), ...] —
     grade_ver 가 지정 버전인 행만. scripts/show_status.fetch_calibration_rows 와 같은
     표본 기준이며, 주간 리포트가 show_status 를 import 하지 않아도 되게 db 쪽에 둔다
-    (run_weekly_report 는 최신 버전 → 표본 0 이면 직전 버전 순으로 시도한다)."""
+    (run_weekly_report 는 최신 버전 → 표본 0 이면 직전 버전 순으로 시도한다).
+
+    2026-09-27: 즉시터치 오염 표본(NOT_STALE) 제외 — 오염 터치는 등급과 무관하게
+    지는 표본이라 캘리브레이션 곡선을 등급 순서째로 평탄화한다."""
     return [tuple(r) for r in conn.execute(
         "SELECT grade, outcome, ambiguous FROM levels "
         "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL "
-        "AND grade_ver = ?", (ver,)
+        f"AND {NOT_STALE} AND grade_ver = ?", (ver,)
     ).fetchall()]
 
 

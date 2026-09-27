@@ -168,6 +168,23 @@
 
 아래 게이트를 **순서대로** 통과해야 텔레그램 발송:
 
+### 게이트 0: 무장(arming) — 터치 판정 대상 자격 (2026-09-27)
+```
+롱: 현재가 ≥ 진입가 를 한 번 확인(armed=1)한 레벨만 터치·예고 판정   (watch_arming_enabled = True)
+```
+**버그 배경**: 터치 판정이 "수집 이후 저가 ≤ 진입가" 하나뿐이라, 수집 시점에 이미 현재가가
+진입가 아래인 롱 레벨(돌파 트리거 글 "$1.42 BREAKOUT", 현재가 $1.17)이 2분 뒤 회차에서 즉시
+터치로 발송됐다(SUI id=884, 관통 17.5%). 실측 즉시터치(<10분)&관통>10% **33건 종결 승률 4.3%**
+vs 정상 터치(관통≤2%) 60.9%.
+- `levels.armed`(NULL 미판정/0 대기/1 무장)·`armed_at`. 회차마다 진입가 sanity 뒤·클러스터 앞에서
+  판정. NULL 첫 판정은 `watch_arm_tolerance_pct`(2%) 관용(진입가 바로 아래 정상 대기 보호,
+  armed_at=collected_at → 종전 판정축과 동일). 0→1 승격은 관용 없이 `current ≥ entry`, armed_at=now.
+- 터치 캔들 하한 = `max(collected_at, armed_at)` (`_arm_floor`) — `_eff_low`·터치 앵커·`_touch_quality`
+  전부 같은 축. 무장 전 저가로는 터치되지 않는다.
+- armed=0 레벨은 감시 유지·타임프레임 만료 종전대로. 한 번 무장하면 되돌리지 않는다.
+- 배포 첫 회차가 백필(활성 42건 전부 current≥entry → 무해). 롤백: `watch_arming_enabled=False`.
+**파일:** `monitor/price_check.py` (summary 키 `armed`/`arm_waiting`), `storage/db.py` `set_armed`. 테스트 ARM1~6.
+
 ### 게이트 1: 최소 등급
 ```
 등급 ≥ C    (alert_min_grade = "C", 2026-09-13 사용자 결정 "A안": D→C 상향 원복.
@@ -209,6 +226,19 @@ raw `tp_usd>0` 로 보수 판단). 터치 기록·판정·MFE 추적은 그대�
 억제 시 `alerts_log` 에 **kind=`touch_no_tp`, sent=0** 무음 기록 — `touch` 로 쓰면
 일일 상한·재발송 차단이 이 행을 발송분으로 오인해 정상 알림 슬롯을 잡아먹기 때문.
 **파일:** `monitor/price_check.py` (summary 키 `suppressed_no_tp`). 테스트 NOTP1~6.
+
+### 게이트 3-3: 관통 깊이 (2026-09-27, 안전망)
+```
+(진입가상단 − 현재가)/진입가상단 > 10% → 터치 알림 억제   (alert_touch_max_penetration_pct = 10.0)
+```
+게이트 0이 근본 원인을 막고, 이 게이트는 스위치 OFF·갭 급락 등 우회 경로의 안전망. 현재가 기준
+즉시 계산(`touch_penetration_pct` 는 완성 캔들만 인정해 실시간엔 대부분 NULL — 게이트 입력 불가).
+억제 시 `alerts_log kind=touch_deep, sent=0` 무음 기록, 터치 기록·판정·MFE 는 그대로.
+`summary["suppressed_deep_touch"]` 가 꾸준히 오르면 게이트 0을 우회하는 경로가 있다는 신호.
+**분석 오염 제거**: `db.STALE_TOUCH_COND` = `COALESCE(touch_penetration_pct,0)>10 AND touched_at−collected_at<600`
+을 작성자 랭킹·가점(`author_closed_stats`)·R/보유기간 분포·주간 리포트·캘리브레이션(show_status 포함) 조회에서
+`NOT` 으로 배제(행 소급 수정 없음). COALESCE 필수 — 평문 비교면 관통 NULL 행이 3값 논리로 통째 사라진다.
+테스트 DEEP1~4, STALE1~3. 노트 `note_2026-09-27_arming_deep_touch.md`.
 
 ### 게이트 4: 코인별 일일 발송 한도
 ```
@@ -1203,10 +1233,19 @@ milestone_v6 150 / milestone_mfe 50`. 파일: `analytics/weekly.py`(신규, 순�
 `get_weekly_calibration_rows`). 테스트 `test_weekly_report.py` 97체크. 샘플
 `sample_weekly_2026-09-22.txt`(평문 1,947자). 상세 `note_2026-09-22_weekly_v2.md`.
 
+### 09-27 무장·관통 설정
+
+| 키 | 기본값 | 의미 |
+|---|---|---|
+| `watch_arming_enabled` | `True` | 게이트 0 무장 스위치(False = 종전 동작) |
+| `watch_arm_tolerance_pct` | `2.0` | NULL 첫 판정 관용(진입가 −2% 이내면 무장) |
+| `alert_touch_max_penetration_pct` | `10.0` | 게이트 3-3 관통 상한 |
+
 ### 되돌리기
 
 | 증상 | 조치 |
 |---|---|
+| 즉시터치 수리 후 정상 터치가 줄었다 | `watch_arming_enabled` → `False` (관통 게이트는 남는다) |
 | TP 없는 글도 알림 받고 싶다 | `alert_exclude_no_tp` → `False` |
 | 거래대금 감점을 켠 뒤 알림이 너무 줄었다 | `grade_volume_rank_enabled` → `False`, 또는 `_penalty` → `-3` |
 | 주간 리포트가 잘린다 | `weekly_report_max_chars` 상향(텔레그램 4096 한도 내), 또는 `_top_authors` 하향 |

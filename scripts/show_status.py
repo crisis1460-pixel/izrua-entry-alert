@@ -198,9 +198,14 @@ def fetch_calibration_rows(conn, ver: str = None) -> list:
       'legacy' = grade_ver 미기록(NULL)·현행과 다른 버전 = 구 산식 표본
       그 외     = 해당 grade_ver 표본만 (예: 'v3')
     신·구 산식의 등급은 의미가 달라 한 표에 섞으면 캘리브레이션이 오염된다.
+
+    2026-09-27: 즉시터치 오염 표본(db.NOT_STALE) 제외 — 무장 버그가 만든 승률
+    4.3% 터치가 등급 곡선을 등급 순서째로 평탄화한다. db.get_weekly_calibration_rows
+    와 같은 조건을 쓴다(표본 축은 한 곳에서만 정의한다).
     """
     q = ("SELECT grade, outcome, ambiguous FROM levels "
-         "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL")
+         "WHERE grade IS NOT NULL AND outcome IS NOT NULL AND touched_at IS NOT NULL "
+         f"AND {db.NOT_STALE}")
     cur_ver = settings.get("grade_formula_ver")
     if ver == "legacy":
         return [tuple(r) for r in conn.execute(
