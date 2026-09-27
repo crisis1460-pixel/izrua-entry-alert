@@ -31,6 +31,12 @@ from collector.grading import (AUTHOR_TRACK_MAX, AUTHOR_TRACK_MIN_N, AUTHOR_TRAC
                                meets_min_grade, regrade_current, score_breakdown,
                                tp_distance_points)
 from config import settings
+# 2026-09-27 CI 시한폭탄 수리: 무장 관용 기준시각(watch_arming_since_ts)의 운영 기본값
+# (09-27 10:48 KST)을 그대로 두면, 별도 DB 를 쓰는 블록(SA/SB 등)의 "수집=지금−1h" 픽스처가
+# 실행 시각에 따라 레거시↔신규로 뒤바뀐다(11:48 이후 실행 시 7건 실패, CI eb42c19b7).
+# 테스트 전역에서는 먼 미래로 고정해 픽스처를 레거시로 취급하고, 신규 레벨 규칙은
+# ARM7~ 이 meta.arming_since 를 직접 심어 검증한다.
+settings.SETTINGS["watch_arming_since_ts"] = 9e12
 
 ok = True
 n_checks = 0

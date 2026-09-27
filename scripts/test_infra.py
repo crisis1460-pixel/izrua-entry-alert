@@ -59,6 +59,10 @@ check("iso_to_epoch: int input → None",
 # ─── prune_alerts_log ────────────────────────────────────────────────
 
 from storage import db
+# 2026-09-27 CI 시한폭탄 수리: 무장 관용 기준시각을 테스트 전역에서 먼 미래로 고정
+# (운영 기본값 09-27 10:48 KST 는 "수집=지금−Nh" 픽스처를 실행 시각에 따라 신규/레거시로 뒤바꾼다).
+from config import settings as _cfg_arm  # noqa: E402
+_cfg_arm.SETTINGS["watch_arming_since_ts"] = 9e12
 
 def _make_test_db():
     conn = sqlite3.connect(":memory:")
