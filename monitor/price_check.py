@@ -1991,7 +1991,7 @@ def run_once(now: float | None = None) -> dict:
         db.bump_daily_stats(conn, day, **obs)
         db.prune_daily_stats(conn, now)
         db.prune_alerts_log(conn)
-        db.prune_news_digest_queue(conn, now)   # 2026-09-13 A안 뉴스 큐 7일 보존
+        db.prune_news_digest_queue(conn, now)   # 2026-09-13 A안 뉴스 큐 보존(09-27 뉴스 v2: 7→9일, URL 재적재 차단 창 > 수집 창)
 
 
         # 적중 DB 해시체인 무결성 검증 (기획 카드 #3, 하루 1회) — 이 기능 자체의

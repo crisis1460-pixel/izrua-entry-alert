@@ -194,6 +194,124 @@ check("M5 다음 회차(2분 뒤) 재시도 성공",
       morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 120) == "ok"
       and get_brief_meta() == TODAY)
 
+# ── NEWS-SPLIT1~7: 한도 초과 시 뉴스 분할 발송 + 소비 가드 (2026-09-27) ─────
+# 사용자 요청 "브리핑이 길어져도 되니 내용별 문장을 좀 길게" → 한 통 한도를 넘을 수
+# 있다. 뉴스는 **자르지 않고** 두 번째 메시지로 나눈다. 09-14 사고(잘린 뉴스가 소비
+# 처리돼 영구 소실)가 분할에서도 재발하지 않는지 — 메시지별 소비를 검증한다.
+morning_brief._fetch_tickers = lambda markets, timeout: {}   # 가격 맥락 네트워크 차단
+_SPLIT_LIMIT = 900                                              # 실한도 3900 대신 축소 재현
+
+
+def _fill_news(tag, n=5, base=AT_9):
+    with db.connect(TEST_DB) as conn:
+        for i in range(n):
+            sym = f"Q{tag}{i}"
+            en = (f"#{sym} Market Analysis\n{sym} is at 1.2345 on the 4h, pulling back from the "
+                  f"1.4000 highs and holding above the demand zone.\nBull case: hold above 1.2000 "
+                  f"and resume the push toward 1.4000.\nBear case: lose 1.1500 and slide toward 1.0500.")
+            db.queue_news_digest(conn, sym, f"ch{i}", f"{sym} 는 1.2345 부근입니다.",
+                                 f"https://t.me/split/{tag}{i}", TODAY, base - 600 + i,
+                                 summary_en=en, posted_at=base - 3600 + i)
+
+
+def _unconsumed():
+    with db.connect(TEST_DB) as conn:
+        return db.count_news_digest(conn)
+
+
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+_fill_news("a")
+_orig_max = morning_brief._TELEGRAM_MAX_CHARS
+morning_brief._TELEGRAM_MAX_CHARS = _SPLIT_LIMIT
+with db.connect(TEST_DB) as conn:
+    _msgs = morning_brief.build_brief_messages(conn, AT_9, timeout=1.0)
+    _qids = [r[0] for r in conn.execute(
+        "SELECT id FROM news_digest_queue WHERE consumed=0").fetchall()]
+_news_msgs = _msgs[1:]
+check("NEWS-SPLIT1 한도 초과 → 본문 1통 + 뉴스 메시지(들)로 분할(≥2통)",
+      len(_msgs) >= 3 and "주요 뉴스" not in _msgs[0][0] and "모닝 브리핑" in _msgs[0][0])
+check("NEWS-SPLIT2 모든 메시지가 한도 이내(UTF-16 기준)",
+      all(morning_brief._tg_len(t) <= _SPLIT_LIMIT for t, _ids in _msgs))
+_all_heads = [ln for t, _ids in _news_msgs for ln in t.split("\n") if ln.startswith("   <b>")]
+check("NEWS-SPLIT3 뉴스 5건 전부 실림(자르지 않음) — 항목은 메시지 경계에서 쪼개지지 않는다",
+      len(_all_heads) == 5 and all(t.split("\n")[0].startswith("📰") for t, _ids in _news_msgs)
+      and all(not t.split("\n")[-1].startswith("   <b>") for t, _ids in _news_msgs))
+check("NEWS-SPLIT4 소비 id 는 메시지별로 정확히 나뉜다(본문 0 · 뉴스 합계 = 판정 후보 전부)",
+      _msgs[0][1] == [] and sorted(i for _t, ids in _news_msgs for i in ids) == sorted(_qids)
+      and all(len(ids) == sum(1 for ln in t.split("\n") if ln.startswith("   <b>"))
+              for t, ids in _news_msgs))
+
+# 뉴스 메시지 발송 실패 → 브리핑은 ok(날짜 마킹) · 뉴스는 **미소비**로 남아 다음 브리핑에
+set_brief_meta("")
+sent_log.clear()
+_fail_news = {"on": True}
+
+
+def _send_fail_news(text, urgency="high", reply_to_message_id=None):
+    sent_log.append(text)
+    if _fail_news["on"] and "주요 뉴스" in text:
+        return None
+    return 1
+
+
+telegram.send = _send_fail_news
+check("NEWS-SPLIT5 뉴스 분할 메시지 실패 → 브리핑 ok · 날짜 마킹 · 뉴스 5건 전부 미소비",
+      morning_brief.maybe_send_brief(TEST_DB, now=AT_9) == "ok"
+      and get_brief_meta() == TODAY and _unconsumed() == 5)
+# 다음 날: 전부 성공 → 그제서야 소비
+set_brief_meta("")
+sent_log.clear()
+_fail_news["on"] = False
+check("NEWS-SPLIT6 재시도(다음 브리핑) 성공 시 분할 메시지 모두 발송 · 전부 소비",
+      morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 86400) == "ok"
+      and len(sent_log) >= 3 and _unconsumed() == 0)
+# 첫 통(본문) 실패 → failed · 아무것도 소비·마킹 안 함
+_fill_news("b", base=AT_9 + 2 * 86400)
+set_brief_meta("")
+sent_log.clear()
+_send_result["ok"] = False
+telegram.send = _fake_send
+check("NEWS-SPLIT7 본문 발송 실패 → failed · 뉴스 미소비 · 날짜 미기록",
+      morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 2 * 86400) == "failed"
+      and _unconsumed() == 5 and get_brief_meta() != "2026-08-17")
+_send_result["ok"] = True
+morning_brief._TELEGRAM_MAX_CHARS = _orig_max
+set_brief_meta("")
+sent_log.clear()
+check("NEWS-SPLIT8 한도 이내면 종전처럼 1통 · 뉴스 전부 소비",
+      morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 2 * 86400) == "ok"
+      and len(sent_log) == 1 and "주요 뉴스" in sent_log[0] and _unconsumed() == 0)
+check("NEWS-SPLIT9 v2 항목 형태(💬 차트 의견 · 분기선 · 설명 문장)가 실린다",
+      "💬 차트 의견(4시간봉)" in sent_log[0] and "분기 ↑1.2000 ↓1.1500" in sent_log[0]
+      and "강세 시나리오" in sent_log[0].replace("\n   ", " "))
+
+# ── NEWS-AGE1~4 (2026-09-27 대표 결정 "뉴스 48시간 이내") ────────────────
+# 렌더 단계: 게시 72h 전 큐 행은 빠지고(소비는 됨), 게시 1h 전 행은 실린다.
+_en_age = ("#XRP Market Analysis\nXRP is at 1.4944 on the 4H, pulling back from 1.6500 highs.\n"
+           "Bull case: hold above 1.4500 and push toward 1.6500.\n"
+           "Bear case: lose 1.4500 and slide toward 1.3100.")
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+    db.queue_news_digest(conn, "XRP", "old", "XRP 는 1.4944 부근입니다.", "https://t.me/age/old",
+                         TODAY, AT_9 - 600, summary_en=_en_age, posted_at=AT_9 - 72 * 3600)
+    db.queue_news_digest(conn, "ADA", "new", "ADA 는 0.8123 부근입니다.", "https://t.me/age/new",
+                         TODAY, AT_9 - 600, summary_en=_en_age.replace("XRP", "ADA"),
+                         posted_at=AT_9 - 3600)
+    conn.commit()
+    _age_ids = []
+    _age_items = morning_brief._news_items(conn, _age_ids, timeout=1.0, now=AT_9)
+_age_txt = "\n".join(str(x) for x in (_age_items or []))
+check("NEWS-AGE1 게시 72h 전 큐 행은 브리핑에서 제외", "@old" not in _age_txt and "XRP" not in _age_txt)
+check("NEWS-AGE2 게시 1h 전 행은 실림", "ADA" in _age_txt)
+check("NEWS-AGE3 제외된 행도 소비 처리(큐 머리 막힘 방지)", len(_age_ids) == 2)
+# 수집 단계: 티커 경로도 48h 초과 글은 적재 거부
+from notify import news_brief as _nb_age
+_old_post = {"title": "ADA Market Analysis", "description": _en_age.replace("XRP", "ADA") * 2,
+             "url": "https://t.me/age/collect", "published_at": AT_9 - 50 * 3600}
+check("NEWS-AGE4 수집 단계: 티커 경로 게시 50h 전 글은 skipped",
+      _nb_age.maybe_send_news_brief(None, _old_post, "ADA", "age", now=AT_9) == "skipped")
+
 # ── X1: run_cycle 편입 — 결과 dict 에 morning_brief 키가 들어간다 ─────────
 from scripts import run_cycle
 

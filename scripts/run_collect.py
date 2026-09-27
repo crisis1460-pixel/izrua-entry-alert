@@ -419,6 +419,12 @@ def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
                 continue
             if not symbol:
                 n_unmatched += 1
+                # 뉴스 v2 S3 (2026-09-27): 티커 없는 글 — 코인 이름 매칭 → 안 되면 🌐 시장 뉴스.
+                # 셋업 수집과 무관한 뉴스 경로라 실패는 격리(수집 회차를 죽이지 않음).
+                try:
+                    news_brief.maybe_send_unmatched_news(conn, post, channel, universe)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[tg] %s 이름/시장 뉴스 실패(무시): %s", channel, e)
                 continue
             had_setup, is_new = _ingest_idea(
                 conn, by_symbol[symbol], post, author_stats, timeout,

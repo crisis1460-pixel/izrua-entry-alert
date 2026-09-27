@@ -63,6 +63,10 @@ from storage import db
 # (운영 기본값 09-27 10:48 KST 는 "수집=지금−Nh" 픽스처를 실행 시각에 따라 신규/레거시로 뒤바꾼다).
 from config import settings as _cfg_arm  # noqa: E402
 _cfg_arm.SETTINGS["watch_arming_since_ts"] = 9e12
+# 뉴스 신선도 기준(news_max_age_hours=48, 09-27)도 이 파일에선 끈다 — 여기 뉴스 픽스처는
+# 순위·렌더 검증용 절대 시각(09-10~09-27)이라 실행일에 따라 전부 "오래된 글"이 된다.
+# 신선도 규칙 자체는 test_morning_brief NEWS-AGE1~4 가 검증한다.
+_cfg_arm.SETTINGS["news_max_age_hours"] = 0
 
 def _make_test_db():
     conn = sqlite3.connect(":memory:")
@@ -1030,6 +1034,9 @@ _mbc = sqlite3.connect(_MB_DB)
 _mbc.row_factory = sqlite3.Row
 _MB_DAY = "2026-09-12"
 _MB_NOW = 1789000000.0
+# 뉴스 큐 적재 시각은 **실행 시각 기준 상대값**(2026-09-27): 브리핑이 게시 48h 초과 행을
+# 제외하므로(news_max_age_hours) 절대 시각 픽스처는 시한폭탄이 된다.
+_MB_QNOW = time.time() - 120
 
 # MB1: 빈 큐/빈 적중 → 블록 통째 생략
 check("MB1 빈 TP 적중 → 🏁 블록 생략", _mb._tp_hit_lines(_mbc, _MB_NOW) == [])
@@ -1050,11 +1057,11 @@ for i in range(15):
     db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
                          f"SYM{i} trades near 1,2{i}0 after {tail}. "
                          f"Second sentence is dropped.",
-                         f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
+                         f"https://t.me/x/{i}", _MB_DAY, _MB_QNOW + i)
 for i in range(15, 18):
     db.queue_news_digest(_mbc, f"SYM{i}", f"chan{i}",
                          f"SYM{i} trades near 1,2{i}0 after a routine session.",
-                         f"https://t.me/x/{i}", _MB_DAY, _MB_NOW + i)
+                         f"https://t.me/x/{i}", _MB_DAY, _MB_QNOW + i)
 _mbc.commit()
 _mb_ids = []
 _mb_news = _mb._news_lines(_mbc, _mb_ids)
@@ -1488,6 +1495,424 @@ check("MB8c 한도 이내면 무변경", _mb._fit_telegram(list(_mb_small), -1) 
 
 _mbc.close()
 os.unlink(_MB_DB)
+
+# ═══ NEWS-*: 뉴스 v2 (2026-09-27 사용자 결정 Q1~Q3 + "내용별 문장 길게" + 고아단어) ═══
+# 기획안 plan_2026-09-27_뉴스분석_고도화 추천안 A. 픽스처는 기획 샘플 13건의 **채널
+# 원문(영문)** 을 그대로 쓴다(링크 안내 꼬리만 제거, 700자 컷).
+from notify import news_parse as _np
+from notify import news_brief as _nb2
+from notify import morning_brief as _mb4
+import re as _re4
+
+_NEWS_FX = {
+    'wolfoftrading/6443': '🚨Trading Data\nWe are almost reaching the peak of yearly high.\nAnd we have over 1.69B BTC ETF Net-flow 👀💹',
+    'cryptosignals0rg/19331': 'Solana Treasury Giant Teams Up With Kraken — Is Institutional Demand Entering A New Phase?\nA validator partnership doesn’t sound dramatic on its own. But when the company signing it holds over 1.2 million SOL and just raised $300 million to build institutional-grade Solana infrastructure, the terms of that partnership start to matter a lot more.\nSolanaFloor reported on July 30, 2026 that Solana treasury company Solmate, which holds over 1.2 million SOL, has partnered with Kraken Institutional to support its Solana validator infrastructure and enhance its staking economics. SOL trades at $74.84, up 1.0% over the past 24 hours.',
+    'cryptosignals0rg/19523': 'Cronos’ $74M Tectonic Exploit Exposes a Risk Investors Can’t Ignore\nA $74 million DeFi exploit has turned the spotlight on an uncomfortable question for Cronos investors: how much risk is hiding beneath the surface of a blockchain ecosystem that can be brought to a halt by an attack on a single lending protocol?\nOn August 30, Tectonic, the largest lending platform on Cronos, was exploited after an attacker manipulated the price of its native TONIC token and used the inflated value as collateral to borrow other crypto assets.',
+    'wolfoftrading/6447': '🇮🇷 IRAN–US TENSIONS ESCALATE\nIran has responded to Trump’s latest threats, warning that any further attacks could trigger “more severe, crushing and unpredictable blows.”\n⚠️ With the Strait of Hormuz and regional energy infrastructure already under pressure, markets are pricing in higher geopolitical and oil risks.\nMeanwhile, US–Iran talks are still ongoing meaning headline-driven volatility remains extremely high.\n📉 Risk-off pressure = bearish for BTC in the short term.\n📈 Any credible de-escalation/Hormuz deal could quickly reverse the move.',
+    'wolfoftrading/6408': 'A whale has bought $9,000,000 in #SOL this week.\nSmart money is more focused on alts now.',
+    'cryptosignals0rg/19608': "Stellar (XLM) Support at $0.1747 Holds; a Strong Rebound May Have Started\nThe Stellar token continues to benefit from significant inflows of tokenized funds, claiming a massive share of over $2.5B. This has translated into some traction in the token's market. Even technical indicators are aligning to hint at a possible significant upward rebound.",
+    'BitcoinBullets/17281': "#AVAX Market Analysis\nAVAX is at 8.261 on the 4h, pressing right into the resistance zone near 8.300 that's capped price since the mid August spike, with the ascending trendline from mid August still holding beneath.\nBull case: clear 8.300 and break the resistance, opening a path toward fresh highs.\nBear case: reject here and fade back toward the trendline near 7.200.\nMulti week resistance finally breaks, or another rejection here?\n➖➖➖➖➖➖➖\nBitcoin Bullets® Trading",
+    'BitcoinBullets/17290': '#XRP Market Analysis\nXRP is at 1.4944 on the 4h, pulling back from the 1.6500 highs and landing right on the demand zone near 1.4500 built during the September consolidation.\nBull case: hold above 1.4500 and resume the push back toward 1.5500 and 1.6500.\nBear case: lose 1.4500 and slide back toward 1.3100.\nDemand zone holds, or does the pullback deepen?\n➖➖➖➖➖➖➖\nBitcoin Bullets® Trading',
+    'wolfoftrading/6440': '$ETHUSDT Update: 1D\nExpecting for Ethereum to be bullish within the next few days.\nWent steadily to the upside after breaking from above of the major short term resistance.\nHopefully everything will keep on running smoothly. 💹',
+    'wolfoftrading/6432': 'Besides that\n$INJ is forming a very clean cup and handle pattern, we are expecting x2 spot on the mid-term.',
+    'cryptosignals0rg/19634': 'The Reason Why the Four Seasons of Crypto Are Important to Investors\nThe headlines are dominated by crypto. However, following a strong bullish correction that brought prices to new highs, the latest BTC pullback is raising familiar questions for investors.',
+    'wolfoftrading/6456': '$CHZUSDT Update:\nOur Adam & Eve is going for it, already went 8% from where we posted.\nEnjoy. We still expect it to go up. $0.01928 - $0.02 is the second target',
+    'wolfoftrading/6419': 'SUMMARY OF FED DECISION (9/16/2026):\n1. Fed hikes interest rates by 25 bps for first time since July 2023\n2. The decision was made in a 12-0 unanimous vote\n3. Fed says the decision will support a "timelier" return to 2% inflation\n4. Median Fed forecast shows one more 25 basis point rate hike in 2026\n5. Fed says job gains are strong and the unemployment rate has "changed little"\n6. "The Committee will deliver price stability," the Fed\'s statement says\nHigher for longer is back.',
+    'wolfoftrading/6417': "CRYPTO HAS FAILED ITS FIRST MAJOR TEST.\nThe Crypto Clarity Act failed to advance in the US Senate today.\nThat doesn't mean it's all over, but now the chances of approval in 2026 are very low.\nNow, there are two big events to look forward to tomorrow.\nThe Fed's interest rate decision with a 94% chance of a rate hike.\nAlong with that, the House Committee will vote on advancing the Strategic Bitcoin Reserve Bill.\nA rate hike is certain, so it won't impact the markets much.\nBut if Kevin Warsh hints of more hikes, it could nuke the market.\nAlong with that, if SBR advances tomorrow, it could be a good sign.\nFailing to advance means two consecutive crypto bill failures, and markets will most likely",
+    'wolfoftrading/6448': '🚨UPDATE: $351.6M drained from Bitget.\nPrivate keys were not compromised. Attackers exploited a wallet backend vulnerability to spoof transaction data and bypass authorization. This supports my thesis that AI likely identified the flaw. Malicious actors use AI agents 24/7 for scanning, pen testing, reverse engineering, and finding missed exploits. Anthropic documents automated AI "exploit foundries," and Google reports attackers adopting agentic workflows. If holding significant assets, consider self-custody and multisig.',
+    'cryptosignals0rg/19462': 'How the Term Labs Exploit Drained $8.5M Through a Governance Attack\nA DeFi exploit at Term Labs shows that an attacker may not always need to break a smart contract directly to steal millions of dollars.\nSometimes, the most valuable target is the system that decides who has permission to move the money.',
+    'cryptosignals0rg/19370': 'Can Bybit Recover Funds From the $1.5 Billion Lazarus Hack?\nSuing a nation-state rarely produces a check in the mail. But eighteen months after crypto’s largest heist on record, Bybit is betting that a US courtroom can accomplish something blockchain forensics alone couldn’t.\nBybit is suing North Korea over the $1.5 billion Lazarus Group crypto heist, with a US federal court issuing a preliminary injunction freezing identified assets linked to the hack as the civil case moves forward.',
+    'wolfoftrading/6415': "JUST IN: AN ANONYMOUS WHALE JUST BOUGHT OVER 1,000 #BITCOIN WORTH $82,000,000 OVER THE LAST 4 DAYS\nTHAT'S 250 BTC PER DAY. 10 BTC AN HOUR.\nSMART MONEY KNOWS. WE'RE GOING HIGHER 🚀",
+    'wolfoftrading/6425': 'After two days of the most significant net outflows seen in the past four months, ETFs turned back to buying yesterday.\nTotal crypto ETF netflows stand at +$119M. Bitcoin captured the bulk of the flows with +$159M. Ethereum, on the other hand, saw $39M in net outflows.\nWorth noting: $4.3M in inflows for Hype.\nThis end of week appears calmer on the ETF front.',
+}
+
+# ── NEWS-DUP: 같은 글 재적재 차단 (S0) ─────────────────────────────────
+# 실측 09-21~27 news_digest_queue 34행(고유 URL 18건)을 **그대로 재생**한다. 종전엔
+# 코인 24h 쿨다운만 있어 16행이 재적재됐다(wolfoftrading/6440 ETH 6일 연속).
+_NEWS_ROWS34 = [
+    ('NEAR', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19611', 1789917759.8170037),
+    ('XLM', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19608', 1789917759.9131966),
+    ('XEC', 'wolfoftrading', 'https://t.me/wolfoftrading/6422', 1789917766.4401255),
+    ('ETH', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17283', 1789917771.8071363),
+    ('AVAX', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17281', 1789917773.122607),
+    ('UNI', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19615', 1790004866.6422014),
+    ('NEAR', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19611', 1790004869.2305193),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790004875.9102437),
+    ('BTC', 'wolfoftrading', 'https://t.me/wolfoftrading/6439', 1790004877.293524),
+    ('AVAX', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17281', 1790004884.0770476),
+    ('UNI', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19615', 1790091757.0618758),
+    ('BTC', 'wolfoftrading', 'https://t.me/wolfoftrading/6443', 1790091763.6052155),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790091764.8781223),
+    ('TAO', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17286', 1790091771.2359695),
+    ('AVAX', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17281', 1790091772.6046033),
+    ('BTC', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19634', 1790179373.6561387),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790179380.7319105),
+    ('INJ', 'wolfoftrading', 'https://t.me/wolfoftrading/6432', 1790179382.0064828),
+    ('SOL', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17288', 1790179388.4417865),
+    ('TAO', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17286', 1790179389.976084),
+    ('BTC', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19634', 1790266726.7456489),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790266733.9682267),
+    ('INJ', 'wolfoftrading', 'https://t.me/wolfoftrading/6432', 1790266735.9229422),
+    ('XRP', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17290', 1790266742.539864),
+    ('BCH', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17289', 1790266744.2791471),
+    ('BTC', 'cryptosignals0rg', 'https://t.me/cryptosignals0rg/19634', 1790354076.269112),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790354083.1365957),
+    ('TAO', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17292', 1790354089.8988764),
+    ('XRP', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17290', 1790354091.4203422),
+    ('CHZ', 'wolfoftrading', 'https://t.me/wolfoftrading/6456', 1790426569.6949127),
+    ('BTC', 'wolfoftrading', 'https://t.me/wolfoftrading/6447', 1790440998.996615),
+    ('ETH', 'wolfoftrading', 'https://t.me/wolfoftrading/6440', 1790441000.4928064),
+    ('TAO', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17292', 1790441007.0217144),
+    ('XRP', 'BitcoinBullets', 'https://t.me/BitcoinBullets/17290', 1790441008.5645652),
+]
+_nd_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_nd_db)
+_ndc = sqlite3.connect(_nd_db)
+_ndc.row_factory = sqlite3.Row
+_st_cfg.SETTINGS["news_alert_send_enabled"] = False
+_st_cfg.SETTINGS["news_translate_enabled"] = False
+_nd_res = []
+for _sym, _ch, _url, _ts in _NEWS_ROWS34:
+    _p = {"title": f"{_sym} update", "description":
+          f"{_sym} update\n{_sym} trades near 1,234.5 after testing support; "
+          f"analysts watch the 1,300.0 resistance next.", "url": _url,
+          "published_at": _ts - 3600}
+    _nd_res.append(_nb2.maybe_send_news_brief(_ndc, _p, _sym, _ch, now=_ts))
+    _ndc.commit()
+_nd_q = [dict(r) for r in _ndc.execute("SELECT url FROM news_digest_queue")]
+check("NEWS-DUP1 실측 34행 재생 → 고유 18건만 적재(재적재 16행 차단)",
+      len(_nd_q) == 18 and len({r["url"] for r in _nd_q}) == 18)
+check("NEWS-DUP2 wolfoftrading/6440(ETH) — 6일 연속 → 1회만",
+      sum(1 for r in _nd_q if r["url"].endswith("/6440")) == 1)
+check("NEWS-DUP3 차단된 16행은 skipped(쿨다운·상한 카운트도 안 먹는다)",
+      _nd_res.count("queued") == 18 and _nd_res.count("skipped") == 16
+      and _ndc.execute("SELECT COUNT(*) n FROM alerts_log WHERE kind='news'").fetchone()["n"] == 18)
+# 소비된 뒤에도 같은 글은 다시 안 들어온다(브리핑에 한 번 나간 글 = 영구 차단)
+_ndc.execute("UPDATE news_digest_queue SET consumed=1")
+_ndc.commit()
+_p = {"description": "ETH trades near 2,645.86 after the breakout above the major resistance.",
+      "url": "https://t.me/wolfoftrading/6440"}
+check("NEWS-DUP4 소비(consumed=1)된 URL 도 재적재 금지",
+      _nb2.maybe_send_news_brief(_ndc, _p, "ETH", "wolfoftrading",
+                                 now=1790441000 + 86400 * 3) == "skipped")
+check("NEWS-DUP5 원문(summary_en)·게시시각(posted_at) 보관(v2 렌더 재료)",
+      _ndc.execute("SELECT summary_en, posted_at FROM news_digest_queue LIMIT 1").fetchone()[0]
+      .startswith("NEAR update"))
+# 실시간 발송 경로도 URL 원장을 남겨 같은 글을 두 번 보내지 않는다
+_st_cfg.SETTINGS["news_alert_send_enabled"] = True
+_orig_send_nd = _tg2.send
+_nd_sent = []
+_tg2.send = lambda text, urgency="high", reply_to_message_id=None: (_nd_sent.append(text) or 1)
+_p = {"description": "LINK trades near 12.345 after reclaiming the 12.000 support zone today.",
+      "url": "https://t.me/x/rt1"}
+_r1 = _nb2.maybe_send_news_brief(_ndc, _p, "LINK", "chrt", now=1790900000)
+_ndc.commit()
+_r2 = _nb2.maybe_send_news_brief(_ndc, _p, "LINK", "chrt", now=1790900000 + 86400 * 2)
+check("NEWS-DUP6 실시간 발송분도 원장(consumed=1) 기록 → 이틀 뒤 재발송 차단",
+      _r1 == "ok" and _r2 == "skipped" and len(_nd_sent) == 1
+      and db.count_news_digest(_ndc) == 0)
+_tg2.send = _orig_send_nd
+_st_cfg.SETTINGS["news_alert_send_enabled"] = False
+_ndc.close()
+os.unlink(_nd_db)
+
+# ── NEWS-EN: 수치 판정은 영문 원문 기준 (S0 — "$1.69B" → "16억 9천만 개" 사고) ──
+_etf_ko = "🚨거래 데이터\n연간 최고치에 거의 도달했습니다.\n그리고 우리는 16억 9천만 개가 넘는 BTC ETF Net-flow를 보유하고 있습니다"
+_etf_en = _NEWS_FX["wolfoftrading/6443"]
+check("NEWS-EN1 원문이 있으면 원문으로 판정 → ETF 자금 뉴스 통과(실사고 재현)",
+      _mb4._is_queued_noise("BTC", _etf_ko, _etf_en) is False)
+check("NEWS-EN2 원문 없는 과거 행도 한글 수 표기(억·천만)를 수치로 인정",
+      _mb4._is_queued_noise("BTC", _etf_ko) is False)
+check("NEWS-EN3 원문 금액 추출 — 단위 금액만($1.69B), 가격 수준은 제외",
+      [a[0] for a in _np.amounts(_etf_en)] == ["$1.69B"]
+      and _np.amounts("SOL trades at $74.84 and BTC at $65,000") == [])
+
+# ── NEWS-P: 파서 유형별 (기획 샘플 원문) ───────────────────────────────
+_P = {k: _np.parse(v) for k, v in _NEWS_FX.items()}
+check("NEWS-P1 ETF 순유입 → 사실형 etf · 호재 · $1.69B",
+      _P["wolfoftrading/6443"]["kind"] == "fact" and _P["wolfoftrading/6443"]["type"] == "etf"
+      and _P["wolfoftrading/6443"]["pol"] == 1)
+check("NEWS-P2 해킹(Cronos $74M) → 사실형 hack · 악재 · H등급",
+      _P["cryptosignals0rg/19523"]["type"] == "hack" and _P["cryptosignals0rg/19523"]["pol"] == -1
+      and _P["cryptosignals0rg/19523"]["amounts"][0][0] == "$74M"
+      and _P["cryptosignals0rg/19523"]["tier"] == "H")
+check("NEWS-P3 매크로(이란-미국 긴장) → macro · 악재",
+      _P["wolfoftrading/6447"]["type"] == "macro" and _P["wolfoftrading/6447"]["pol"] == -1)
+check("NEWS-P4 고래 매수 $9M → whale · 호재",
+      _P["wolfoftrading/6408"]["type"] == "whale" and _P["wolfoftrading/6408"]["pol"] == 1
+      and _P["wolfoftrading/6408"]["amounts"][0][0] == "$9M")
+check("NEWS-P5 자금 유입 $2.5B + 지지 $0.1747",
+      _P["cryptosignals0rg/19608"]["type"] == "flow"
+      and _P["cryptosignals0rg/19608"]["levels"].get("support") == "$0.1747")
+check("NEWS-P6 제휴(Solmate × Kraken) → partner · 호재 · $300M",
+      _P["cryptosignals0rg/19331"]["type"] == "partner"
+      and _P["cryptosignals0rg/19331"]["amounts"][0][0] == "$300M")
+_sc = _P["BitcoinBullets/17281"]
+check("NEWS-P7 차트 시나리오(AVAX) — 콜론 뒤 숫자가 바로 안 와도 분기선 추출(종전 실패 사례)",
+      _sc["kind"] == "scenario" and _sc["bull"]["trigger"] == "8.300"
+      and _sc["bear"]["trigger"] == "7.200" and _sc["tf"] == "4시간봉" and _sc["price"] == "8.261")
+_sc2 = _P["BitcoinBullets/17290"]
+check("NEWS-P8 같은 기준선 분기(XRP 1.4500) + 목표(1.6500/1.3100)",
+      _sc2["bull"]["trigger"] == _sc2["bear"]["trigger"] == "1.4500"
+      and _sc2["bull"]["target"] == "1.6500" and _sc2["bear"]["target"] == "1.3100")
+check("NEWS-P9 방향 콜(ETH Update: 1D) → call · 강세 · 일봉",
+      _P["wolfoftrading/6440"]["kind"] == "call" and _P["wolfoftrading/6440"]["stance"] == "강세"
+      and _P["wolfoftrading/6440"]["tf"] == "일봉")
+check("NEWS-P10 방향 콜(INJ 컵앤핸들 x2) — 번역문에선 '그 외에도'만 남던 글",
+      _P["wolfoftrading/6432"]["pattern"] == "컵앤핸들" and _P["wolfoftrading/6432"]["target"] == "2배")
+check("NEWS-P11 노이즈 — 수치 없는 일반론(Four Seasons)·지난 예측 자찬(CHZ Adam & Eve)",
+      _P["cryptosignals0rg/19634"]["kind"] == "noise" and _P["wolfoftrading/6456"]["kind"] == "noise")
+check("NEWS-P12 언락(합성 문장) → unlock · 악재 · H등급",
+      _np.parse("ARB token unlock of $45M scheduled next week\nTeam and investor tokens "
+                "worth $45 million will be released.")["type"] == "unlock"
+      and _np.parse("ARB token unlock of $45M scheduled next week")["pol"] == -1)
+check("NEWS-P13 연준 25bp 인상 → macro · 악재",
+      _P["wolfoftrading/6419"]["type"] == "macro" and _P["wolfoftrading/6419"]["pol"] == -1)
+check("NEWS-P14 교양 기사의 '인플레이션' 한 단어로 매크로 판정하지 않음(과추출 방지)",
+      _np.parse("Sam Altman's $1 Trillion Problem\nNVIDIA announced the H100 GPU in March 2022.\n"
+                "At the time, inflation was skyrocketing and the Fed started hiking rates.")
+      .get("type") != "macro")
+
+# ── NEWS-CHIP: 🟢/🔴/⚪ 는 사실형에만, 의견은 💬 (Q1·Q3) ─────────────────
+_chip_rx = _re4.compile("🟢|🔴|⚪")
+_comp = {k: _np.compose(v, "BTC", _NEWS_FX[k], "", {}, 3) for k, v in _P.items()}
+_facts = [k for k, v in _P.items() if v["kind"] == "fact"]
+_ops = [k for k, v in _P.items() if v["kind"] in ("scenario", "call")]
+check("NEWS-CHIP1 사실형 요약줄은 🟢/🔴/⚪ 로 시작",
+      all(_chip_rx.match(_comp[k]["summary"]) for k in _facts) and len(_facts) >= 8)
+check("NEWS-CHIP2 의견·차트는 💬 로 시작하고 색 칩이 없다",
+      all(_comp[k]["summary"].startswith("💬") and not _chip_rx.search(_comp[k]["summary"])
+          for k in _ops) and len(_ops) >= 4)
+check("NEWS-CHIP3 노이즈는 항목 자체가 없다(compose → None)",
+      _comp["cryptosignals0rg/19634"] is None and _comp["wolfoftrading/6456"] is None)
+check("NEWS-CHIP4 호재/악재 방향은 이벤트 유형 prior — 해킹=🔴, ETF 순유입=🟢",
+      _comp["cryptosignals0rg/19523"]["summary"].startswith("🔴 악재 해킹")
+      and _comp["wolfoftrading/6443"]["summary"].startswith("🟢 호재 ETF 순유입 $1.69B"))
+
+# ── NEWS-DETAIL: 설명 2~3문장 · 절단 없음 (사용자 요청) ─────────────────
+_all_det = [(k, c) for k, c in _comp.items() if c]
+check("NEWS-DETAIL1 모든 항목 설명 2~3문장",
+      all(2 <= len(c["detail"]) <= 3 for _k, c in _all_det))
+check("NEWS-DETAIL2 설명 문장은 전부 완결(…·... 없음, 마침표로 끝남)",
+      all(("…" not in d and "..." not in d and d.rstrip().endswith(".")) for _k, c in _all_det
+          for d in c["detail"]))
+check("NEWS-DETAIL3 news_detail_sentences=2 면 2문장으로 줄어든다(스위치 동작)",
+      all(len(_np.compose(_P[k], "BTC", _NEWS_FX[k], "", {}, 2)["detail"]) == 2 for k in _facts))
+_ko_cut = "제목 줄\n첫 문장은 완결됩니다. 둘째 문장은 중간에서 잘린 …"
+check("NEWS-DETAIL4 번역문 보조는 완결 문장만(잘린 꼬리 문장 제외)",
+      _np.ko_sentences(_ko_cut) == ["첫 문장은 완결됩니다."])
+check("NEWS-DETAIL5 시나리오 설명에 분기선·목표·게시 시점 거리가 숫자로 들어간다",
+      "1.4500" in " ".join(_comp["BitcoinBullets/17290"]["detail"])
+      and "1.3100" in " ".join(_comp["BitcoinBullets/17290"]["detail"])
+      and "-3.0%" in " ".join(_comp["BitcoinBullets/17290"]["detail"]))
+check("NEWS-DETAIL6 조사 — 받침 유무(8.300을/7.200을, XRP는, Kraken과, BlackRock이)",
+      _np.josa("7.200", "을/를") == "7.200을" and _np.josa("XRP", "은/는") == "XRP는"
+      and _np.josa("Kraken", "과/와") == "Kraken과" and _np.josa("BlackRock", "이/가") == "BlackRock이"
+      and _np.josa("1.4500", "을/를") == "1.4500을" and _np.josa("Coinbase Prime", "으로/로") == "Coinbase Prime으로")
+
+# ── NEWS-CTX: 가격 맥락줄 ──────────────────────────────────────────────
+_ctx_s = _np.compose(_sc, "AVAX", _NEWS_FX["BitcoinBullets/17281"], "",
+                     {"chg24": 7.1, "cur_usd": 8.2177}, 3)["context"]
+check("NEWS-CTX1 24h 등락 + 분기선까지 현재가 거리(↑+1.0% ↓-12.4%)",
+      _ctx_s == "24h +7.1% · 분기 ↑8.300(+1.0%) ↓7.200(-12.4%)")
+check("NEWS-CTX2 가격 데이터가 없으면 거리·등락 없이 레벨만(줄이 죽지 않는다)",
+      _np.compose(_sc, "AVAX", _NEWS_FX["BitcoinBullets/17281"], "", {}, 3)["context"]
+      == "분기 ↑8.300 ↓7.200")
+_orig_ft = _mb4._fetch_tickers
+_ft_calls = []
+_mb4._fetch_tickers = lambda markets, timeout: (_ft_calls.append(list(markets)) or {
+    "KRW-AVAX": {"trade_price": 11200.0, "signed_change_rate": 0.071},
+    "KRW-BTC": {"trade_price": 1.3e8, "signed_change_rate": -0.01},
+    "KRW-USDT": {"trade_price": 1363.0, "signed_change_rate": 0.0}})
+_pc = _mb4._price_ctx(["AVAX", "MARKET", "AVAX"], 1.0, kimchi=0.0)
+check("NEWS-CTX3 브리핑 회차 ticker 는 배치 1콜(코인당 1콜 이내) · 🌐 는 BTC 로",
+      len(_ft_calls) == 1 and sorted(_ft_calls[0]) == ["KRW-AVAX", "KRW-BTC", "KRW-USDT"]
+      and abs(_pc["AVAX"]["cur_usd"] - 11200 / 1363) < 1e-9 and _pc["MARKET"]["chg24"] == -1.0)
+_mb4._fetch_tickers = lambda markets, timeout: {}
+check("NEWS-CTX4 ticker 실패 → 빈 맥락(해당 줄 생략)", _mb4._price_ctx(["AVAX"], 1.0) == {})
+_mb4._fetch_tickers = _orig_ft
+check("NEWS-CTX5 게시 후 하루 이상 지난 글은 경과를 사실로 표기('게시 2일 전'), 하루 미만은 생략",
+      _np.compose(_P["wolfoftrading/6443"], "BTC", _NEWS_FX["wolfoftrading/6443"], "",
+                  {"chg24": -0.7, "age_h": 50.0}, 3)["context"] == "24h -0.7% · 게시 2일 전"
+      and _np.compose(_P["wolfoftrading/6443"], "BTC", _NEWS_FX["wolfoftrading/6443"], "",
+                      {"chg24": -0.7, "age_h": 5.0}, 3)["context"] == "24h -0.7%")
+_old_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_old_db)
+_oldc = sqlite3.connect(_old_db)
+_oldc.row_factory = sqlite3.Row
+check("NEWS-MKT0 티커 없는 글 경로는 48h 넘은 옛 글을 받지 않는다(신설 경로 배포 첫 회차 적체 방지)",
+      _nb2.maybe_send_unmatched_news(
+          _oldc, {"description": _NEWS_FX["wolfoftrading/6448"], "url": "https://t.me/wolfoftrading/6448",
+                  "published_at": 1790000000}, "wolfoftrading", [], now=1790000000 + 62 * 3600) == "skipped"
+      and _nb2.maybe_send_unmatched_news(
+          _oldc, {"description": _NEWS_FX["wolfoftrading/6448"], "url": "https://t.me/wolfoftrading/6448",
+                  "published_at": 1790000000}, "wolfoftrading", [], now=1790000000 + 3 * 3600) == "queued")
+_oldc.close()
+os.unlink(_old_db)
+
+# ── NEWS-MKT: 🌐 시장 뉴스 (Q2) ────────────────────────────────────────
+check("NEWS-MKT1 연준 인상·CLARITY 불발·거래소(Bitget) 해킹은 시장 뉴스",
+      all(_np.is_market_news(_P[k]) for k in
+          ("wolfoftrading/6419", "wolfoftrading/6417", "wolfoftrading/6448")))
+check("NEWS-MKT2 거래소 아닌 DeFi 해킹(Term Labs)·회고 기사(Bybit 18개월 전)는 제외",
+      not _np.is_market_news(_P["cryptosignals0rg/19462"])
+      and not _np.is_market_news(_P["cryptosignals0rg/19370"]))
+_nm_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_nm_db)
+_nmc = sqlite3.connect(_nm_db)
+_nmc.row_factory = sqlite3.Row
+_UNI = [{"symbol": "BTC", "name": "Bitcoin"}, {"symbol": "CRO", "name": "Cronos"},
+        {"symbol": "SOL", "name": "Solana"}, {"symbol": "XLM", "name": "Stellar"},
+        {"symbol": "BCH", "name": "Bitcoin Cash"}, {"symbol": "AVAX", "name": "Avalanche"}]
+_r_fed = _nb2.maybe_send_unmatched_news(
+    _nmc, {"description": _NEWS_FX["wolfoftrading/6419"], "url": "https://t.me/wolfoftrading/6419"},
+    "wolfoftrading", _UNI, now=1789600000)
+_r_cro = _nb2.maybe_send_unmatched_news(
+    _nmc, {"description": _NEWS_FX["cryptosignals0rg/19523"], "url": "https://t.me/cryptosignals0rg/19523"},
+    "cryptosignals0rg", _UNI, now=1789600100)
+_r_edu = _nb2.maybe_send_unmatched_news(
+    _nmc, {"description": _NEWS_FX["cryptosignals0rg/19634"].replace("BTC", "the"),
+           "url": "https://t.me/x/edu"}, "cryptosignals0rg", _UNI, now=1789600200)
+_nmc.commit()
+_nm_rows = {r["url"]: r["symbol"] for r in _nmc.execute("SELECT url, symbol FROM news_digest_queue")}
+check("NEWS-MKT3 티커 없는 연준 뉴스 → 심볼 MARKET 으로 큐 적재",
+      _r_fed == "queued" and _nm_rows.get("https://t.me/wolfoftrading/6419") == "MARKET")
+check("NEWS-MKT4 티커 없이 'Cronos'만 있는 해킹 글 → 이름 매칭으로 CRO 적재(S3)",
+      _r_cro == "queued" and _nm_rows.get("https://t.me/cryptosignals0rg/19523") == "CRO")
+check("NEWS-MKT5 코인·시장 어느 쪽도 아닌 교양 글은 버린다", _r_edu == "skipped")
+_st_cfg.SETTINGS["news_market_enabled"] = False
+_r_off = _nb2.maybe_send_unmatched_news(
+    _nmc, {"description": _NEWS_FX["wolfoftrading/6417"], "url": "https://t.me/wolfoftrading/6417"},
+    "wolfoftrading", _UNI, now=1789700000)
+check("NEWS-MKT6 news_market_enabled=False 면 🌐 수집 안 함", _r_off == "skipped")
+_st_cfg.SETTINGS["news_market_enabled"] = True
+_mb4._fetch_tickers = lambda markets, timeout: {}
+_nm_ids = []
+_nm_lines = _mb4._news_lines(_nmc, _nm_ids)
+_nm_body = "\n".join(_nm_lines)
+check("NEWS-MKT7 브리핑 블록에 '🌐 시장' 머리줄 + 사실형 칩(🔴 연준 금리 인상 25bp)",
+      "<b>🌐 시장</b> · @wolfoftrading" in _nm_body
+      and "🔴 악재 연준 금리 인상 25bp" in _nm_body.replace("\n   ", " "))
+check("NEWS-MKT8 순위: 코인 사실형(CRO 해킹) > 🌐 시장(사용자 결정 순서)",
+      _nm_body.index("<b>CRO</b>") < _nm_body.index("🌐 시장"))
+_r_ai = _nb2.maybe_send_news_brief(
+    _nmc, {"description": _NEWS_FX["wolfoftrading/6448"], "url": "https://t.me/wolfoftrading/6448"},
+    "AI", "wolfoftrading", now=1789600300 + 86400 * 2)   # 🌐 쿨다운(MARKET 24h) 밖
+_nmc.commit()
+check("NEWS-MKT9 모호 심볼(AI)로 잡힌 거래소 해킹 글 → 코인 뉴스 대신 🌐 시장으로 구제(실측 Bitget)",
+      _r_ai == "queued" and _nmc.execute(
+          "SELECT symbol FROM news_digest_queue WHERE url='https://t.me/wolfoftrading/6448'"
+      ).fetchone()["symbol"] == "MARKET")
+_mb4._fetch_tickers = _orig_ft
+_nmc.close()
+os.unlink(_nm_db)
+_sui = _np.parse("Sui Moderate Bearish Correction May End Shortly\nThe recent Bitcoin price surge "
+                 "past $80,000 has triggered a strong upward movement in many altcoins, including Sui.")
+check("NEWS-P15 제목에 방향 단서가 있는 코인 분석 기사 → 💬 분석 기사(가격 수준 없어도)",
+      _sui["kind"] == "call" and _sui["source"] == "기사"
+      and _np.compose(_sui, "SUI", "Sui Moderate Bearish Correction May End Shortly",
+                      "수이 완만한 약세 조정이 곧 끝날 수 있습니다\n본문.", {}, 3)["detail"][:2]
+      == ["분석 기사가 수이의 가격 흐름을 다뤘습니다.",
+          "기사 제목은 “수이 완만한 약세 조정이 곧 끝날 수 있습니다”입니다."]
+      and _sui["stance"] == "관망")   # 'Bearish … May End' — 단어로 방향을 매기면 뒤집힌다
+
+# ── NEWS-NAME: 이름 매칭 오탐 (S3) ─────────────────────────────────────
+_NI = _np.build_name_index(_UNI)
+check("NEWS-NAME1 제목의 코인 이름 → 심볼(Cronos → CRO)",
+      _np.match_coin_name("Cronos’ $74M Tectonic Exploit Exposes a Risk", _NI) == "CRO")
+check("NEWS-NAME2 'Solana-based' 는 그 체인 위 다른 프로젝트 — 매칭 안 함",
+      _np.match_coin_name("New Solana-based lending app raises $20M\nThe Solana-based "
+                          "protocol launched today.", _NI) is None)
+check("NEWS-NAME3 일반명사 충돌('an avalanche of', 'stellar results') — 매칭 안 함",
+      _np.match_coin_name("Markets face an avalanche of liquidations\nStellar results "
+                          "from tech earnings lifted stocks.", _NI) is None)
+check("NEWS-NAME4 긴 이름 우선 — 'Bitcoin Cash' 는 BCH (BTC 아님)",
+      _np.match_coin_name("Bitcoin Cash hard fork scheduled for November", _NI) == "BCH")
+check("NEWS-NAME5 제목에 서로 다른 코인 둘 → 모호로 버림",
+      _np.match_coin_name("Bitcoin and Solana lead weekly inflows", _NI) is None)
+check("NEWS-NAME6 본문 지나가는 언급 1회는 주제로 보지 않음",
+      _np.match_coin_name("Perps explained\nA perp is a bet on price. Bitcoin, oil, the S&P.", _NI)
+      is None)
+check("NEWS-NAME7 대문자 해시태그(#BITCOIN) 고래 글 → BTC",
+      _np.match_coin_name(_NEWS_FX["wolfoftrading/6415"], _NI) == "BTC")
+
+# ── NEWS-RANK: 사실 > 🌐시장 > 💬차트 > 💬의견, 같은 등급은 게시 최신순 ──────
+_nr_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_nr_db)
+_nrc = sqlite3.connect(_nr_db)
+_nrc.row_factory = sqlite3.Row
+for _k, _sym, _ch, _post in [
+    ("wolfoftrading/6440", "ETH", "wolfoftrading", 1790000900),   # 💬 의견 (가장 최신)
+    ("BitcoinBullets/17281", "AVAX", "BitcoinBullets", 1790000800),  # 💬 차트
+    ("wolfoftrading/6419", "MARKET", "wolfoftrading", 1790000700),   # 🌐 시장
+    ("wolfoftrading/6408", "SOL", "wolfoftrading", 1790000600),      # 사실 M(고래)
+    ("cryptosignals0rg/19523", "CRO", "cryptosignals0rg", 1790000100),  # 사실 H(해킹, 가장 오래됨)
+    ("cryptosignals0rg/19634", "BTC", "cryptosignals0rg", 1790000950),  # 노이즈
+]:
+    db.queue_news_digest(_nrc, _sym, _ch, f"{_sym} 번역 요약은 1,234.5 부근에서 거래된다는 내용입니다.",
+                         f"https://t.me/{_k}", "2026-09-27",
+                         1790001000, summary_en=_NEWS_FX[_k], posted_at=_post)
+_nrc.commit()
+_mb4._fetch_tickers = lambda markets, timeout: {}
+_nr_ids = []
+_nr_lines = _mb4._news_lines(_nrc, _nr_ids)
+_heads = [x for x in _nr_lines if x.startswith("   <b>")]
+check("NEWS-RANK1 등급순: 해킹(H) > 고래(M) > 🌐 시장 > 💬 차트 > 💬 의견 (도착·게시순 아님)",
+      [h.split("</b>")[0].split("<b>")[1] for h in _heads] == ["CRO", "SOL", "🌐 시장", "AVAX", "ETH"])
+check("NEWS-RANK2 노이즈(Four Seasons)는 제외돼도 소비 처리(6건 전부)",
+      "BTC" not in "\n".join(_heads) and len(_nr_ids) == 6)
+import html as _html4
+check("NEWS-RANK3 모든 줄 행잉 인덴트 + 표시폭 36 이내",
+      all(x.startswith(_mb4._NEWS_INDENT)
+          and _mb4._display_width(_html4.unescape(x.replace("<b>", "").replace("</b>", ""))) <= 36
+          for x in _nr_lines[1:]))
+check("NEWS-RANK4 렌더된 블록 전체에 고아 줄 0",
+      _mb4.orphan_lines([_html4.unescape(x) for x in _nr_lines[1:] if not x.startswith("   <b>")]) == 0)
+_st_cfg.SETTINGS["news_structured_enabled"] = False
+_nr_ids2 = []
+_nrc.execute("UPDATE news_digest_queue SET consumed=0")
+_nr_lines2 = _mb4._news_lines(_nrc, _nr_ids2)
+check("NEWS-SW1 news_structured_enabled=False → 종전 렌더(💬·칩 없음, 🌐 항목 없음)",
+      _nr_lines2 and not any(("💬" in x or "🟢" in x or "🔴" in x or "🌐" in x) for x in _nr_lines2))
+_st_cfg.SETTINGS["news_structured_enabled"] = True
+_mb4._fetch_tickers = _orig_ft
+_nrc.close()
+os.unlink(_nr_db)
+
+# ── NEWS-ORPHAN: 줄내림 고아단어 방지 (2026-09-27 사용자 요청) ──────────────
+# "기존 브리핑 양식 줄내림 후 시작줄 고아단어 안 나오게, 기존에 세팅값은 유지"
+_W4, _I4 = _mb4._NEWS_WRAP_W, _mb4._NEWS_INDENT
+check("NEWS-ORPHAN0 세팅값 유지 — 폭 36 · 들여쓰기 3칸", _W4 == 36 and _I4 == "   ")
+
+
+def _orphans(lines):
+    return _mb4.orphan_lines(lines, _I4)
+
+
+_o1 = _mb4._wrap_indented("비트코인 현물 ETF로 $1.69B 규모의 순유입이 집계됐습니다. ETF 순유입은 "
+                          "기관의 현물 매수 수요로 해석돼 통상 단기 호재로 받아들여집니다.", _W4, _I4)
+check("NEWS-ORPHAN1 마지막 줄에 단어 1개만 남지 않는다(직전 줄에서 끌어내림)",
+      len(_mb4._wrap_units(_o1[-1][len(_I4):])) >= 2 and _orphans(_o1) == 0)
+_o2 = _mb4._wrap_indented("고래가 이번 주 #SOL 에서 $ 9,000,000 를 샀고 시장은 이를 호재로 봤다 %", _W4, _I4)
+check("NEWS-ORPHAN2 조사·기호 단독 어절('를'·'%')은 줄 머리로 넘어가지 않는다",
+      not any(_re4.match(r"^(를|을|은|는|%|·|,|\.)(\s|$)", x[len(_I4):]) for x in _o2))
+_o3 = _mb4._wrap_indented("24h +7.1% · 분기 ↑8.300(+1.0%) ↓7.200(-12.4%) · 목표 가격대 9.000 부근", _W4, _I4)
+check("NEWS-ORPHAN3 '·' 는 줄 머리에 오지 않는다", not any(x[len(_I4):].startswith("·") for x in _o3))
+check("NEWS-ORPHAN4 어절 유실·중복 없음(재조립 동일)",
+      "".join(x[len(_I4):] for x in _o1).replace(" ", "")
+      == ("비트코인 현물 ETF로 $1.69B 규모의 순유입이 집계됐습니다. ETF 순유입은 기관의 현물 매수 "
+          "수요로 해석돼 통상 단기 호재로 받아들여집니다.").replace(" ", ""))
+check("NEWS-ORPHAN5 직전 줄이 1단어가 되면서까지 끌어내리지 않는다(2덩어리 줄은 보존)",
+      _mb4._wrap_indented("A" * 20 + " " + "B" * 12 + " C", _W4, _I4)
+      == [_I4 + "A" * 20 + " " + "B" * 12, _I4 + "C"])
+_o7 = _mb4._wrap_escaped("🔴 악재 연준 금리 인상 25bp · 단기", segments=True)
+check("NEWS-ORPHAN7 조각 보호가 고아를 만들면 보호를 풀어 균형('단기' 단독 줄 없음)",
+      _mb4.orphan_lines(_o7) == 0 and not any(x.strip() == "단기" for x in _o7))
+_seg = _mb4._wrap_escaped("💬 차트 의견(4시간봉) · 저항 시험 · 단기", segments=True)
+check("NEWS-ORPHAN6 요약줄은 ' · ' 조각 단위로 접힌다('저항 / 시험' 분리 없음)",
+      any("저항 시험" in x for x in _seg) and all(_mb4._display_width(x) <= _W4 for x in _seg))
+_st_cfg.SETTINGS["news_translate_enabled"] = True
+
 
 # ─── GG1: 등급 게이트 상향 (2026-09-13 A안, D → C) ───────────────────────
 from collector.grading import meets_min_grade as _mmg

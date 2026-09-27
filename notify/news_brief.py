@@ -21,7 +21,7 @@ import time
 from typing import Optional
 
 from config import settings
-from notify import telegram
+from notify import news_parse, telegram
 from notify.translator import translate_en_ko
 from storage import db
 from utils.time_kst import day_kst
@@ -30,6 +30,9 @@ logger = logging.getLogger("alert.news_brief")
 
 _NEWS_KIND = "news"
 _TEXT_MAX = 500   # 원문 요약 상한(자) 폴백 — settings.news_alert_summary_max_chars 우선
+# 큐에 보관할 영문 원문 상한(2026-09-27 뉴스 v2). 번역 요약(500자)과 별개 — 구조 추출은
+# 본문 뒤쪽의 분기선·금액까지 봐야 한다. 채널 글은 대부분 1,000자 안쪽.
+_EN_KEEP_MAX = 2000
 
 # 일반 영단어와 겹치는 심볼 — 뉴스 본문에서 코인이 아닌 맥락으로 자주 등장해 오탐.
 # 매매 시그널(parse_setup 성공)에는 영향 없음 — 뉴스 경로에서만 차단.
@@ -73,6 +76,11 @@ _NUMBER_RX = re.compile(
     r"|\d+\.\d+"                                 # 0.9363 · 249.2 (소수 = 가격/비율)
     r"|\d[\d,]{3,}"                              # 9,000 · 2540 (천단위)
     r"|\d+(?:\.\d+)?\s*(?:%|퍼센트|percent)"      # 249.2 percent
+    # 2026-09-27 S0 — 금액 단위 표기. 영문 "$1.69B"/"1.69B BTC" 와, 번역기가 만든
+    # 한글 수 표기 "16억 9천만" 을 수치로 인정한다(실측: 유일한 ETF 자금 뉴스가
+    # "16억 9천만 개" 로 번역돼 이 게이트에 걸려 버려졌다).
+    r"|\d+(?:\.\d+)?\s?(?:[BM]\b|billion|million)"
+    r"|\d+\s?(?:억|천만|백만)"
 )
 
 # 매매 결과 리캡 필터 (2026-08-21 사용자 요청): "manually closed. +929.8 pips.
@@ -269,7 +277,15 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
         return "skipped"
 
     if symbol.upper() in _AMBIGUOUS_SYMBOLS:
-        logger.debug("[news] %s 모호 심볼 스킵", symbol)
+        # 2026-09-27 S3: 모호 심볼로 잡힌 글은 사실상 '코인 미해석' 글이다 — 🌐 시장
+        # 뉴스 판정만 한 번 더 본다. 실측: Bitget $351.6M 해킹 글(wolfoftrading/6448)이
+        # 본문의 "AI likely identified the flaw" 때문에 AI 코인으로 잡혀 버려졌다.
+        logger.debug("[news] %s 모호 심볼 — 코인 뉴스로는 스킵, 시장 뉴스 판정", symbol)
+        return _maybe_market_news(conn, post, channel, now)
+
+    # 신선도 가드 (2026-09-27 대표 결정 "48시간 이내") — 티커 경로도 게시 경과 상한.
+    if _older_than(post, now, "news_max_age_hours"):
+        logger.debug("[news] %s 게시 경과 초과 — 스킵", symbol)
         return "skipped"
 
     # title+description 결합 (2026-08-17 리뷰): 종전 description 우선 단일 선택은
@@ -300,12 +316,37 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
         logger.debug("[news] %s 진입 시그널 글 스킵(파싱 실패한 시그널)", symbol)
         return "skipped"
 
-    # 정보 밀도 게이트 (2026-09-16) — 위 상수 주석 참고.
+    # 정보 밀도 게이트 (2026-09-16) — 위 상수 주석 참고. 판정은 **번역 전 원문**
+    # (text)으로 한다(2026-09-27 S0 재확인 — 번역은 아래에서 게이트 통과 후에만).
     if len(text) < _DENSITY_MIN_LEN and not _NUMBER_RX.search(text):
         logger.debug("[news] %s 정보 밀도 미달 스킵(%d자, 수치 없음)", symbol, len(text))
         return "skipped"
 
+    # 원문 자찬·홍보 노이즈 (2026-09-27 뉴스 v2) — "Perfectly followed our prediction",
+    # "going for it … Enjoy." 류. 정보가 0인데 종전엔 큐에 들어가 하루 5건 쿼터를
+    # 먹었다. 수집 단계에선 **명시적 자찬·홍보 패턴만** 뺀다 — "유형·금액 없는 일반론"
+    # 판정은 렌더 단계(_news_items)가 맡는다(여기서 빼면 v2 스위치를 끈 날 종전
+    # 렌더가 볼 후보까지 사라진다). v2 스위치 OFF 면 종전 동작 유지.
+    if settings.get("news_structured_enabled"):
+        try:
+            if news_parse.NOISE_RX.search(news_parse.clean(text)):
+                logger.debug("[news] %s 원문 자찬·홍보 노이즈 스킵", symbol)
+                return "skipped"
+        except Exception as e:  # noqa: BLE001 — 파서 실패는 종전 경로로
+            logger.warning("[news] %s 원문 파싱 실패(무시): %s", symbol, e)
+
     now = now if now is not None else time.time()
+    url = post.get("url") or ""
+
+    # 재적재 차단 (2026-09-27 S0) — 이미 큐에 들어갔거나 소비(브리핑·실시간 발송)된
+    # 글은 다시 넣지 않는다. db.news_url_seen docstring 참고(09-21~27 큐 47% 재적재).
+    # 상한 판정보다 앞에 둔다 — 중복 글이 쿨다운·채널 상한 카운트를 먹지 않게.
+    try:
+        if db.news_url_seen(conn, url, symbol):
+            logger.debug("[news] %s 이미 적재·발송된 글 스킵: %s", symbol, url)
+            return "skipped"
+    except Exception as e:  # noqa: BLE001 — 조회 실패는 종전 동작(쿨다운)에 맡긴다
+        logger.warning("[news] %s URL 중복 조회 실패(무시): %s", symbol, e)
     try:
         ok, reason = _rate_limit_ok(conn, symbol, channel, now)
     except Exception as e:  # noqa: BLE001 — 회차 생존 최우선
@@ -321,9 +362,9 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
             summary = translate_en_ko(summary, timeout=settings.get("http_timeout_sec"))
         except Exception as e:
             logger.warning("[news] %s 번역 실패(원문 유지): %s", symbol, e)
-    url = post.get("url") or ""
     try:
-        text_out = telegram.render_news_brief(symbol, channel, summary, url)
+        label = "🌐시장" if symbol == news_parse.MARKET_SYMBOL else symbol
+        text_out = telegram.render_news_brief(label, channel, summary, url)
     except Exception as e:  # noqa: BLE001
         logger.warning("[news] %s render 실패: %s", symbol, e)
         return "failed"
@@ -337,7 +378,9 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     # 큐가 상한을 넘어 불어나면 브리핑 5줄 컷이 무의미해진다.
     if not settings.get("news_alert_send_enabled"):
         try:
-            db.queue_news_digest(conn, symbol, channel, summary, url, today, now)
+            db.queue_news_digest(conn, symbol, channel, summary, url, today, now,
+                                 summary_en=text[:_EN_KEEP_MAX],
+                                 posted_at=post.get("published_at"))
         except Exception as e:  # noqa: BLE001 — 회차 생존 최우선
             logger.warning("[news] %s 큐 적재 실패: %s", symbol, e)
             return "failed"
@@ -354,7 +397,110 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
         return "failed"
 
     _record(conn, symbol, channel, today, now, sent=1)
+    # 실시간 발송분도 URL 원장에 남긴다(consumed=1 — 브리핑 후보에는 안 섞인다).
+    # 발송 스위치를 켠 기간에도 같은 글 재발송을 막기 위해서다(2026-09-27 S0).
+    try:
+        db.queue_news_digest(conn, symbol, channel, summary, url, today, now,
+                             summary_en=text[:_EN_KEEP_MAX],
+                             posted_at=post.get("published_at"), consumed=1)
+    except Exception as e:  # noqa: BLE001 — 발송은 성공, 원장만 실패
+        logger.warning("[news] %s URL 원장 기록 실패: %s", symbol, e)
     return "ok"
+
+
+# ── S3: 티커 없는 글 — 코인 이름 매칭 · 🌐 시장 뉴스 (2026-09-27) ─────────
+# run_collect 의 "심볼 미해석" 분기(n_unmatched)에서 호출한다. 종전엔 그 글들이 전부
+# 버려졌다 — 2개월 389건 중 사실형 18건(Fed 25bp 인상·CLARITY 법안 불발·ETF 주간
+# 자금·"Cronos" 이름만 있는 $74M 해킹 등, 기획안 §1-6).
+_NAME_INDEX_CACHE: dict = {"key": None, "idx": {}}
+
+
+def _name_index(universe) -> dict:
+    key = id(universe), len(universe or ())
+    if _NAME_INDEX_CACHE["key"] != key:
+        _NAME_INDEX_CACHE["key"] = key
+        _NAME_INDEX_CACHE["idx"] = news_parse.build_name_index(universe)
+    return _NAME_INDEX_CACHE["idx"]
+
+
+def maybe_send_unmatched_news(conn, post: dict, channel: str, universe,
+                              now: Optional[float] = None) -> str:
+    """심볼 미해석 글의 뉴스 경로. 반환 "skipped"|"ok"|"queued"|"failed".
+
+    ① 코인 **이름** 매칭(Cronos→CRO 등, news_parse.match_coin_name 오탐 규칙) 성공 →
+       일반 뉴스 경로(maybe_send_news_brief)와 **같은 게이트·상한**으로 처리.
+    ② 아니면 news_market_enabled 일 때 🌐 시장 뉴스 판정(연준·ETF 자금·규제·거래소
+       해킹, news_parse.is_market_news) → 심볼 MARKET 으로 같은 경로에 태운다.
+       상한도 그대로다 — 글로벌 5/일·채널 2/일, 코인 쿨다운은 MARKET 1개 키로 걸려
+       🌐 항목은 하루 1건이 된다(블록 5건 안에서 코인 뉴스를 밀어내지 않게).
+    모든 실패 격리 — 호출부는 예외를 로그만 남긴다."""
+    if not settings.get("news_alert_enabled"):
+        return "skipped"
+    text = _post_text(post)
+    if not text:
+        return "skipped"
+    if _too_old_for_unmatched(post, now):
+        return "skipped"
+    sym = news_parse.match_coin_name(text, _name_index(universe))
+    if sym and sym.upper() not in _AMBIGUOUS_SYMBOLS:
+        return maybe_send_news_brief(conn, post, sym, channel, now=now)
+    return _maybe_market_news(conn, post, channel, now)
+
+
+def _older_than(post: dict, now: Optional[float], key: str) -> bool:
+    """게시 경과가 settings[key] 시간을 넘으면 True (0/미설정이면 제한 없음)."""
+    try:
+        max_age_h = float(settings.get(key) or 0)
+    except (TypeError, ValueError):
+        max_age_h = 0.0
+    pub = post.get("published_at")
+    ref = now if now is not None else time.time()
+    return bool(max_age_h > 0 and pub and ref - float(pub) > max_age_h * 3600)
+
+
+def _too_old_for_unmatched(post: dict, now: Optional[float]) -> bool:
+    """신선도 가드 — 티커 없는 글 경로(이름 매칭·🌐 시장)는 2026-09-27 신설이라 배포 첫
+    회차에 수집 창(7일) 안의 옛 글이 한꺼번에 들어올 수 있다(실측 재생: 2.6일 지난
+    Bitget 해킹 글이 '단기' 재료로 실림). news_unmatched_max_age_hours 안의 글만."""
+    try:
+        max_age_h = float(settings.get("news_unmatched_max_age_hours") or 0)
+    except (TypeError, ValueError):
+        max_age_h = 0.0
+    pub = post.get("published_at")
+    ref = now if now is not None else time.time()
+    return bool(max_age_h > 0 and pub and ref - float(pub) > max_age_h * 3600)
+
+
+def _post_text(post: dict) -> str:
+    title = (post.get("title") or "").strip()
+    desc = (post.get("description") or "").strip()
+    if title and desc:
+        return desc if desc.startswith(title) else (title + "\n" + desc).strip()
+    return title or desc
+
+
+def _maybe_market_news(conn, post: dict, channel: str, now: Optional[float] = None) -> str:
+    """🌐 시장 뉴스 판정 → 맞으면 심볼 MARKET 으로 일반 뉴스 경로(같은 게이트·상한)."""
+    if not (settings.get("news_market_enabled") and settings.get("news_structured_enabled")):
+        return "skipped"
+    if _too_old_for_unmatched(post, now):
+        return "skipped"
+    text = _post_text(post)
+    if not text:
+        return "skipped"
+    # 광고·리캡·시그널 글은 시장 뉴스 판정 전에 버린다(아래 경로가 다시 보긴 하지만
+    # 파서가 광고의 "$500 airdrop" 을 금액으로 보는 일을 원천 차단).
+    low = text.lower()
+    if any(kw in low for kw in _PROMO_KEYWORDS) or _is_trade_result(text) or _is_trade_setup(text):
+        return "skipped"
+    try:
+        parsed = news_parse.parse(text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[news] 시장 뉴스 파싱 실패(무시): %s", e)
+        return "skipped"
+    if not news_parse.is_market_news(parsed):
+        return "skipped"
+    return maybe_send_news_brief(conn, post, news_parse.MARKET_SYMBOL, channel, now=now)
 
 
 def _record(conn, symbol: str, channel: str, today: str, now: float,

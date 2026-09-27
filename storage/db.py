@@ -222,7 +222,9 @@ CREATE TABLE IF NOT EXISTS news_digest_queue (
     url        TEXT,
     created_at REAL NOT NULL,
     day_kst    TEXT NOT NULL,      -- YYYY-MM-DD (KST) — 브리핑 조회 키
-    consumed   INTEGER DEFAULT 0
+    consumed   INTEGER DEFAULT 0,
+    summary_en TEXT,               -- 2026-09-27 뉴스 v2: 번역 전 영문 원문(구조 추출용)
+    posted_at  REAL                -- 2026-09-27 뉴스 v2: 채널 게시 시각(신선도 랭킹)
 );
 CREATE INDEX IF NOT EXISTS idx_news_queue_day
     ON news_digest_queue(day_kst, consumed);
@@ -586,6 +588,19 @@ def _migrate(conn) -> None:
     if al_cols and "sent" not in al_cols:
         conn.execute("ALTER TABLE alerts_log ADD COLUMN sent INTEGER DEFAULT 1")
         logger.info("[db] 마이그레이션: alerts_log.sent 추가")
+
+    # news_digest_queue 원문·게시시각 (2026-09-27 뉴스 v2) — 같은 이유로 ALTER 로만
+    # 붙는다. 과거 행은 NULL = "원문 없음" → 브리핑이 종전(번역문) 경로로 렌더한다.
+    # URL 인덱스는 재적재 차단 조회(news_url_seen)용 — 매 수집 회차 뉴스 후보마다 1회.
+    nq_cols = {r["name"] for r in conn.execute("PRAGMA table_info(news_digest_queue)").fetchall()}
+    if nq_cols:
+        if "summary_en" not in nq_cols:
+            conn.execute("ALTER TABLE news_digest_queue ADD COLUMN summary_en TEXT")
+            logger.info("[db] 마이그레이션: news_digest_queue.summary_en 추가")
+        if "posted_at" not in nq_cols:
+            conn.execute("ALTER TABLE news_digest_queue ADD COLUMN posted_at REAL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_queue_url "
+                     "ON news_digest_queue(url)")
 
     # 적중 판정 해시체인 소급 구축 (2026-07-27 카드 #3) — outcome_hash 컬럼이 방금
     # 생겼거나 과거 판정 행이 있으면(레포 커밋백 DB) 1회성으로 체인을 이어붙인다.
@@ -2393,14 +2408,45 @@ def record_alert(conn, coin_symbol: str, kind: str, level_ids: list, day_kst: st
 
 
 def queue_news_digest(conn, symbol: str, channel: str, summary: str,
-                      url: str, day_kst: str, now: Optional[float] = None) -> None:
-    """뉴스 1건을 아침 브리핑 대기열에 적재 (news_alert_send_enabled=False 경로)."""
+                      url: str, day_kst: str, now: Optional[float] = None,
+                      summary_en: Optional[str] = None,
+                      posted_at: Optional[float] = None,
+                      consumed: int = 0) -> None:
+    """뉴스 1건을 아침 브리핑 대기열에 적재 (news_alert_send_enabled=False 경로).
+
+    2026-09-27 뉴스 v2: summary_en(번역 전 영문 원문)·posted_at(채널 게시 시각)을 함께
+    남긴다 — 브리핑이 원문에서 구조를 뽑고 게시 최신순으로 정렬한다.
+    consumed=1 적재는 실시간 발송(news_alert_send_enabled=True) 경로가 **이미 보낸 글의
+    URL 원장**으로 쓰는 용도다 — 브리핑 후보(consumed=0)에는 섞이지 않고, 재적재 차단
+    (news_url_seen)만 이 행을 본다."""
     conn.execute(
         "INSERT INTO news_digest_queue (symbol, channel, summary, url, created_at, "
-        "day_kst, consumed) VALUES (?,?,?,?,?,?,0)",
+        "day_kst, consumed, summary_en, posted_at) VALUES (?,?,?,?,?,?,?,?,?)",
         (symbol, channel, summary, url,
-         now if now is not None else time.time(), day_kst),
+         now if now is not None else time.time(), day_kst, 1 if consumed else 0,
+         summary_en, posted_at),
     )
+
+
+def news_url_seen(conn, url: str, symbol: Optional[str] = None) -> bool:
+    """같은 글이 이미 큐에 적재됐거나 소비(브리핑·실시간 발송)됐는가 (2026-09-27 S0).
+
+    사고: 수집 창이 7일(max_post_age_hours=168)이라 채널 첫 페이지에 남은 옛 글이 매
+    회차 뉴스 경로에 다시 들어오고, 이를 막던 건 코인 24h 쿨다운뿐이었다 — 09-21~27
+    큐 34행 중 16행(47%)이 재적재였고 wolfoftrading/6440(ETH)은 6일 연속 실렸다.
+    소비 여부와 무관하게 **한 번이라도 들어온 URL 은 다시 넣지 않는다.**
+    symbol 을 주면 (URL, 심볼) 단위로 본다 — 운영에서 한 글은 한 심볼에만 매칭되므로
+    URL 단독과 같고, 테스트 픽스처처럼 한 URL 을 여러 코인에 재사용하는 경우만 구분된다.
+    빈 URL 은 판정 불가라 False(차단 안 함)."""
+    if not url:
+        return False
+    if symbol:
+        row = conn.execute("SELECT 1 FROM news_digest_queue WHERE url=? AND symbol=? LIMIT 1",
+                           (url, symbol)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM news_digest_queue WHERE url=? LIMIT 1",
+                           (url,)).fetchone()
+    return row is not None
 
 
 def get_news_digest(conn, limit: int = 5) -> list:
@@ -2439,11 +2485,16 @@ def consume_news_digest(conn, ids: list) -> int:
 
 
 def prune_news_digest_queue(conn, now: Optional[float] = None,
-                            keep_days: int = 7) -> int:
-    """보존기간(기본 7일) 넘은 뉴스 큐 삭제 — DB 무한 증가 방지.
+                            keep_days: int = 9) -> int:
+    """보존기간(기본 9일) 넘은 뉴스 큐 삭제 — DB 무한 증가 방지.
     (prune_daily_stats/prune_alerts_log 와 같은 '보존정책' 계열 함수)
     소비 여부와 무관하게 지운다 — 브리핑은 '어제' 것만 보므로 7일 지난 미소비
-    행은 어차피 영원히 안 나간다(창을 놓친 날)."""
+    행은 어차피 영원히 안 나간다(창을 놓친 날).
+
+    2026-09-27 7 → 9일: 이 큐가 재적재 차단(news_url_seen)의 URL 원장도 겸한다.
+    수집 창(max_post_age_hours=168, 7일)보다 짧거나 같으면, 적재 후 7일째에 행이
+    지워진 순간 아직 수집 창 안에 있는 같은 글이 다시 들어올 수 있다(게시~적재
+    지연만큼). 수집 창 + 여유 2일로 둔다."""
     now = now if now is not None else time.time()
     cur = conn.execute("DELETE FROM news_digest_queue WHERE created_at < ?",
                        (now - keep_days * 86400,))

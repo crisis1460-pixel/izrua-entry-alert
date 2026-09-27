@@ -24,7 +24,7 @@ import unicodedata
 from datetime import datetime
 
 from config import settings
-from notify import telegram
+from notify import news_parse, telegram
 from storage import db
 from utils.time_kst import KST, day_kst
 
@@ -87,19 +87,81 @@ def _wrap_indented(text: str, max_w: int, indent: str) -> list:
             out.append(cur)
         return out
 
-    lines, cur, cur_w = [], [], 0
-    for raw in text.split():
-        for word in (_split_long(raw) if _display_width(raw) > avail else [raw]):
-            ww = _display_width(word)
-            if cur and cur_w + 1 + ww > avail:
-                lines.append(" ".join(cur))
-                cur, cur_w = [word], ww
-            else:
-                cur_w += (1 if cur else 0) + ww
-                cur.append(word)
+    # 줄바꿈 단위(unit) — 2026-09-27 사용자 요청 "줄내림 후 시작줄 고아단어 안 나오게".
+    # 조사·기호만 줄 머리로 넘어가지 않도록 **앞 어절에 붙여** 한 덩어리로 다룬다
+    # ("를"·"%"·"·"·")" 등). 화살표·여는 괄호는 뒤 어절에 붙인다("↑ 2,540").
+    units = []
+    for u in _wrap_units(text):
+        if _display_width(u) <= avail:
+            units.append(u)
+            continue
+        # 덩어리가 폭을 넘으면 원래 어절로 풀고, 그래도 넘는 어절만 글자 단위로 쪼갠다.
+        for raw in u.split():
+            units.extend(_split_long(raw) if _display_width(raw) > avail else [raw])
+
+    rows, cur, cur_w = [], [], 0
+    for word in units:
+        ww = _display_width(word)
+        if cur and cur_w + 1 + ww > avail:
+            rows.append(cur)
+            cur, cur_w = [word], ww
+        else:
+            cur_w += (1 if cur else 0) + ww
+            cur.append(word)
     if cur:
-        lines.append(" ".join(cur))
-    return [indent + ln for ln in lines]
+        rows.append(cur)
+    _balance_orphans(rows, avail)
+    return [indent + " ".join(r) for r in rows]
+
+
+# 앞 어절에 붙는 토큰(줄 머리 금지): 문장부호·단위·가운뎃점·흔한 조사 단독 어절.
+# 조사 단독 어절은 번역 아티팩트("$ 9,000,000 를")에서 실제로 나온다. "이"·"가"·"의"
+# 처럼 관형사·명사로도 쓰이는 글자("이 법안")는 넣지 않는다.
+_TRAIL_TOKEN_RX = re.compile(
+    r"^(?:[%.,;:!?)\]}…'\"’”·|/]+|은|는|을|를|에|에서|로|으로|와|과|까지|부터)$")
+# 뒤 어절에 붙는 토큰(줄 끝 금지): 화살표·여는 괄호·따옴표.
+_LEAD_TOKENS = frozenset({"↑", "↓", "→", "(", "[", "“", "‘", "\"", "—", "–"})
+# 고아 줄 판정 폭 — 이 이하(또는 덩어리 1개)면 '한 단어만 덩그러니' 남은 줄로 본다.
+_ORPHAN_MAX_W = 6
+
+
+def _wrap_units(text: str) -> list:
+    units, glue_next = [], False
+    for tok in (text or "").split():
+        if units and (glue_next or _TRAIL_TOKEN_RX.match(tok)):
+            units[-1] = units[-1] + " " + tok
+        else:
+            units.append(tok)
+        glue_next = tok in _LEAD_TOKENS
+    return units
+
+
+_WORD_SPLIT_RX = re.compile("[ ]+")
+
+
+def _n_words(units: list) -> int:
+    """덩어리 목록의 '단어' 수 — 조사·기호 토큰은 단어로 세지 않는다("9,000,000 를" = 1).
+    조각 보호 문자(\\ue000)로 묶인 요약줄 조각은 안의 단어를 각각 센다."""
+    return sum(1 for u in units for w in _WORD_SPLIT_RX.split(u)
+               if w and not _TRAIL_TOKEN_RX.match(w))
+
+
+def _balance_orphans(rows: list, avail: int) -> None:
+    """줄 끝에서부터 고아 줄(단어 1개 또는 표시폭 ≤6)을 찾아 직전 줄의 마지막
+    덩어리를 끌어내린다. 직전 줄이 1단어가 되지 않는 선에서만, 그리고 끌어내린
+    결과가 폭 안에 들어갈 때만. 제자리 변형."""
+    def _w(ws):
+        return sum(_display_width(x) for x in ws) + max(0, len(ws) - 1)
+
+    for i in range(len(rows) - 1, 0, -1):
+        cur, prev = rows[i], rows[i - 1]
+        while (_n_words(cur) <= 1 or _w(cur) <= _ORPHAN_MAX_W) \
+                and len(prev) >= 2 and _n_words(prev[:-1]) >= 2:
+            mv = prev[-1]
+            if _w([mv] + cur) > avail:
+                break
+            prev.pop()
+            cur.insert(0, mv)
 
 # 매크로 이벤트 예고 범위(일). get_nearby_macro_event 는 24h 창이라 브리핑용
 # 7일 예고는 get_macro_events(conn) 자동 캘린더를 사용한다.
@@ -531,7 +593,7 @@ def _first_sentence(text: str, max_chars: int = _NEWS_SUMMARY_MAX_CHARS) -> str:
     return t[:max_chars].rstrip() + "…"
 
 
-def _is_queued_noise(symbol: str, summary: str) -> bool:
+def _is_queued_noise(symbol: str, summary: str, summary_en: str = "") -> bool:
     """큐에 **이미 들어간** 항목을 렌더 직전에 한 번 더 거른다 (2026-09-17).
 
     왜 두 번 거르나: 수집 단계 필터(news_brief)는 큐 적재 **전에만** 돈다. 그래서
@@ -541,14 +603,21 @@ def _is_queued_noise(symbol: str, summary: str) -> bool:
     진입가 sanity 를 수집·감시 두 곳에서 보는 것과 같은 이유다(마지막 방어선).
 
     판정 기준은 news_brief 와 **같은 것을 재사용**한다 — 두 곳의 기준이 갈리면
-    어느 쪽이 정본인지 알 수 없게 된다. 지연 import 는 순환 방지용."""
+    어느 쪽이 정본인지 알 수 없게 된다. 지연 import 는 순환 방지용.
+
+    2026-09-27 S0 — 원문(summary_en)이 있으면 **수치·리캡·시그널 판정은 원문으로**
+    한다. 실측: "$1.69B BTC ETF Net-flow" 가 "16억 9천만 개" 로 번역돼 정보 밀도
+    게이트(가격다운 수치)에 걸렸고, 그 기간 유일한 ETF 자금 뉴스가 버려졌다.
+    광고 키워드는 한·영 어느 쪽에 있어도 광고라 양쪽을 본다."""
     from notify import news_brief as nb
 
     if (symbol or "").upper() in nb._AMBIGUOUS_SYMBOLS:
         return True
-    text = summary or ""
-    if any(k in text.lower() for k in nb._PROMO_KEYWORDS):
+    ko = summary or ""
+    en = summary_en or ""
+    if any(k in (ko + "\n" + en).lower() for k in nb._PROMO_KEYWORDS):
         return True
+    text = en or ko
     if nb._is_trade_result(text) or nb._is_trade_setup(text):
         return True
     if len(text) < nb._DENSITY_MIN_LEN and not nb._NUMBER_RX.search(text):
@@ -571,96 +640,277 @@ def _news_importance(text: str) -> int:
     return score
 
 
-def _news_lines(conn, consumed_ids: list) -> list:
-    """"📰 주요 뉴스" 블록 (2026-09-13 A안, 2026-09-22 중요도순 정렬로 리팩터).
-    없으면 빈 리스트(블록 생략).
+def _fetch_tickers(markets: list, timeout: float) -> dict:
+    """업비트 공개 ticker **1콜**(배치) → {market: {"trade_price", "signed_change_rate"}}.
 
-    news_alert_send_enabled=False 로 실시간 발송을 끈 뉴스를 news_digest_queue
-    에서 꺼내 요약 1~2줄로 전달한다. 원문 링크는 생략(브리핑 길이 제한).
-    소비 처리(consumed=1)는 **발송 성공 후** maybe_send_brief 가 한다 — 여기서
-    바로 찍으면 발송 실패 시 그날 뉴스가 통째로 증발한다. 그래서 id 만 모아
-    호출부에 넘긴다.
+    뉴스 v2 가격 맥락 전용(2026-09-27). 브리핑 회차에서 코인당 1콜 이내 — 배치 1콜이
+    기본이고, 상폐 종목이 섞여 400/404 면 그때만 마켓별 1콜로 구제한다. 실패는 빈
+    dict(해당 줄 생략). 테스트는 이 함수를 몽키패치한다(네트워크 없음)."""
+    import requests
 
-    2026-09-14 수리 — 날짜 인자를 없앴다. 종전엔 `day_kst='어제'` 로 걸러서 오늘
-    새벽에 쌓인 뉴스가 당일 브리핑에서 빠지고 다음 날에야 나갔다(실측: 배포
-    다음 날 브리핑의 뉴스 0건, 큐에는 5건이 '오늘' 날짜로 대기). consumed 플래그가
-    이미 중복을 막으므로 "아직 안 보여준 것을 오래된 순으로"면 충분하다.
+    out: dict = {}
+    if not markets:
+        return out
+    url = "https://api.upbit.com/v1/ticker"
+    try:
+        r = requests.get(url, params={"markets": ",".join(markets)}, timeout=timeout)
+        if r.status_code == 200:
+            for t in r.json():
+                out[t["market"]] = {"trade_price": float(t["trade_price"]),
+                                    "signed_change_rate": float(t.get("signed_change_rate") or 0.0)}
+            return out
+        if r.status_code not in (400, 404):
+            logger.warning("[brief] 뉴스 가격 맥락 ticker HTTP %s", r.status_code)
+            return out
+    except Exception as e:  # noqa: BLE001 - 맥락 줄 생략으로 강등
+        logger.warning("[brief] 뉴스 가격 맥락 ticker 실패: %s", e)
+        return out
+    for m in markets:
+        try:
+            time.sleep(0.12)
+            r = requests.get(url, params={"markets": m}, timeout=timeout)
+            if r.status_code == 200 and r.json():
+                t = r.json()[0]
+                out[m] = {"trade_price": float(t["trade_price"]),
+                          "signed_change_rate": float(t.get("signed_change_rate") or 0.0)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[brief] %s ticker 개별 조회 실패: %s", m, e)
+    return out
 
-    2026-09-22 수리 — 뉴스가 00~04시 수집 회차에 몰려 들어와 쿼터(5건/일)를
-    **도착순**으로 채웠다("먼저 온 5건" ≠ "중요한 5건", 실측). 큐에서 넉넉히
-    꺼낸 후보(_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT) 전체를 _news_importance 로
-    매겨 상위 5건만 싣는다. 같은 코인이 여럿이면 점수 최고 1건만(실측 XRP·BTC
-    가 같은 CLARITY 법안 뉴스로 중복 등장). 동점이면 채널 다양성 → 최신순.
-    소비 계약도 함께 바뀐다 — **판정한 후보는 전부** consumed_ids 에 넣는다
-    (실리든 안 실리든). 꺼내지 않은 잔여분만 다음 날 후보로 남는다."""
-    # 큐를 상한보다 넉넉히 꺼낸다 — 순위를 매기려면 노이즈로 걸러질 만큼과
-    # 컷에서 밀릴 저점수 후보까지 모두 봐야 한다.
+
+def _price_ctx(symbols: list, timeout: float, kimchi=None) -> dict:
+    """{sym: {"chg24": %, "cur_usd": 추정 USD 가}} — 뉴스 항목 ④ 가격 맥락줄 재료.
+
+    cur_usd = KRW 현재가 / 실효환율. 실효환율 = USDT/KRW × (1 + 김프) — 브리핑 상단
+    김프 계산(업비트 BTC ÷ 바이낸스 BTC)과 같은 환율이라 채널이 적은 USDT 가격과 같은
+    단위가 된다. 김프를 모르면 USDT/KRW 만 쓴다(오차 = 김프 %). MARKET(🌐)은 BTC 로 본다."""
+    syms = sorted({("BTC" if s == news_parse.MARKET_SYMBOL else s) for s in symbols if s})
+    if not syms:
+        return {}
+    markets = [f"KRW-{s}" for s in syms] + ["KRW-USDT"]
+    tick = _fetch_tickers(markets, timeout)
+    usdt = (tick.get("KRW-USDT") or {}).get("trade_price")
+    fx = usdt * (1 + kimchi / 100.0) if (usdt and kimchi is not None) else usdt
+    out = {}
+    for s in syms:
+        t = tick.get(f"KRW-{s}")
+        if not t:
+            continue
+        out[s] = {"chg24": t["signed_change_rate"] * 100.0,
+                  "cur_usd": (t["trade_price"] / fx) if fx else None}
+    if "BTC" in out:
+        out[news_parse.MARKET_SYMBOL] = {"chg24": out["BTC"]["chg24"], "cur_usd": None}
+    return out
+
+
+def _item_header(sym: str, ch: str) -> str:
+    """항목 머리줄. 소비 가드·분할이 이 줄의 머리("   <b>")로 항목 경계를 센다."""
+    ch_part = f" · @{html.escape(ch)}" if ch else ""
+    label = "🌐 시장" if sym == news_parse.MARKET_SYMBOL else html.escape(sym or "?")
+    return f"{_NEWS_INDENT}<b>{label}</b>{ch_part}"
+
+
+_SEG_GLUE = "\ue000"   # 조각 안 공백 보호용 사용자 정의 문자(표시폭 1 = 공백과 같다)
+
+
+def _wrap_escaped(text: str, segments: bool = False) -> list:
+    """행잉 인덴트로 접고 줄마다 HTML escape.
+
+    segments=True(요약줄·맥락줄): " · " 로 나뉜 조각을 **한 덩어리**로 접는다 —
+    "저항 / 시험" 처럼 한 항목이 줄 경계에서 갈라지지 않게(2026-09-27 고아단어
+    요청). 폭보다 긴 조각만 예외로 종전처럼 어절 단위로 접힌다.
+    escape 는 접은 **뒤에** 각 줄에 적용한다 — 먼저 escape 하면 `&amp;` 같은
+    엔티티가 줄 경계에서 쪼개져 깨진 문자로 보인다."""
+    src = text or ""
+    wrapped = _wrap_indented(src, _NEWS_WRAP_W, _NEWS_INDENT)
+    if segments and " · " in src:
+        avail = _NEWS_WRAP_W - _display_width(_NEWS_INDENT)
+        segs = src.split(" · ")
+        protect = [_display_width(sg) <= avail - 2 for sg in segs]
+        # 조각 보호가 오히려 고아 줄을 만들면("… 25bp ·" / "단기") 뒤쪽 조각부터 보호를
+        # 풀어 어절 단위 균형 맞추기에 맡긴다.
+        for k in range(len(segs), -1, -1):
+            cand_src = " · ".join(sg.replace(" ", _SEG_GLUE) if (protect[i] and i < k) else sg
+                                  for i, sg in enumerate(segs))
+            cand = _wrap_indented(cand_src, _NEWS_WRAP_W, _NEWS_INDENT)
+            if orphan_lines(cand, _NEWS_INDENT, strict=True) == 0:
+                wrapped = cand
+                break
+    return [_NEWS_INDENT + html.escape(ln[len(_NEWS_INDENT):].replace(_SEG_GLUE, " "))
+            for ln in wrapped]
+
+
+def orphan_lines(lines: list, indent: str = _NEWS_INDENT, strict: bool = False) -> int:
+    """고아 줄 수 — 둘째 줄부터, 단어 1개이거나 표시폭 ≤6 인 줄. 단, 직전 줄이
+    2단어 이하라 끌어내릴 수 없는 경우는 세지 않는다(_balance_orphans 와 같은 기준).
+    샘플 검사·테스트(NEWS-ORPHAN)·요약줄 조각 보호 판단용."""
+    body = [ln[len(indent):] if ln.startswith(indent) else ln for ln in lines]
+    bad = 0
+    for i in range(1, len(body)):
+        cur = _wrap_units(body[i])
+        prev = _wrap_units(body[i - 1])
+        # strict: 끌어내릴 수 있든 없든 고아 모양이면 센다(요약줄 조각 보호 해제 판단용).
+        if (_n_words(cur) <= 1 or _display_width(body[i].replace(_SEG_GLUE, " ")) <= _ORPHAN_MAX_W) \
+                and (strict or (len(prev) >= 2 and _n_words(prev[:-1]) >= 2)):
+            bad += 1
+    return bad
+
+
+def _item_ctx(ctx_map: dict, sym: str, row: dict, now) -> dict:
+    """항목별 맥락 — 가격(ctx_map) + 게시 경과 시간(age_h)."""
+    ctx = dict(ctx_map.get(sym) or {})
+    posted = row.get("posted_at")
+    if posted:
+        ref = now if now is not None else time.time()
+        ctx["age_h"] = max(0.0, (ref - float(posted)) / 3600.0)
+    return ctx
+
+
+def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
+                now: float = None):
+    """📰 블록 재료. 반환 (헤더 줄, [(항목 줄 목록, 큐 id), ...]) 또는 None.
+
+    2026-09-13 A안 → 2026-09-22 중요도순 → 2026-09-27 뉴스 v2(구조화)로 확장.
+    소비 계약(09-22)은 그대로다 — **판정한 후보는 전부** consumed_ids 에 넣고, 꺼내지
+    않은 잔여분만 다음 날 후보로 남는다. 실제 소비(DB)는 발송 성공 후 호출부가 한다.
+
+    v2(news_structured_enabled=True + 큐 행에 영문 원문 summary_en 있음):
+      · 판정: news_parse.parse(원문) — 노이즈(지난 예측 자찬·유형/금액 없는 일반론) 제외
+      · 랭킹: 정보 유형 등급(사실 H > 사실 M > 🌐시장 > 💬차트 > 💬의견) → 게시 최신순
+        (기획안 §4-4 + 사용자 결정 Q1~Q3). 코인당 1건·채널 다양성은 종전과 같다.
+      · 렌더: 머리줄 / 요약줄 / 설명 2~3문장 / 가격 맥락줄(전부 행잉 인덴트).
+    원문이 없는 과거 행·스위치 OFF 는 종전(번역문 첫 문장) 경로 그대로다."""
     rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT)
     if not rows:
-        return []
+        return None
+    structured = bool(settings.get("news_structured_enabled"))
+    market_ok = bool(settings.get("news_market_enabled"))
+    try:
+        n_sent = int(settings.get("news_detail_sentences") or 3)
+    except (TypeError, ValueError):
+        n_sent = 3
 
-    candidates = []  # [(row, summary, score), ...]
+    cands = []   # {"row", "v2", "parsed"|"summ", "key"}
     for r in rows:
         # 꺼낸 이상 **전부** 소비 처리한다 — 안 그러면 밀려난 저점수 뉴스가
         # 큐 머리에 남아 다음 날 후보 창을 막는다(get_news_digest 는 오래된
         # 순이라 머리에서 막히면 그 뒤가 계속 굶는다).
         consumed_ids.append(r["id"])
-        if _is_queued_noise(r.get("symbol") or "", r.get("summary") or ""):
-            logger.info("[brief] 큐 노이즈 제외: %s (%s)",
-                        r.get("symbol"), (r.get("summary") or "")[:40])
+        # 신선도 가드 (2026-09-27 대표 결정 "48시간 이내") — 큐에 이미 남아 있던 옛 글도
+        # 렌더에서 제외(소비는 위에서 처리해 큐 머리를 막지 않는다). 게시 시각이 없는
+        # 구세대 행은 적재 시각으로 본다.
+        try:
+            _max_h = float(settings.get("news_max_age_hours") or 0)
+        except (TypeError, ValueError):
+            _max_h = 0.0
+        _pub = r.get("posted_at") or r.get("created_at")
+        _ref = now if now is not None else time.time()
+        if _max_h > 0 and _pub and _ref - float(_pub) > _max_h * 3600:
+            logger.info("[brief] 게시 %.0fh 경과 — 제외: %s", (_ref - float(_pub)) / 3600,
+                        r.get("symbol"))
             continue
+        sym = r.get("symbol") or ""
         summary = r.get("summary") or ""
+        en = (r.get("summary_en") or "") if structured else ""
+        if _is_queued_noise(sym, summary, en):
+            logger.info("[brief] 큐 노이즈 제외: %s (%s)", sym, (en or summary)[:40])
+            continue
+        if en:
+            if sym == news_parse.MARKET_SYMBOL and not market_ok:
+                continue
+            p = news_parse.parse(en)
+            if p.get("kind") == "noise":
+                logger.info("[brief] 원문 노이즈 제외: %s (%s)", sym, p.get("why"))
+                continue
+            tier = news_parse.compose(p, sym, en, "", {}, n_sent)["tier"]
+            fresh = r.get("posted_at") or r.get("created_at") or 0
+            cands.append({"row": r, "v2": True, "parsed": p, "key": (tier, 0, -fresh)})
+            continue
+        if sym == news_parse.MARKET_SYMBOL:
+            continue            # 🌐 항목은 원문 기반 렌더 전용(번역문 경로엔 코인이 없다)
         summ = _first_sentence(summary)
         if not summ:
-            continue                    # 정제 후 남는 게 없으면 실을 가치도 없다
-        candidates.append((r, summ, _news_importance(summary)))
+            continue            # 정제 후 남는 게 없으면 실을 가치도 없다
+        score = _news_importance(summary)
+        cands.append({"row": r, "v2": False, "summ": summ,
+                      "key": (news_parse.TIER_LEGACY, -score, -(r.get("created_at") or 0))})
 
-    if not candidates:
-        return []
+    if not cands:
+        return None
 
-    # 같은 코인은 점수 최고 1건만 (실측 XRP·BTC 가 같은 CLARITY 법안 뉴스로 중복).
+    # 같은 코인은 최상위 1건만 (실측 XRP·BTC 가 같은 CLARITY 법안 뉴스로 중복).
+    # 🌐 시장 항목은 코인이 아니라 서로 다른 사건이라 합치지 않는다.
+    # 종전 경로(v2 아님)는 동점 시 **먼저 본 것**이 남는 종전 규칙을 지킨다.
     best_by_symbol: dict = {}
-    for c in candidates:
-        sym = str(c[0].get("symbol") or "").upper()
+    keep = []
+    for c in cands:
+        sym = str(c["row"].get("symbol") or "").upper()
+        if sym == news_parse.MARKET_SYMBOL:
+            keep.append(c)
+            continue
         cur = best_by_symbol.get(sym)
-        if cur is None or c[2] > cur[2]:
+        ck = c["key"] if c["v2"] else c["key"][:2]
+        if cur is None or ck < (cur["key"] if cur["v2"] else cur["key"][:2]):
             best_by_symbol[sym] = c
-    deduped = list(best_by_symbol.values())
+    deduped = list(best_by_symbol.values()) + keep
 
-    # 점수 내림차순 → 동점이면 최신순(1차 정렬) → 선택 중 **이미 뽑힌 채널과
-    # 다른 채널 우선**(그리디, 2026-09-22). 채널 다양성은 "지금까지 고른 것과
-    # 겹치는가"라는, 선택이 진행되며 바뀌는 조건이라 정렬 키 하나로는 못 담는다.
-    pool = sorted(deduped, key=lambda c: (-c[2], -(c[0].get("created_at") or 0)))
+    # 등급 → 최신순(1차 정렬) → 선택 중 **이미 뽑힌 채널과 다른 채널 우선**(그리디).
+    pool = sorted(deduped, key=lambda c: c["key"])
     picked, used_channels = [], set()
     while pool and len(picked) < _NEWS_BLOCK_MAX:
-        top_score = pool[0][2]
-        tier = [c for c in pool if c[2] == top_score]
-        novel = [c for c in tier if (c[0].get("channel") or "") not in used_channels]
-        chosen = (novel or tier)[0]
+        top = pool[0]["key"][:2]
+        tier_grp = [c for c in pool if c["key"][:2] == top]
+        novel = [c for c in tier_grp if (c["row"].get("channel") or "") not in used_channels]
+        chosen = (novel or tier_grp)[0]
         picked.append(chosen)
-        used_channels.add(chosen[0].get("channel") or "")
+        used_channels.add(chosen["row"].get("channel") or "")
         pool.remove(chosen)
 
-    if not picked:
-        return []
+    ctx_map = {}
+    v2_syms = [c["row"].get("symbol") for c in picked if c["v2"]]
+    if v2_syms:
+        try:
+            ctx_map = _price_ctx(v2_syms, timeout, kimchi)
+        except Exception as e:  # noqa: BLE001 - 맥락 줄 생략으로 강등
+            logger.warning("[brief] 뉴스 가격 맥락 실패: %s", e)
+
+    items = []
+    for c in picked:
+        r = c["row"]
+        sym = str(r.get("symbol") or "?")
+        lines = [_item_header(sym, str(r.get("channel") or ""))]
+        if c["v2"]:
+            comp = news_parse.compose(c["parsed"], sym, r.get("summary_en") or "",
+                                      r.get("summary") or "", _item_ctx(ctx_map, sym, r, now), n_sent)
+            lines += _wrap_escaped(comp["summary"], segments=True)
+            if comp["detail"]:
+                lines += _wrap_escaped(" ".join(comp["detail"]))
+            if comp["context"]:
+                lines += _wrap_escaped(comp["context"], segments=True)
+        else:
+            lines += _wrap_escaped(c["summ"])
+        items.append((lines, r["id"]))
+
     # "외 N건" 은 **아직 안 본 잔여분** 기준. 위에서 소비한 건 이미 처리된 것이라
     # 세면 안 된다(노이즈·컷 탈락까지 '남았다'고 표시되면 숫자가 거짓이 된다).
     remain = max(0, db.count_news_digest(conn) - len(consumed_ids))
     head = "📰 <b>주요 뉴스</b>"
     if remain:
         head += f" (외 {remain}건)"
-    lines = [head]
-    for r, summ, _score in picked:
-        sym = html.escape(str(r.get("symbol") or "?"))
-        ch = html.escape(str(r.get("channel") or ""))
-        ch_part = f" · @{ch}" if ch else ""
-        lines.append(f"{_NEWS_INDENT}<b>{sym}</b>{ch_part}")
-        # 요약은 폭에 맞춰 직접 접고 **모든 줄을 같은 열에서 시작**시킨다.
-        # escape 는 접은 **뒤에** 각 줄에 적용한다 — 먼저 escape 하면 `&amp;`
-        # 같은 엔티티가 줄 경계에서 쪼개져 깨진 문자로 보인다.
-        for ln in _wrap_indented(summ, _NEWS_WRAP_W, _NEWS_INDENT):
-            lines.append(_NEWS_INDENT + html.escape(ln[len(_NEWS_INDENT):]))
-    return lines
+    return head, items
+
+
+def _news_lines(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0) -> list:
+    """"📰 주요 뉴스" 블록 줄 목록(헤더 + 항목들). 없으면 빈 리스트(블록 생략).
+    _news_items 의 평탄화 래퍼 — 종전 호출부·테스트와 같은 반환 형태."""
+    got = _news_items(conn, consumed_ids, kimchi=kimchi, timeout=timeout)
+    if not got:
+        return []
+    head, items = got
+    out = [head]
+    for lines, _rid in items:
+        out.extend(lines)
+    return out
 
 
 def _fit_telegram(lines: list, news_start: int) -> list:
@@ -715,15 +965,13 @@ def _fit_telegram(lines: list, news_start: int) -> list:
 # ── 렌더링 ──────────────────────────────────────────────────────────
 
 
-def build_brief(conn, now: float, timeout: float,
-                consumed_ids: list = None) -> str:
-    """텔레그램 HTML 브리핑 조립. 어떤 데이터가 죽어도 문자열은 항상 나온다.
-    한 화면 상한(~15행) — 행 추가 시 기존 행 삭제를 먼저 검토할 것.
+def _assemble(conn, now: float, timeout: float, consumed_ids: list) -> tuple:
+    """브리핑 줄 조립(2026-09-27 build_brief 에서 분리). 반환 (lines, news_start, items).
 
-    consumed_ids (2026-09-13 A안): 리스트를 넘기면 브리핑에 실린 news_digest_queue
-    행 id 를 채워 준다. 호출부가 **발송 성공 후** db.consume_news_digest 로 소비
-    처리한다 — 실패 시 재시도에서 같은 뉴스가 다시 실리게(유실 방지)."""
-    consumed_ids = consumed_ids if consumed_ids is not None else []
+    items = [(항목 줄 목록, 큐 id), ...] — 분할 발송이 항목 경계와 소비 id 를 정확히
+    맞추려고 필요하다. consumed_ids 에는 **판정한 후보 전부**가 들어간다(09-22 계약).
+    어떤 데이터가 죽어도 줄은 항상 나온다. 한 화면 상한(~15행) — 행 추가 시 기존 행
+    삭제를 먼저 검토할 것(뉴스 블록은 예외: 길어지면 두 번째 메시지로 분할)."""
     from monitor import market_sentiment, options
     from monitor import macro as macro_mod
 
@@ -752,7 +1000,8 @@ def build_brief(conn, now: float, timeout: float,
         if fng is not None:
             label = _FNG_KR.get(sent.get("fear_greed_label", ""),
                                 sent.get("fear_greed_label", ""))
-            lines.append(f"😨 시장심리 {fng} ({label})")
+            # 2026-09-27 감사 D18: 값과 무관한 😨 고정 → 구간별 이모지(알림과 공용 함수)
+            lines.append(f"{telegram.fng_emoji(fng)} 시장심리 {fng} ({label})")
         if sent.get("btc_dominance") is not None:
             lines.append(f"🌍 비트 점유율 {sent['btc_dominance']}%")
         if sent.get("eth_dominance") is not None:
@@ -893,16 +1142,37 @@ def build_brief(conn, now: float, timeout: float,
 
     # 📰 주요 뉴스 (2026-09-13 A안) — 뉴스 실시간 발송을 끈 대신 여기서 요약.
     news_start = -1
+    items: list = []
     try:
-        news = _news_lines(conn, consumed_ids)
-        if news:
+        got = _news_items(conn, consumed_ids, kimchi=kimchi, timeout=timeout, now=now)
+        if got:
+            head, items = got
+            news_block = [head]
+            for item_lines, _rid in items:
+                news_block.extend(item_lines)
             lines.append(_SEP)
             news_start = len(lines)
-            lines.extend(news)
+            lines.extend(news_block)
     except Exception as e:  # noqa: BLE001 - 블록 생략으로 강등
         logger.warning("[brief] 뉴스 블록 실패: %s", e)
         del consumed_ids[:]   # 실려 나가지 않았으면 소비 처리도 안 한다
+        items = []
+    return lines, news_start, items
 
+
+def build_brief(conn, now: float, timeout: float,
+                consumed_ids: list = None) -> str:
+    """텔레그램 HTML 브리핑 **한 통** 문자열(종전 계약 — 조회·테스트용).
+
+    실제 발송(maybe_send_brief)은 2026-09-27 부터 build_brief_messages 를 쓴다 —
+    한도를 넘으면 뉴스를 자르지 않고 두 번째 메시지로 나눈다. 이 함수는 한 통에
+    담아야 하는 호출부를 위해 종전 _fit_telegram 절단 경로를 유지한다.
+
+    consumed_ids (2026-09-13 A안): 리스트를 넘기면 브리핑에 실린 news_digest_queue
+    행 id 를 채워 준다. 호출부가 **발송 성공 후** db.consume_news_digest 로 소비
+    처리한다 — 실패 시 재시도에서 같은 뉴스가 다시 실리게(유실 방지)."""
+    consumed_ids = consumed_ids if consumed_ids is not None else []
+    lines, news_start, _items = _assemble(conn, now, timeout, consumed_ids)
     fitted = _fit_telegram(lines, news_start)
     if consumed_ids:
         # 길이 방어로 뉴스 줄이 잘려 나갔으면 그만큼 소비 처리도 취소한다 —
@@ -921,17 +1191,78 @@ def build_brief(conn, now: float, timeout: float,
     return "\n".join(fitted)
 
 
+def _tg_len(text: str) -> int:
+    """텔레그램 길이 단위(UTF-16 코드 유닛). 이모지 🟢·🌐 는 2로 센다 — len() 은 1로
+    세서 이모지가 많은 v2 항목에서 한도를 과소평가한다. HTML 태그까지 세므로 보수적."""
+    return len((text or "").encode("utf-16-le")) // 2
+
+
+def build_brief_messages(conn, now: float, timeout: float) -> list:
+    """발송 단위 메시지 목록 [(text, consume_ids), ...] (2026-09-27 사용자 요청).
+
+    "브리핑이 길어져도 되니" — 뉴스 설명이 길어지면서 한 통 한도(_TELEGRAM_MAX_CHARS)를
+    넘을 수 있다. 그때 **뉴스를 자르지 않고** 뉴스 블록을 두 번째 메시지로 나눈다
+    (09-14 사고: 잘린 뉴스가 소비 처리돼 영구 소실). 뉴스 블록 자체도 한도를 넘으면
+    **항목 경계**에서 세 번째 이후 메시지로 더 나눈다 — 항목 중간 절단은 없다.
+
+    소비 계약: 각 메시지의 consume_ids 는 **그 메시지가 발송에 성공했을 때만** 소비할
+    id 다. 실린 항목의 id 는 그 항목이 들어간 메시지에, 판정만 하고 싣지 않은 후보
+    (노이즈·중복·5건 컷)의 id 는 첫 뉴스 메시지에 붙는다 — 뉴스 메시지가 하나도
+    나가지 않으면 그 후보들도 다음 브리핑에서 다시 판정된다.
+    시장환경 본문이 단독으로 한도를 넘는 극단은 종전 _fit_telegram 절단(마지막 수단)."""
+    consumed_ids: list = []
+    lines, news_start, items = _assemble(conn, now, timeout, consumed_ids)
+    whole = "\n".join(lines)
+    if news_start < 0:
+        return [("\n".join(_fit_telegram(lines, -1)), [])]
+    if _tg_len(whole) <= _TELEGRAM_MAX_CHARS:
+        return [(whole, list(consumed_ids))]
+
+    # 분할: 본문(뉴스 앞 구분선까지 제외) + 뉴스 메시지(들)
+    cut = news_start
+    if cut > 0 and lines[cut - 1] == _SEP:
+        cut -= 1
+    main_lines = lines[:cut]
+    if _tg_len("\n".join(main_lines)) > _TELEGRAM_MAX_CHARS:
+        main_lines = _fit_telegram(main_lines, -1)
+    msgs = [("\n".join(main_lines), [])]
+
+    head = lines[news_start]
+    shown_ids = {rid for _l, rid in items}
+    extra_ids = [i for i in consumed_ids if i not in shown_ids]
+    cont_head = "📰 <b>주요 뉴스</b> (이어서)"
+    cur_lines, cur_ids = [head], []
+    for item_lines, rid in items:
+        cand = cur_lines + item_lines
+        if cur_ids and _tg_len("\n".join(cand)) > _TELEGRAM_MAX_CHARS:
+            msgs.append(("\n".join(cur_lines), cur_ids))
+            cur_lines, cur_ids = [cont_head] + list(item_lines), [rid]
+        else:
+            cur_lines, cur_ids = cand, cur_ids + [rid]
+    if cur_ids:
+        msgs.append(("\n".join(cur_lines), cur_ids))
+    # 판정만 한 후보 id 는 첫 뉴스 메시지에 붙인다.
+    if len(msgs) >= 2:
+        t, ids = msgs[1]
+        msgs[1] = (t, ids + extra_ids)
+    for t, _ids in msgs:
+        if _tg_len(t) > 4096:
+            # 항목 1건이 4096 을 넘는 일은 설계상 없다(설명 3문장). 넘으면 텔레그램
+            # send 의 구분선 분할이 받아주지만, 로그로 남겨 원인을 본다.
+            logger.warning("[brief] 분할 메시지가 4096 초과(%d) — 항목 길이 점검 필요", _tg_len(t))
+    return msgs
+
+
 # ── 회차 훅 (run_cycle 의 maybe_* 패턴) ─────────────────────────────
 
 
 def maybe_send_brief(db_path: str, now: float = None) -> str:
-    """조건이 맞으면 모닝 브리핑 1통 발송. 반환 "skipped" | "ok" | "failed".
+    """조건이 맞으면 모닝 브리핑 발송(보통 1통, 뉴스가 길면 2통 이상 — 2026-09-27). 반환 "skipped" | "ok" | "failed".
     어떤 실패도 예외를 밖으로 던지지 않는다(가격체크 보호 — maybe_collect 동일).
 
     날짜 마킹은 **발송 성공 후에만** 한다(모듈 docstring 참고) — 실패 시 다음
     회차가 창 안에서 재시도하고, 창(hour_to)을 넘기면 그날은 자연 생략된다."""
     now = time.time() if now is None else now
-    consumed_ids: list = []
 
     try:
         with db.connect(db_path) as conn:
@@ -941,8 +1272,10 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
                 return "skipped"
 
             logger.info("모닝 브리핑 발송: %s", reason)
-            text = build_brief(conn, now, settings.get("http_timeout_sec"),
-                               consumed_ids)
+            # 2026-09-27: 한도 초과 시 뉴스를 자르지 않고 메시지를 나눈다
+            # (build_brief_messages docstring). 메시지마다 소비할 id 가 따로 있다.
+            msgs = build_brief_messages(conn, now, settings.get("http_timeout_sec"))
+            text = msgs[0][0]
     except BaseException as e:  # noqa: BLE001 - 브리핑 실패가 회차를 죽이면 안 된다
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
@@ -960,6 +1293,25 @@ def maybe_send_brief(db_path: str, now: float = None) -> str:
     if not sent:
         print("::warning::모닝 브리핑 발송 실패 - 다음 회차 재시도(창 내)")
         return "failed"
+
+    # 첫 통(시장환경 본문)이 나갔으면 그날 브리핑은 '발송됨'이다. 이어지는 뉴스
+    # 메시지는 **각자 성공한 것만** 소비 처리한다 — 실패한 메시지의 뉴스는 큐에
+    # 남아 다음 브리핑에 다시 실린다(09-14 사고: 안 실린 뉴스의 영구 소실 방지).
+    consumed_ids: list = list(msgs[0][1])
+    for extra_text, extra_ids in msgs[1:]:
+        try:
+            ok = telegram.send(extra_text)
+        except BaseException as e:  # noqa: BLE001 - 발송 실패가 회차를 죽이면 안 된다
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            logger.error("모닝 브리핑 뉴스 메시지 발송 예외: %s: %s", type(e).__name__, e)
+            ok = False
+        if ok:
+            consumed_ids.extend(extra_ids)
+        else:
+            logger.warning("[brief] 뉴스 분할 메시지 발송 실패 — %d건 미소비(다음 브리핑 재시도)",
+                           len(extra_ids))
+            print("::warning::모닝 브리핑 뉴스 분할 메시지 발송 실패 - 해당 뉴스는 다음 브리핑으로")
 
     try:
         with db.connect(db_path) as conn:
