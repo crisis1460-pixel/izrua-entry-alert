@@ -1057,6 +1057,10 @@ check("RQ7: 대기 3분(정상 범위) → 종전 문구 유지", "cron-job.org 
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑이 대신 전달한다.
 # 여기서는 블록 렌더 함수만 검증한다(build_brief 전체는 test_morning_brief.py).
 from notify import morning_brief as _mb
+# MB·MBR 픽스처는 블록 상한 5(09-13 A안) 기준으로 짜여 있다 — 상한 **메커니즘**(컷·소비·잔여)
+# 검증이라 값은 고정해 두고 끝에 되돌린다(09-28 운영값 12).
+_MB_ORIG_BLOCK_MAX = _mb._NEWS_BLOCK_MAX
+_mb._NEWS_BLOCK_MAX = 5
 
 # MB 블록 픽스처는 원문(summary_en) 없는 **번역문 경로**(종전 렌더) 검증이다. 2026-09-27
 # 리뷰 RV2-N8 부터 v2 스위치가 켜져 있으면 원문 없는 행은 싣지 않고 소비만 하므로,
@@ -1209,6 +1213,10 @@ check("MBR3 6건 이상일 때 저점수 후보는 5건 컷에서 탈락(고점�
 check("MBR3b 후보 7건 전부 소비 처리(컷에서 탈락한 것도 포함)", len(_mbr_ids2) == 7)
 _mbr.execute("DELETE FROM news_digest_queue")
 _mbr.commit()
+_mb._NEWS_BLOCK_MAX = _MB_ORIG_BLOCK_MAX
+check("MB-CAP 운영 뉴스 블록 상한 12 · 수집 상한 12/일 · 채널 4/일(09-28 대표 요청)",
+      _mb._NEWS_BLOCK_MAX == 12 and _cfg_arm.get("news_alert_max_global_per_day") == 12
+      and _cfg_arm.get("news_alert_max_per_channel_per_day") == 4)
 
 # MBR4~4c: 같은 코인 중복은 점수 최고 1건만 (실측 XRP·BTC CLARITY 법안 중복)
 db.queue_news_digest(_mbr, "XRP", "cha",
@@ -1918,7 +1926,8 @@ os.unlink(_nr_db)
 # ── NEWS-ORPHAN: 줄내림 고아단어 방지 (2026-09-27 사용자 요청) ──────────────
 # "기존 브리핑 양식 줄내림 후 시작줄 고아단어 안 나오게, 기존에 세팅값은 유지"
 _W4, _I4 = _mb4._NEWS_WRAP_W, _mb4._NEWS_INDENT
-check("NEWS-ORPHAN0 세팅값 유지 — 폭 36 · 들여쓰기 3칸", _W4 == 36 and _I4 == "   ")
+check("NEWS-ORPHAN0 세팅값 — 폭 32(09-28 대표 폰 실측으로 36→32) · 들여쓰기 3칸",
+      _W4 == 32 and _I4 == "   ")
 
 
 def _orphans(lines):
@@ -1939,8 +1948,8 @@ check("NEWS-ORPHAN4 어절 유실·중복 없음(재조립 동일)",
       == ("비트코인 현물 ETF로 $1.69B 규모의 순유입이 집계됐습니다. ETF 순유입은 기관의 현물 매수 "
           "수요로 해석돼 통상 단기 호재로 받아들여집니다.").replace(" ", ""))
 check("NEWS-ORPHAN5 직전 줄이 1단어가 되면서까지 끌어내리지 않는다(2덩어리 줄은 보존)",
-      _mb4._wrap_indented("A" * 20 + " " + "B" * 12 + " C", _W4, _I4)
-      == [_I4 + "A" * 20 + " " + "B" * 12, _I4 + "C"])
+      _mb4._wrap_indented("A" * 16 + " " + "B" * 11 + " C", _W4, _I4)
+      == [_I4 + "A" * 16 + " " + "B" * 11, _I4 + "C"])
 _o7 = _mb4._wrap_escaped("🔴 악재 연준 금리 인상 25bp · 단기", segments=True)
 check("NEWS-ORPHAN7 조각 보호가 고아를 만들면 보호를 풀어 균형('단기' 단독 줄 없음)",
       _mb4.orphan_lines(_o7) == 0 and not any(x.strip() == "단기" for x in _o7))
@@ -2015,9 +2024,21 @@ for _cur, _up, _dn in [(0.00000583, "0.00000596", "0.00000570"), (81000.0, "82,0
         _s = _np.context_line({"kind": "scenario", "bull": {"trigger": _up}, "bear": {"trigger": _dn}},
                               "HBAR", {"chg24": _chg, "cur_usd": _cur})
         _out = _mb4._wrap_escaped(_s, segments=True, reorder=True)
-        if _mb4.orphan_lines(_out, strict=True) or any(_mb4._display_width(x) > _W4 for x in _out):
+        # 09-28: 분기선 값 하나("↓80,000(-1.2%)")가 한 줄인 건 고아가 아니다(값 단위) — 줄 끝 '·'·
+        # 폭 초과·값 아닌 1단어 줄만 결함으로 센다.
+        _bad_line = [x for x in _out[1:] if len(x.split()) <= 1 and not x.strip()[:1] in ("↑", "↓")]
+        if _bad_line or any(_mb4._display_width(x) > _W4 or x.rstrip().endswith("·") for x in _out):
             _w1_bad += 1
-check("RV2-W1 극소가 분기선 맥락줄도 고아 줄 없음(폭 36 유지)", _w1_bad == 0)
+check("RV2-W1 극소가 분기선 맥락줄도 고아 줄 없음(폭 32)", _w1_bad == 0)
+# 09-28 대표 캡처: 조각 경계에서 줄이 바뀌면 줄 끝 '·' 가 매달리고 '분기' 라벨이 값과 떨어졌다.
+_w2 = [_mb4._wrap_escaped(_s, segments=True, reorder=True) for _s in (
+    "💬 차트 의견(8시간봉) · 박스권 · 단기",
+    "24h -0.4% · 분기 ↑82,000(-2.7%) ↓80,000(-5.1%) · 게시 1일 전",
+    "🔴 악재 연준 금리 인상 25bp · 단기")]
+check("NEWS-WRAP2 줄 끝 '·' 없음 · '분기'는 첫 값과 같은 줄 · 폭 32 · 짧은 끝 조각 균형",
+      all(not x.rstrip().endswith("·") and _mb4._display_width(x) <= _W4 for o in _w2 for x in o)
+      and any("분기 ↑82,000" in x for x in _w2[1])
+      and _w2[0][-1].strip() == "박스권 · 단기" and _w2[2][-1].strip() == "25bp · 단기")
 _st_cfg.SETTINGS["news_translate_enabled"] = True
 
 

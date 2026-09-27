@@ -176,7 +176,7 @@ _MACRO_LOOKAHEAD_DAYS = 7
 # ── 알림량 A안 (2026-09-13) 브리핑 흡수 블록 상한 ────────────────────
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
 _TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
-_NEWS_BLOCK_MAX = 5          # 📰 주요 뉴스 — 뉴스 상한(5/일)과 동수
+_NEWS_BLOCK_MAX = 12         # 📰 주요 뉴스 — 뉴스 상한(12/일, 09-28 5→12)과 동수
 # 큐에서 꺼낼 배수 (2026-09-17). 렌더 직전 2차 필터(_is_queued_noise)가 걸러내는
 # 만큼을 채우려면 상한보다 넉넉히 꺼내야 한다 — 딱 5건만 꺼내면 그중 3건이
 # 노이즈일 때 2건만 실린다. 3배면 실측 노이즈 비율(약 절반)을 충분히 흡수한다.
@@ -184,7 +184,10 @@ _NEWS_FETCH_MULT = 3
 # 뉴스 요약 줄의 표시 너비 상한과 들여쓰기 (2026-09-16 행잉 인덴트).
 # 매크로 캘린더 줄(_MACRO_LINE_MAX_W=32)과 같은 계열의 값 — 모바일 텔레그램에서
 # 한 줄에 무리 없이 들어가는 폭이다. 들여쓰기를 포함한 전체 너비 기준.
-_NEWS_WRAP_W = 36
+# 2026-09-28: 36 → 32. 실측 대표 폰에서 35칸 줄("82,000을 지키면 86,000까지 상승을")이
+# 화면 폭을 넘어 '을'이 들여쓰기 없이 다음 줄로 떨어졌다(숫자·쉼표가 반각보다 넓게 렌더).
+# 진입 알림과 같은 32칸.
+_NEWS_WRAP_W = 32
 _NEWS_INDENT = "   "         # 코인·채널 줄과 요약 줄이 같은 열에서 시작한다
 # 요약 첫 문장 컷. 2026-09-16 사용자 요청("핵심주제만 두괄식으로, 내용이 계속
 # 잘린다")으로 80 → 55. 줄이는 게 곧 개선인 이유: 채널 원문은 이미 두괄식이라
@@ -720,7 +723,59 @@ _SEG_GLUE = "\ue000"   # 조각 안 공백 보호용 사용자 정의 문자(표
 
 
 def _wrap_segments(src: str) -> tuple:
-    """segments 모드 접기 — (줄 목록, 고아 없음 여부)."""
+    """segments 모드 접기 — (줄 목록, 고아 없음 여부).
+
+    2026-09-28 대표 캡처("💬 차트 의견(8시간봉) ·" / "박스권 · 단기", "24h -0.4% · 분기" /
+    "↑82,000(-2.7%)"): 조각 경계에서 줄이 바뀌면 줄 끝에 '·' 가 매달리고 '분기' 라벨이 값과
+    떨어졌다. 이제 **조각 단위로 채우고, 줄이 바뀌는 경계의 ' · ' 는 지운다**. 폭보다 긴
+    조각만 어절 단위로 접고(라벨과 첫 값은 함께), 마지막 줄이 짧은 조각 하나뿐이면 직전 줄의
+    마지막 조각을 끌어내려 균형을 맞춘다."""
+    avail = _NEWS_WRAP_W - _display_width(_NEWS_INDENT)
+    segs = [sg for sg in src.split(" · ") if sg]
+    rows: list = []      # 줄마다 조각 목록
+    cur: list = []
+    for sg in segs:
+        w = _display_width(sg)
+        if w > avail:
+            # 긴 조각: 어절 단위로 접어 앞 줄들은 확정, 마지막 줄은 이어 붙일 수 있게 둔다.
+            if cur:
+                rows.append(cur)
+                cur = []
+            parts = [ln[len(_NEWS_INDENT):] for ln in _wrap_indented(sg, _NEWS_WRAP_W, _NEWS_INDENT)]
+            rows.extend([p] for p in parts[:-1])
+            cur = [parts[-1]] if parts else []
+            continue
+        cand = cur + [sg]
+        if cur and _display_width(" · ".join(cand)) > avail:
+            rows.append(cur)
+            cur = [sg]
+        else:
+            cur = cand
+    if cur:
+        rows.append(cur)
+    # 균형: 마지막 줄이 짧은 조각 하나면 직전 줄(조각 2개 이상)의 마지막 조각을 끌어내린다.
+    if len(rows) >= 2 and len(rows[-1]) == 1 and len(rows[-2]) >= 2 \
+            and _display_width(rows[-1][0]) <= _ORPHAN_MAX_W + 2:
+        moved = rows[-2][-1]
+        if _display_width(" · ".join([moved] + rows[-1])) <= avail:
+            rows[-2] = rows[-2][:-1]
+            rows[-1] = [moved] + rows[-1]
+    elif len(rows) >= 2 and len(rows[-1]) == 1 and len(rows[-2]) == 1 \
+            and _display_width(rows[-1][0]) <= _ORPHAN_MAX_W + 2:
+        # 직전 줄이 긴 조각 하나("🔴 악재 연준 금리 인상 25bp" / "단기")면 그 조각의 마지막
+        # 어절을 끌어내린다 → "🔴 악재 연준 금리 인상" / "25bp · 단기".
+        words = rows[-2][0].split(" ")
+        if len(words) >= 3:
+            cand = words[-1] + " · " + rows[-1][0]
+            if _display_width(cand) <= avail:
+                rows[-2] = [" ".join(words[:-1])]
+                rows[-1] = [cand]
+    lines = [_NEWS_INDENT + " · ".join(r) for r in rows]
+    return lines, True
+
+
+def _wrap_segments_legacy(src: str) -> tuple:
+    """종전(09-27) segments 접기 — 조각 보호 + 어절 균형. 참고용으로만 남김."""
     avail = _NEWS_WRAP_W - _display_width(_NEWS_INDENT)
     segs = src.split(" · ")
     protect = [_display_width(sg) <= avail - 2 for sg in segs]
@@ -1069,7 +1124,8 @@ def _assemble(conn, now: float, timeout: float, consumed_ids: list) -> tuple:
         stable_chg = sent.get("stablecoin_mcap_change_7d_pct")
         if stable is not None:
             if stable_chg is not None:
-                lines.append(f"💵 스테이블 {stable}B ({stable_chg:+.2f}%/7d)")
+                # '/7d' 는 텔레그램이 봇 명령어 링크(파란 글씨)로 바꿨다(09-28 대표 캡처).
+                lines.append(f"💵 스테이블 {stable}B (7일 {stable_chg:+.2f}%)")
             else:
                 lines.append(f"💵 스테이블 {stable}B")
 
@@ -1267,9 +1323,8 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
         # 남았다 — 꺼낼 수 있는 15건이 전부 그런 행이면 새 뉴스가 영영 안 꺼내진다.
         # 뉴스 블록 조립이 예외로 죽은 경우는 _assemble 이 consumed_ids 를 비운다.
         return [("\n".join(_fit_telegram(lines, -1)), list(consumed_ids))]
-    if _tg_len(whole) <= _TELEGRAM_MAX_CHARS:
-        return [(whole, list(consumed_ids))]
-
+    # 2026-09-28 대표 요청: 뉴스는 **항상** 두 번째 메시지로 뺀다(한 통에 들어가도) — 시장환경
+    # 요약과 코인별 뉴스를 한 말풍선에 몰지 않고, 뉴스 항목 수를 늘려도 첫 통이 길어지지 않게.
     # 분할: 본문(뉴스 앞 구분선까지 제외) + 뉴스 메시지(들)
     cut = news_start
     if cut > 0 and lines[cut - 1] == _SEP:
@@ -1285,7 +1340,8 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
     cont_head = "📰 <b>주요 뉴스</b> (이어서)"
     cur_lines, cur_ids = [head], []
     for item_lines, rid in items:
-        cand = cur_lines + item_lines
+        # 항목 사이 빈 줄(09-28 대표 요청 "시각적으로 눈에 잘 들어오게") — 코인 경계가 보이게.
+        cand = cur_lines + ([""] if cur_ids else []) + item_lines
         if cur_ids and _tg_len("\n".join(cand)) > _TELEGRAM_MAX_CHARS:
             msgs.append(("\n".join(cur_lines), cur_ids))
             cur_lines, cur_ids = [cont_head] + list(item_lines), [rid]

@@ -279,12 +279,16 @@ _send_result["ok"] = True
 morning_brief._TELEGRAM_MAX_CHARS = _orig_max
 set_brief_meta("")
 sent_log.clear()
-check("NEWS-SPLIT8 한도 이내면 종전처럼 1통 · 뉴스 전부 소비",
+# 2026-09-28 대표 요청: 한도 이내여도 뉴스는 항상 두 번째 메시지(본문 1통 + 뉴스 1통).
+check("NEWS-SPLIT8 한도 이내여도 뉴스는 두 번째 메시지 · 뉴스 전부 소비",
       morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 2 * 86400) == "ok"
-      and len(sent_log) == 1 and "주요 뉴스" in sent_log[0] and _unconsumed() == 0)
+      and len(sent_log) == 2 and "주요 뉴스" not in sent_log[0]
+      and "주요 뉴스" in sent_log[1] and _unconsumed() == 0)
+_news_msg = sent_log[-1] if sent_log else ""
 check("NEWS-SPLIT9 v2 항목 형태(💬 차트 의견 · 분기선 · 설명 문장)가 실린다",
-      "💬 차트 의견(4시간봉)" in sent_log[0] and "분기 ↑1.2000 ↓1.1500" in sent_log[0]
-      and "강세 시나리오" in sent_log[0].replace("\n   ", " "))
+      "💬 차트 의견(4시간봉)" in _news_msg and "↑1.2000" in _news_msg and "↓1.1500" in _news_msg
+      and "강세 시나리오" in " ".join(l.strip() for l in _news_msg.split("\n")))
+check("NEWS-SPLIT10 뉴스 항목 사이 빈 줄(코인 경계)", "\n\n" in _news_msg)
 
 # ── NEWS-AGE1~4 (2026-09-27 대표 결정 "뉴스 48시간 이내") ────────────────
 # 렌더 단계: 게시 72h 전 큐 행은 빠지고(소비는 됨), 게시 1h 전 행은 실린다.
