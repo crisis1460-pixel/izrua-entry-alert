@@ -29,13 +29,37 @@ _LONG_HINTS = re.compile(
 _SHORT_HINTS = re.compile(
     r"\b(short|숏|매도)\b|\bsell\b(?!-?\s*side)|숏\s*포지션|short\s*setup", re.I)
 
+# 비방향 관용구 (2026-09-27 감사 C-D / A-T3 — 숏 글이 롱으로 저장된 1순위 원인).
+# \blong\b 가 "as long as"·"long-term"·"long upper wick" 에, \bshort\b 가
+# "short-term"·"short squeeze" 에 걸려 두 힌트가 동시에 켜지면(텍스트 301건 중 44건)
+# 기본값 long 이 됐다. 실측: 636 ETH("short setup … as long as the rectangle …"),
+# 699 ETH("Entry (Short)" + "long upper wick"). 방향 판정 **전에만** 지운다 — 가격
+# 추출용 텍스트(clean)에는 손대지 않는다.
+_DIRECTION_NOISE = re.compile(
+    r"\bas\s+long\s+as\b|\bso\s+long\s+as\b|\blong[\s-]*(?:term|standing|awaited|lasting|lived)\b"
+    r"|\blonger\b|\bno\s+longer\b|\bbefore\s+long\b|\b(?:in|over)\s+the\s+long\s+(?:run|haul)\b"
+    r"|\blong\s+(?:upper\s+|lower\s+)?(?:wick|shadow|tail|time|way|consolidation|period)s?\b"
+    r"|\bshort[\s-]*(?:term|lived)\b|\bshortly\b|\b(?:in|over)\s+the\s+short\s+run\b"
+    r"|\bshort[\s-]*squeez\w*|\blong[\s-]*squeez\w*|\blong\s*/\s*short\b|\bshort\s*/\s*long\b"
+    r"|\bin\s+short\b|\bfalls?\s+short\b|\bshort\s+of\b"
+    r"|\b(?:buy|sell)(?:ing)?[\s-]*(?:volume|pressure|orders?|walls?|flow|signal)s?\b"
+    r"|\bsell[\s-]*off\b",
+    re.I,
+)
+
 # 라벨 (그룹1 = 라벨종류). 라벨 뒤에 오는 숫자를 그 항목으로 본다.
 _ENTRY_LABEL = re.compile(
     # 2026-07-28 수리: entry/enter/buy 에 단어경계 추가 — center/reenter/buyers 내부
     # "enter"/"buy" 가 엔트리 라벨로 잡히는 버그(DB 현재 0건, 소스 확장 시 노출면 증가).
     # (?:\s*\([^)]*\))? — "Buy (zone):" 같은 괄호 주석을 거치고도 is_spec 판정을 통과.
-    r"(\bentry\b|\benter\b|\bbuy\b|long\s*entry|진입가?|진입|매수가?|롱\s*진입|buy\s*zone|entry\s*zone)"
-    r"(?:\s*\([^)]*\))?\s*(?:price|zone|구간|가격)?\s*[:=]?\s*",
+    # 2026-09-27 감사 C-L: "Re-Entry"(884 — 재진입 '기회' 서술 뒤 트리거가 $1.42 를
+    # 진입가로 흡수)와 "buy-side liquidity"(628·694·695 — 유동성 목표가를 진입가로
+    # 흡수)를 라벨에서 뺀다. _LONG_HINTS 의 buy 예외와 같은 규칙.
+    # "Buy Limit Zone:" 도 스펙형으로 인정(656 — limit 이 허용 접미어가 아니라
+    # 산문형으로 떨어졌다).
+    r"((?<!re-)(?<!re\s)\bentry\b|\benter\b|\bbuy\b(?!-?\s*side)|long\s*entry|진입가?|진입|매수가?"
+    r"|롱\s*진입|buy\s*zone|entry\s*zone)"
+    r"(?:\s*\([^)]*\))?\s*(?:limit\s*)?(?:price|zone|level|구간|가격)?\s*[:=]?\s*",
     re.I,
 )
 _SL_LABEL = re.compile(
@@ -73,6 +97,9 @@ _TP_LABEL = re.compile(
 # 났었다(2026-07-23 자체 발견). "TP1"/"목표1"처럼 라벨에 숫자가 바로 붙어있을 때만
 # 서수로 간주한다.
 _ORDINAL_LABEL = re.compile(r"\b(TP|SL|Target|Entry|타겟|목표)[0-9]{1,2}\b", re.I)
+# "T1: 84,800 / T2: 86,500"(793 BTC, 849) — 'T' 약칭 목표 라벨은 라벨로 인식되지 않아
+# 서수 1 이 창의 첫 숫자로 잡혔다. 콜론이 뒤따를 때만 "TP:" 로 정규화한다.
+_T_ORDINAL = re.compile(r"\bT[1-9]\b(?=\s*(?:\(|[:=]))")  # "T1 (Mirror …): 86,024"(851)
 
 # 2차 실전 버그(2026-07-23 저녁, ALGO/ARB 알림): "Target 1: 0.08977" 처럼 서수가
 # 공백으로 떨어져 있는 표기는 위 규칙이 못 잡아서, "Target"까지만 라벨로 매칭된 뒤
@@ -86,8 +113,17 @@ _ORDINAL_LABEL = re.compile(r"\b(TP|SL|Target|Entry|타겟|목표)[0-9]{1,2}\b",
 # 한/영 익절 표기(Take Profit / Profit / 익절)를 추가한다. 콜론 요구 조건은 그대로라
 # "목표 68,000" 류 오탐 위험은 늘지 않는다.
 _SPACED_ORDINAL_LABEL = re.compile(
-    r"\b(take\s*profit|profit|익절|TP|SL|Target|Entry|타겟|목표|진입|손절)"
-    r"\s+[0-9]{1,2}(?=\s*[:=])", re.I
+    r"\b((?:take\s*profit|profit|익절|TP|SL|Target|Entry|타겟|목표|진입|손절)"
+    # 2026-09-27 재파싱 회귀(822 NEAR "Entry Zone 1: 4.103"): 라벨과 서수 사이의
+    # zone/level/price/area 한 단어도 허용 — 지우는 건 서수뿐이다.
+    r"(?:\s+(?:zone|level|price|area))?)"
+    # 2026-09-27 감사 A-T4/C-T: "Take Profit 1 (TP1): 0.7460"(643 SUI)·"Target 1 (TP1):
+    # $0.5843"(878 ONDO) 처럼 서수 뒤에 괄호 주석이 오면 콜론 요구 조건에 안 걸려
+    # 서수 1 이 tp=1.0 으로 잡혔다. 괄호도 서수의 뒤따름으로 인정한다 —
+    # "Target 2 (major) 0.5" 류에서도 지워지는 건 서수뿐이라 가격은 보존된다.
+    # 재파싱 회귀 보강: "Target 1 at $2,507.06"(749), "Target Two (R2): $2,714.10"(799) —
+    # 'at'/'@' 뒤따름과 영어 서수 단어도 서수로 본다.
+    r"\s+(?:[0-9]{1,2}|one|two|three|four|five|six)(?=\s*(?:\(|[:=@]|at\s))", re.I
 )
 
 # 가격 숫자 하나: 1,234.56 / 0.00123 / 12100 / $8.30 (콤마·$ 허용)
@@ -159,6 +195,70 @@ _YEAR_CTX = re.compile(r"\b(?:in|by|since|until|late|early|year)\s+20[2-9]\d\b",
 # 를 지우는 것과 완전히 같은 이유다 — 이건 가격이 아니라 '배수'다.
 # 소수 R(1.5R)도 흔하고, 부호가 붙는 경우(+2R/-1R)도 함께 지운다.
 _R_MULTIPLE = re.compile(r"[+\-]?\s*\d+(?:\.\d+)?\s*R\b", re.I)
+
+# ── 2026-09-27 감사 A-T4 / C-L 추가 패턴 (비가격 숫자 4종) ──────────────────
+# ① 손익비 비율: "RR 1:1.5"·"R/R:2"(772 FIL tp=2.0)·"R:R 3"·"Risk/Reward Ratio (R:R): ~2.3:1".
+#    _R_MULTIPLE 은 "2R" 꼴만 지웠다. 라벨 동반형을 먼저 지우고, 라벨 없이 남는
+#    "1:2 risk-to-reward"·"to 3:1" 처럼 한쪽이 1 인 비율도 지운다(가격이 아님).
+_RR_RATIO = re.compile(
+    r"(?:\bR\s*[/:]\s*R\b|\bRRR?\b|\brisk\s*[/:-]?\s*(?:to\s*[-\s]?)?reward(?:\s*ratio)?)"
+    r"(?:\s*\([^)]*\))?\s*[:=]?\s*~?\s*\d+(?:\.\d+)?(?:\s*[:/]\s*\d+(?:\.\d+)?)?",
+    re.I,
+)
+_ONE_RATIO = re.compile(
+    r"(?<![\d.,:])(?:1\s*:\s*\d{1,2}(?:\.\d+)?|\d{1,2}(?:\.\d+)?\s*:\s*1)(?![\d.,:])")
+# ② 레버리지 템플릿: "👉Leverage x 5-10-20"(Roddy01 — _LADDER 가 5..20 을 사다리로
+#    읽어 진입 12.5), "Lev 10x", "x10", "Margin 1-5%". 기존 _LEVERAGE 는 "10x" 만.
+_LEVERAGE_LABEL = re.compile(
+    r"\b(?:leverage|lev)\b\s*[:=]?\s*(?:(?:cross|isolated|max|up\s+to)\s*)?(?:x\s*)?\d+(?:\.\d+)?(?:\s*[-–/,~]\s*x?\s*\d+(?:\.\d+)?)*\s*x?\b"
+    r"|\bmargin\b\s*[:=]?\s*\d+(?:\.\d+)?(?:\s*[-–~]\s*\d+(?:\.\d+)?)?\s*%?"
+    r"|(?<![\w.])x\s?\d{1,3}\b",
+    re.I,
+)
+# ③ 타임프레임 토큰: "H1"·"M15"(대문자 문자+숫자), "4H"·"15m"·"1D"·"1W"(숫자+단위),
+#    "4-hour"·"15 minute"(831). 656 PROVE "(M15 Entry / H1" → 1.0, 879 "4H" → 4.0.
+_TF_TOKEN = re.compile(r"(?<![\w.,$])[HMDW]\d{1,3}\b")
+_TF_NUM_UNIT = re.compile(
+    r"(?<![\w.,$])\d{1,3}\s?(?:h|hr|hrs|m|min|mins|d|w)\b"
+    r"|(?<![\w.,$])\d{1,3}\s*-?\s*(?:hours?|minutes?|mins?|days?|weeks?|months?|years?|candles?|bars?)\b",
+    re.I,
+)
+# ④ 기간: "Over The Next 30 Days"(575 ZORA → 진입 30.0), "2 weeks" — ③의 둘째 줄이 담당.
+
+# "N to N" 범위 (감사 C-Z 646 ARB "Entry zone: $0.16 to $0.10" → 0.16). _RANGE 는
+# 하이픈·물결만 구분자로 봐서 "to" 를 놓쳤다. 진입 라벨이 있는 **같은 줄**에서만
+# 범위로 인정한다(산문 "from 0.5 to 0.8" 류가 TP 등 다른 라벨로 새지 않게).
+_RANGE_TO = re.compile(_NUM + r"\s+to\s+" + _NUM, re.I)
+
+# 산문형 라벨 근접 제약 (감사 C-L). 스펙형 라벨(콜론)이 없는 글에서 라벨 뒤
+# 80자 창의 첫 숫자를 쓰다 보니 목표가·손절가·유동성·일수가 진입가로 흡수됐다
+# (575·623·628·669·768). 산문형은 라벨과 숫자 사이 25자 이하, 그리고 문장 끝이나
+# 다른 라벨 키워드에서 창을 끊는다. 스펙형 경로는 종전 그대로(80자 창)다.
+_PROSE_MAX_GAP = 60
+_SENT_END = re.compile(r"[.!?](?=\s|$)")
+_ENTRY_STOP = re.compile(
+    r"\btargets?\b|\btp\b|take[\s-]*profit|\bstop|\bsl\b|invalidat|liquidity|resistance"
+    r"|current(?:ly)?\s+(?:price|trading)|trading\s+(?:around|at)|leverage|margin", re.I)
+# TP/SL 창은 진입 단어에서 끊지 않는다 — "the SL is 2% below entry, which puts it
+# around $12.02"(684)처럼 진입가를 기준점으로 말하는 산문이 흔하다(재파싱 회귀).
+_TP_STOP = re.compile(r"\bstop|\bsl\b|invalidat", re.I)
+_SL_STOP = re.compile(r"\btargets?\b|\btp\b|take[\s-]*profit", re.I)
+
+# 돌파 트리거 (감사 C-B). "Entry: 1.4968 Buy Stop"(807), "Entry: 2,526.97 (Confirmed
+# 1H close breaking above …)"(637), "weekly close above $1.42"(884) — 작성자는 '그
+# 위로 올라서면 진입'인데 봇은 '위에서 내려와 닿으면 매수'로 감시한다. 진입값
+# 주변(같은 문장 또는 ±40자)에 이 키워드가 있으면 진입가로 쓰지 않는다.
+# 리테스트 진입("Breakout retest"·"pullback to")은 눌림목이라 예외(804·819·850·855).
+_TRIGGER = re.compile(
+    r"buy[\s-]*stop|\bclose[sd]?\s+(?:\w+\s+){0,2}?above|\bclosing\s+above"
+    r"|\bbreak(?:s|ing)?\s+(?:out\s+)?above|\bbreakout\s+above|bullish\s+flip|\breclaim(?:s|ed|ing)?\b"
+    # "Break and confirm above $106.11 (entry trigger …)"(673), "A confirmed break above"(754)
+    r"|\bbreak(?:s|ing)?\s+and\s+(?:confirm|close|hold)\w*\s+above|\bconfirmed\s+break\s+above",
+    re.I)
+_BUY_STOP = re.compile(r"buy[\s-]*stop", re.I)
+_RETEST = re.compile(r"re-?test|pull\s*back\s+(?:in)?to|pullback\s+(?:in)?to", re.I)
+_TRIGGER_CTX = 40
+_BUY_STOP_CTX = 100
 
 # 번호 목록 마커 ("1) 1.1129", "2. 0.5340") — 2026-07-27 채널 실사 중 발견.
 # 라벨 다음 줄부터 후보를 번호로 나열하는 포맷에서 **마커 숫자가 가격으로** 읽혔다
@@ -255,15 +355,23 @@ def _clean(text: str) -> str:
 
     공통 원칙: **가격이 아닌 숫자**를 가격 탐색 전에 없앤다. 남기면 라벨 뒤 창에서
     가장 왼쪽 숫자로 잡혀 그대로 진입가·목표가가 된다(전부 실사고 이력이 있다)."""
+    text = _LEVERAGE_LABEL.sub(" ", text)  # "Leverage x 5-10-20" (2026-09-27, 레버리지 템플릿)
     text = _LEVERAGE.sub(" ", text)
+    text = _RR_RATIO.sub(" ", text)     # "RR 1:1.5"·"R/R:2" (2026-09-27, 772·656)
     text = _R_MULTIPLE.sub(" ", text)   # "4R return" → 4 가 진입가로 (AVAX 실사고)
     text = _PERCENT.sub(" ", text)
     text = _DATE_FULL.sub(" ", text)
     text = _YEAR_KR.sub(" ", text)
     text = _YEAR_CTX.sub(" ", text)
+    text = _TF_TOKEN.sub(" ", text)     # "H1"·"M15" (2026-09-27, 656)
+    text = _TF_NUM_UNIT.sub(" ", text)  # "4H"·"15m"·"30 Days" (2026-09-27, 575·879·831)
     text = _LIST_MARKER.sub("", text)   # "1) 1.1129" → 마커만 제거, 가격은 보존
+    text = _T_ORDINAL.sub("TP", text)   # "T1:" → "TP:" (2026-09-27)
     text = _ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "TP1:" → "TP:"
     text = _SPACED_ORDINAL_LABEL.sub(lambda m: m.group(1), text)  # "Target 1:" → "Target:"
+    # 서수 제거 **뒤에** 돈다 — "Target 1:1.5" 가 먼저 "Target:1.5" 가 되어야
+    # 가격 1.5 를 비율로 오인해 지우지 않는다.
+    text = _ONE_RATIO.sub(" ", text)    # "1:2 risk-to-reward", "~2.3:1 to 3:1"
     return text
 
 
@@ -299,7 +407,57 @@ def _grab_after(label_pat, text: str) -> list:
     실전에 있는데(라벨 뒤 잡토큰이 \\s* 를 끊어 m.end() 가 라벨 줄에 남는다), 라벨 줄
     끝에서 자르면 창이 비어 사다리를 통째로 놓친다 — 종전 30자 창은 개행을 넘겨
     보던 동작이라 그게 회귀가 된다."""
+    return _grab_after_ex(label_pat, text)
+
+
+def _window_end(text: str, end: int) -> int:
+    """창 끝이 숫자 토큰 한가운데면 그 토큰 끝까지 늘린다 (감사 C-Z 612 TRUMP:
+    "from 2.16" 이 80자 경계에서 "2.1" 로 잘렸다)."""
+    n = len(text)
+    while end < n and end > 0 and (
+            text[end].isdigit()
+            or (text[end] in ".," and end + 1 < n and text[end + 1].isdigit()
+                and text[end - 1].isdigit())):
+        end += 1
+    return end
+
+
+def _is_trigger(text: str, nstart: int, nend: int) -> bool:
+    """진입값(text[nstart:nend]) 주변이 돌파 트리거 서술인가 (감사 C-B).
+    문맥 = 그 숫자가 놓인 문장(문장부호·개행 경계) ∪ 숫자 앞뒤 ±40자.
+    'buy stop' 은 브래킷 표(663: 머리행 "(Buy Stop)" → 다음 행 "Buy Entry:")처럼
+    떨어져 쓰이는 일이 있어 ±100자까지 본다. 리테스트 동반이면 예외."""
+    s = nstart
+    while s > 0 and text[s - 1] != "\n" and not (
+            text[s - 1] in ".!?" and (s >= len(text) or text[s].isspace())):
+        s -= 1
+    e = nend
+    n = len(text)
+    while e < n and text[e] != "\n" and not (
+            text[e] in ".!?" and (e + 1 >= n or text[e + 1].isspace())):
+        e += 1
+    ctx = text[min(s, max(0, nstart - _TRIGGER_CTX)): max(e, min(n, nend + _TRIGGER_CTX))]
+    wide = text[max(0, nstart - _BUY_STOP_CTX): min(n, nend + _BUY_STOP_CTX)]
+    hit = bool(_TRIGGER.search(ctx)) or bool(_BUY_STOP.search(wide))
+    if not hit:
+        return False
+    return not _RETEST.search(ctx)
+
+
+_POST_RESIST = re.compile(r"[ \t]*(?:\w+[ \t]+){0,2}?resistance\b", re.I)
+
+
+def _grab_after_ex(label_pat, text: str, stop_pat=None, allow_to_range: bool = False,
+                   reject_trigger: bool = False, prose_resistance_reject: bool = False) -> list:
+    """_grab_after 의 확장판 (2026-09-27 감사 C-L/B/Z).
+
+    stop_pat: 산문형 창을 끊을 '다른 라벨' 키워드. None 이면 문장 끝만 본다.
+    allow_to_range: 라벨과 같은 줄의 "N to N" 을 범위로 인정(진입 전용).
+    reject_trigger: 돌파 트리거 문맥의 값을 버린다(진입 전용). 스펙형 후보가
+      있었는데 전부 트리거로 버려졌으면 산문형으로 내려가지 않는다 — 작성자가
+      명시한 진입이 트리거인 글에서 산문 숫자를 줍는 것은 더 나쁜 오류다."""
     out, spec_out = [], []
+    spec_seen = False
     for m in label_pat.finditer(text):
         # 스펙형(라벨 뒤에 :/= 가 붙은 표기)인지 — 2026-07-27 ONDO 실사고.
         # 한 글에 라벨이 여러 번 나오면 종전엔 **맨 앞 것**이 이겼는데, 제목이
@@ -313,9 +471,24 @@ def _grab_after(label_pat, text: str) -> list:
         # 잘라 자릿수를 버리는 버그(필러 1글자 차이로 1,234,567→1,234, 1000배 오차).
         # 줄 끝 대신 단순 확장(30→80)을 쓴다 — 다음 줄에 값이 오는 포맷("Stop-Loss:\n\n5")
         # 이 실전에 존재하므로 줄 경계로 자르면 회귀가 발생한다.
-        window = text[m.end(): m.end() + 80]
+        # 2026-09-27 감사 C-Z: 창 끝이 숫자 중간이면 그 숫자 끝까지 늘린다(2.16→2.1 방지).
+        _end = _window_end(text, m.end() + 80)
+        if not is_spec:
+            # 산문형 근접 제약(감사 C-L): 문장 끝·다른 라벨 키워드에서 창을 끊는다.
+            _se = _SENT_END.search(text, m.end(), _end)
+            if _se:
+                _end = _se.start()
+            if stop_pat is not None:
+                _sp = stop_pat.search(text, m.end(), _end)
+                if _sp:
+                    _end = _sp.start()
+        window = text[m.end(): _end]
         rng = _RANGE.search(window)
         sng = _SINGLE.search(window)
+        if sng and not is_spec and sng.start(1) > _PROSE_MAX_GAP:
+            # 산문형은 라벨과 숫자 사이 25자 이하만 인정 — 먼 숫자는 다른 뜻이다
+            # (575 "Enter … Over The Next 30 Days", 669 "open buy positions. Target $13.7").
+            continue
         lad = None
         if sng:
             # start(1) = 숫자 첫 자리 위치. start(0) 은 _NUM 앞의 `\$?\s*` 때문에
@@ -324,6 +497,8 @@ def _grab_after(label_pat, text: str) -> list:
             # 줄 끝과 _LADDER_MAX_WINDOW 중 **짧은 쪽**. 상한의 근거는 그 상수 주석
             # 참고(중첩 수량자의 2차 역추적 — 개행 없는 긴 숫자 줄 방어).
             _lad_end = min(len(text) if _nl < 0 else _nl, m.end() + _LADDER_MAX_WINDOW)
+            if not is_spec:
+                _lad_end = min(_lad_end, _end)  # 산문형은 문장/라벨 경계도 넘지 않는다
             _seg = text[m.end():_lad_end]
             lad = _LADDER.search(_seg)
             # 화살표 나열은 2개짜리도 사다리다(_LADDER_ARROW 주석 참고). 둘 다
@@ -331,10 +506,29 @@ def _grab_after(label_pat, text: str) -> list:
             _arw = _LADDER_ARROW.search(_seg)
             if _arw and (not lad or _arw.start() < lad.start()):
                 lad = _arw
+        _base = m.end()
+
+        def _rejected(nstart, nend):
+            """돌파 트리거 문맥이면 True(진입 전용). 스펙형이었다면 표시해 둔다."""
+            nonlocal spec_seen
+            if prose_resistance_reject and not is_spec and _POST_RESIST.match(
+                    text, _base + nend):
+                # 산문 진입 숫자 바로 뒤가 "key resistance" — 저항은 롱 진입가가
+                # 아니다(754 ARB "entry opportunity before the next push toward
+                # 0.2241 key resistance").
+                return True
+            if reject_trigger and _is_trigger(text, _base + nstart, _base + nend):
+                if is_spec:
+                    spec_seen = True
+                return True
+            return False
+
         # lad/sng 의 start() 는 둘 다 m.end() 기준 오프셋이라 창 길이가 달라도 비교 가능.
         if lad and lad.start() <= sng.start():
             first = _to_float(lad.group(1))
             if first:
+                if _rejected(lad.start(1), lad.end()):
+                    continue
                 # 값은 첫 rung 하나만 쓰되(판정·배점 축이 TP1), 사다리가 몇 단계인지는
                 # 표시용으로 함께 실어 보낸다(2026-07-27 사용자 승인 A안 — 알림에
                 # "1/8단계"). 반환 타입을 리스트 그대로 유지해야 호출부의 [0]/[-1]
@@ -350,17 +544,36 @@ def _grab_after(label_pat, text: str) -> list:
                 vals.ladder_values = [v for v in (_to_float(n) for n in _nums) if v is not None]
                 (spec_out if is_spec else out).append(vals)
                 continue
+        # "N to N" 범위 — 진입 라벨과 같은 줄에서만(감사 C-Z 646).
+        if allow_to_range and sng:
+            _le = text.find("\n", m.end())
+            _line = text[m.end(): min(_end, len(text) if _le < 0 else _le)]
+            rt = _RANGE_TO.search(_line)
+            if rt and rt.start() <= sng.start():
+                lo, hi = _to_float(rt.group(1)), _to_float(rt.group(2))
+                if lo and hi:
+                    if _rejected(rt.start(1), rt.end()):
+                        continue
+                    (spec_out if is_spec else out).append(sorted([lo, hi]))
+                    continue
         # 범위와 단일이 둘 다 잡히면, 더 왼쪽에서 시작하는 쪽을 채택(범위 우선 동률).
         if rng and (not sng or rng.start() <= sng.start()):
             lo, hi = _to_float(rng.group(1)), _to_float(rng.group(2))
             if lo and hi:
+                if _rejected(rng.start(1), rng.end()):
+                    continue
                 (spec_out if is_spec else out).append(sorted([lo, hi]))
                 continue
         if sng:
             v = _to_float(sng.group(1))
             if v:
+                if _rejected(sng.start(1), sng.end()):
+                    continue
                 (spec_out if is_spec else out).append([v])
     # 스펙형이 하나라도 있으면 산문형은 버린다(위 is_spec 주석 참고).
+    # 스펙형 값이 전부 돌파 트리거로 버려졌으면(spec_seen) 산문형으로 내려가지 않는다.
+    if not spec_out and spec_seen:
+        return _Grabbed([], is_spec=False)
     return _Grabbed(spec_out or out, is_spec=bool(spec_out))
 
 
@@ -390,28 +603,50 @@ def _sanity(value: float, current_price: Optional[float], max_dev: float) -> boo
     return -dev <= _SANITY_BELOW_MAX
 
 
+def _setting(key: str, default=True):
+    """롤백 스위치 조회 — 키가 없거나(구 설정) 조회 실패면 기본값."""
+    try:
+        return settings.get(key)
+    except Exception:  # noqa: BLE001
+        return default
+
+
 def parse_setup(text: str, current_price: Optional[float] = None,
-                max_dev: float = 0.60) -> Optional[dict]:
+                max_dev: float = 0.60, direction_hint: Optional[str] = None) -> Optional[dict]:
     """
     반환: {direction, entry, entry_low, entry_high, sl, tp, rr} 또는 None(엔트리 없음).
     entry 는 대표값(범위면 중앙), entry_low/high 는 범위 경계(단일이면 동일).
     현재가가 주어지면 엔트리 sanity 실패 시 None.
+
+    direction_hint: 작성자가 단 방향 태그('long'/'short', TradingView 메타). 있으면
+      텍스트 판정보다 우선한다(2026-09-27 감사 C-D ①, 스위치 extract_use_tv_direction).
     """
     if not text:
         return None
     clean = _clean(text)
 
-    # 방향
-    is_long = bool(_LONG_HINTS.search(clean))
-    is_short = bool(_SHORT_HINTS.search(clean))
-    if is_long and not is_short:
-        direction = "long"
-    elif is_short and not is_long:
-        direction = "short"
-    else:
-        direction = "long"  # 애매하면 long 가정(이 봇은 하향 터치=매수 관점)
+    # 방향 (2026-09-27 감사 C-D / A-T3 재설계)
+    #  ① 작성자 태그 우선 ② 비방향 관용구 제거 후 힌트 판정 ③ 애매/없음이면 TP 기하
+    #  (유효 TP 후보 2개 이상이 전부 진입가 아래 → short) ④ 그래도 모르면 long.
+    direction = None
+    if direction_hint in ("long", "short") and _setting("extract_use_tv_direction"):
+        direction = direction_hint
+    _ambiguous = False
+    if direction is None:
+        _dir_text = _DIRECTION_NOISE.sub(" ", clean)
+        is_long = bool(_LONG_HINTS.search(_dir_text))
+        is_short = bool(_SHORT_HINTS.search(_dir_text))
+        if is_long and not is_short:
+            direction = "long"
+        elif is_short and not is_long:
+            direction = "short"
+        else:
+            direction = "long"  # 애매하면 long 가정(이 봇은 하향 터치=매수 관점)
+            _ambiguous = True
 
-    entries = _grab_after(_ENTRY_LABEL, clean)
+    entries = _grab_after_ex(_ENTRY_LABEL, clean, stop_pat=_ENTRY_STOP, allow_to_range=True,
+                             reject_trigger=bool(_setting("extract_breakout_trigger_skip")),
+                             prose_resistance_reject=True)
     if not entries:
         return None
 
@@ -429,9 +664,31 @@ def parse_setup(text: str, current_price: Optional[float] = None,
     if not _sanity(entry, current_price, max_dev):
         return None
 
-    sls = _grab_after(_SL_LABEL, clean)
-    tps = _grab_after(_TP_LABEL, clean)
+    sls = _grab_after_ex(_SL_LABEL, clean, stop_pat=_SL_STOP)
+    tps = _grab_after_ex(_TP_LABEL, clean, stop_pat=_TP_STOP)
     sl = sls[0][0] if sls else None
+
+    # ③ TP 기하 방향 판정 — 방향 단어가 애매/없을 때만. 숏 템플릿(682 FIL 등:
+    # "This setup supports a decline" + Target 1~3 전부 진입가 아래)은 방향 단어가
+    # 아예 없어 long 이 됐고, _tp_valid 가 아래쪽 TP 를 조용히 버려 '무TP 롱'이 됐다.
+    # 크기 sanity(0.25~4배)를 통과한 서로 다른 TP 후보가 **2개 이상** 전부 진입가
+    # 아래일 때만 short — 1개만으로는 서수 오인(TP=1.0) 한 건에 뒤집힐 수 있다.
+    if _ambiguous and entry and entry > 0:
+        _geo = set()
+        for _g in (tps or []):
+            if not _g:
+                continue
+            for _v in (getattr(_g, "ladder_values", None) or [_g[-1]]):
+                if _v is not None and entry * _SANITY_LO_MULT <= _v <= entry * _SANITY_HI_MULT \
+                        and _v != entry:
+                    _geo.add(_v)
+        if len(_geo) >= 2 and all(_v < entry for _v in _geo):
+            direction = "short"
+        # 보조 신호(감사 A-T3 추천 1): TP 후보가 1개뿐이어도 그게 진입가 아래이고
+        # 손절 후보가 진입가 **위**면 숏이다(792 BTC "Ultimate Swing Short": Targets 가
+        # 라벨 없는 번호 목록이라 첫 값만 잡히고, Stop Loss 93,300 > Entry 84,900).
+        elif _geo and all(_v < entry for _v in _geo) and sl is not None and sl > entry:
+            direction = "short"
 
     def _tp_valid(v) -> bool:
         """방향·크기 sanity 를 모두 통과하는 tp 후보인가 (아래 sl 사후검증과 같은 기준)."""
@@ -582,6 +839,23 @@ def parse_setup(text: str, current_price: Optional[float] = None,
                 _seen.add(_c)
                 tps_all.append(_c)
 
+    # 대표 TP = 유효 TP 사다리의 첫 값 (2026-09-27 감사 A-T5 / 종합 P1-10).
+    # 종전 tp 는 '본문 순서상 처음 유효한 그룹'이라, "Target 1: 1.20 | Target 2: 1.16"
+    # (630 ZRO)처럼 작성자 순서가 가격 순서와 다르면 알림 "목표"가 TP1 이 아니었다.
+    # 판정부 price_check._volume_band_tps 는 유효 TP(entry < t <= entry*4)를 오름차순
+    # 정렬해 [0] 을 TP1 로 쓴다 — tps_all 은 같은 방향·크기 기준을 거쳐 롱이면
+    # 오름차순이므로 tps_all[0] 이 곧 판정부의 TP1 이다. rr 도 그 값으로 다시 잰다.
+    if tps_all and tp is not None and tps_all[0] != tp:
+        tp = tps_all[0]
+        rr = None
+        if entry and sl and tp:
+            if direction == "long":
+                risk, reward = entry - sl, tp - entry
+            else:
+                risk, reward = sl - entry, entry - tp
+            if risk > 0 and reward > 0:
+                rr = round(reward / risk, 2)
+
     return {
         "direction": direction,
         "entry": entry,
@@ -593,3 +867,91 @@ def parse_setup(text: str, current_price: Optional[float] = None,
         "tp_ladder_count": tp_ladder_count,
         "tps_all": tps_all,
     }
+
+
+# ── 비셋업 글 판정 (2026-09-27 감사 C-R / C-C, 종합 P0-5) ─────────────────────
+# 결과보고·관찰글("+91% From Our Entry"(835), "SCENARIOS (to watch — NOT signals)"
+# (678·697), "+208% PROFIT: Our Entry Filled"(881))이 새 셋업으로 수집됐다. 산문
+# entry/buy 창이 지지선·현재가를 주워 알림까지 나갔다.
+# 면책문 예외: "(Not a Trading signal or Financial Advice)"(774·775·777·811 정상
+# 셋업), "not a signal, DYOR" 류는 스킵하지 않는다 — 문맥(±60자)에 면책 어휘가
+# 있으면 면책문으로 본다.
+_NOT_SIGNAL = re.compile(r"\bnot\s+(?:a\s+)?signals?\b", re.I)
+_DISCLAIMER_CTX = re.compile(
+    r"financial\s+advice|investment\s+advice|educational|own\s+research|\bDYOR\b|\bNFA\b", re.I)
+_RESULT_REPORT = re.compile(
+    r"\bfrom\s+our\s+entry\b|\bentry\s+filled\b"
+    r"|\btp\s*\d{0,2}\s*(?:hit|reached|achieved|done)\b"
+    r"|\btargets?\s*\d{0,2}\s*(?:reached|hit|achieved|smashed)\b"
+    r"|\+\s*\d+(?:\.\d+)?\s*%\s*(?:profits?|gains?)\b",
+    re.I)
+# "once TP1 hit, move SL to entry" 처럼 조건절 안의 'TP hit' 은 결과보고가 아니다.
+_CONDITIONAL_BEFORE = re.compile(r"\b(?:if|once|when|after|until|before|as\s+soon\s+as)\b[^.\n]{0,20}$", re.I)
+
+# 본문 티커 — "#COREUSDT", "$ZORA", "BINANCE:ETHUSDT", "CRYPTOCAP:IOST".
+_TICKER_TAG = re.compile(
+    r"(?:(?<![\w#$])[#$]([A-Z][A-Z0-9]{1,14})\b(\.[A-Z]{1,2})?"
+    r"|\b[A-Z]{2,12}:([A-Z0-9]{2,20})\b(\.[A-Z]{1,2})?)")
+_TICKER_SUFFIX = re.compile(r"(?:USDT|USDC|BUSD|USD|PERP|KRW|BTC)$")
+# 시장 지표·지수 등 코인이 아닌 태그는 교차검증에서 빼 준다.
+_TICKER_NEUTRAL = {"TOTAL", "TOTAL2", "TOTAL3", "OTHERS", "USDT", "USDC", "DXY", "SPX",
+                   "NDX", "GOLD", "XAU", "XAUUSD", "DYOR", "NFA", "TA", "DCA", "ATH",
+                   "HTF", "LTF", "FOMC", "CPI", "ETF", "USD", "KRW"}
+
+
+def _body_tickers(text: str) -> set:
+    """작성자가 명시한 티커 집합. '#XXX'·'$XXX' 는 본문 전체에서, 'EXCHANGE:XXX' 는
+    **첫 두 줄(제목·첫 줄)** 에서만 센다 — TradingView 가 본문의 코인 언급을
+    'CRYPTOCAP:BTC' 류 자동 링크로 바꿔 넣기 때문에, 본문 전체를 보면 BTC·ETH 를
+    참고로 언급한 XRP 글(867)까지 '불일치'가 된다(재파싱 회귀에서 확인)."""
+    out = set()
+    text = text or ""
+    _head_end = -1
+    for _ in range(2):
+        _head_end = text.find("\n", _head_end + 1)
+        if _head_end < 0:
+            _head_end = len(text)
+            break
+    for m in _TICKER_TAG.finditer(text):
+        if m.group(3) and m.start() > _head_end:
+            continue
+        raw = m.group(1) or m.group(3)
+        dot = m.group(2) or m.group(4)
+        if not raw or dot:          # "BTC.D"·"USDT.D" 는 지표
+            continue
+        t = raw.upper()
+        base = _TICKER_SUFFIX.sub("", t) or t
+        if base.startswith("1000") and len(base) > 4:
+            base = base[4:]
+        if base in _TICKER_NEUTRAL or t in _TICKER_NEUTRAL or len(base) < 2:
+            continue
+        out.add(base)
+    return out
+
+
+def _ticker_matches(tag: str, coin: str) -> bool:
+    """별칭 관대 매칭(PUMPFUN↔PUMP, 1000PEPE↔PEPE) — 거짓 스킵보다 누락이 싸다."""
+    return tag == coin or tag.startswith(coin) or coin.startswith(tag) or tag.endswith(coin)
+
+
+def nonsetup_reason(text: str, coin_symbol: Optional[str] = None) -> Optional[str]:
+    """셋업이 아닌 글이면 사유 문자열, 셋업이면 None (스위치 extract_nonsetup_skip).
+
+    사유: 'not_signal'(작성자가 시그널 아님을 명시), 'result_report'(결과보고),
+    'coin_mismatch'(본문 티커가 수집 코인과 하나도 안 맞음 — 665 CRO vs #COREUSDT)."""
+    if not text or not _setting("extract_nonsetup_skip"):
+        return None
+    for m in _NOT_SIGNAL.finditer(text):
+        ctx = text[max(0, m.start() - 60): m.end() + 60]
+        if not _DISCLAIMER_CTX.search(ctx):
+            return "not_signal"
+    for m in _RESULT_REPORT.finditer(text):
+        if _CONDITIONAL_BEFORE.search(text[max(0, m.start() - 40): m.start()]):
+            continue
+        return "result_report"
+    if coin_symbol:
+        coin = coin_symbol.upper()
+        tags = _body_tickers(text)
+        if tags and not any(_ticker_matches(t, coin) for t in tags):
+            return "coin_mismatch"
+    return None

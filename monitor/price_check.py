@@ -297,6 +297,28 @@ def _tp_distance_penalty(direction: str, entry, target) -> float:
     return -tp_distance_points(direction, entry, target, has_rr=True)
 
 
+def _arming_since(conn, cfg_get, now: float) -> float:
+    """무장 기능 최초 활성 시각(epoch) — 레거시 관용의 기준선 (2026-09-27 S1).
+
+    meta.arming_since 가 있으면 그 값. 없으면 settings `watch_arming_since_ts`
+    (운영 DB 에서 무장이 처음 기록된 회차 시각으로 확정한 값)를, 그것도 없으면
+    now 를 meta 에 1회 기록하고 쓴다. 이 시각 **이전** 수집 행만 첫 판정 관용을
+    받는다. meta 기록 실패는 회차를 막지 않는다(값은 이번 회차에 그대로 사용)."""
+    raw = db.get_meta(conn, "arming_since")
+    try:
+        if raw:
+            return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("[체크] meta.arming_since 파싱 실패(%r) — 재설정", raw)
+    since = float(cfg_get("watch_arming_since_ts") or now)
+    try:
+        db.set_meta(conn, "arming_since", repr(since))
+        conn.commit()
+    except Exception as e:  # noqa: BLE001 - 회차 생존 최우선
+        logger.warning("[체크] meta.arming_since 기록 실패(무시하고 진행): %s", e)
+    return since
+
+
 def _arm_floor(lv: dict) -> float:
     """터치 판정에 인정할 캔들의 시작 시각 하한 (2026-09-27 무장 게이트 ①).
 
@@ -820,8 +842,19 @@ def run_once(now: float | None = None) -> dict:
         # 시세 미확보 티커는 판단보류(fail-open, sanity 와 같은 관례) — 다만 무장
         # 판정이 안 된 레벨은 아래 필터에서 이번 회차 대상에서 빠진다. 업비트
         # 장애로 시세가 없으면 애초에 터치 판정도 못 하므로 손실이 없다.
+        #
+        # 2026-09-27 S1 수리(감사 P0-3 / A-T2): 위 관용이 **모든 신규 레벨**에
+        # 적용되고 있었다(신규 행도 INSERT 시 armed=NULL 이라 첫 판정이 항상
+        # '레거시' 경로). 그 결과 진입가 0~2% 아래에서 수집된 글이 armed_at=
+        # collected_at 으로 무장 → 수집 이후 저가로 즉시 터치됐다(147건·발송 30).
+        # 이제 관용은 **무장 기능 최초 활성 시각(meta.arming_since) 이전에 수집된**
+        # 행에만 준다. 그 외 신규 행의 첫 판정은 관용 0(current >= entry).
+        # 또 관용 덕분에 무장한 경우(entry*(1-tol) <= current < entry)는 armed_at
+        # = now 로 둔다(A-T2 추천 ②) — 현재가가 진입가 아래였던 레벨이라 수집
+        # 이후 저가를 인정하면 같은 버그가 레거시 한정으로 재현된다.
         if cfg_get("watch_arming_enabled"):
             _arm_tol = (cfg_get("watch_arm_tolerance_pct") or 0.0) / 100.0
+            _arm_since = _arming_since(conn, cfg_get, now)
             _arm_ids, _wait_ids = [], []
             for _tkr, _tlevels in by_ticker.items():
                 _cur = prices.get(_tkr)
@@ -834,13 +867,16 @@ def run_once(now: float | None = None) -> dict:
                     if not _e_usd or _e_usd <= 0:
                         continue          # 진입가 없는 행은 어차피 클러스터에서 탈락
                     _e_krw = _e_usd * usdt_krw
-                    _first = _lv.get("armed") is None   # 레거시 관용 대상
+                    _first = _lv.get("armed") is None   # 첫 판정
+                    # 레거시 = 첫 판정이면서 무장 기능 활성 이전 수집분(관용 대상).
+                    _legacy = _first and float(_lv.get("collected_at") or 0.0) < _arm_since
+                    _tol = _arm_tol if _legacy else 0.0
                     if _lv.get("direction") == "short":
-                        _thr = _e_krw * (1 + _arm_tol) if _first else _e_krw
-                        _armed_now = _cur <= _thr
+                        _armed_now = _cur <= _e_krw * (1 + _tol)
+                        _by_tol = _armed_now and _cur > _e_krw
                     else:
-                        _thr = _e_krw * (1 - _arm_tol) if _first else _e_krw
-                        _armed_now = _cur >= _thr
+                        _armed_now = _cur >= _e_krw * (1 - _tol)
+                        _by_tol = _armed_now and _cur < _e_krw
                     if _armed_now:
                         # armed_at 은 첫 판정이면 collected_at, 승격(0 → 1)이면 now.
                         # 이 값이 터치 판정 캔들의 하한(_arm_floor)이 되므로 구분이
@@ -854,13 +890,17 @@ def run_once(now: float | None = None) -> dict:
                         #  · 승격(0 → 1): 이 레벨은 **진입가 아래에 있었음이 기록으로
                         #    확정**돼 있다. 그 시절 저가로 터치되면 고치려는 버그가
                         #    한 회차 늦게 재현되므로 반드시 now 다.
-                        _at = (_lv.get("collected_at") or now) if _first else now
+                        #  · 관용 무장(레거시 & 진입가 0~tol% 아래, S1 수리): now.
+                        #    현재가가 진입가 아래인 채 무장했으므로 수집 이후 저가를
+                        #    인정하면 즉시터치가 재현된다.
+                        _at = ((_lv.get("collected_at") or now)
+                               if (_first and not _by_tol) else now)
                         _arm_ids.append((_lv["id"], _at))
                         _lv["armed"], _lv["armed_at"] = 1, _at
                         logger.info(
                             "[체크] 무장: %s id=%s 현재가 %.6g원 vs 진입가 %.6g원%s",
                             _lv.get("coin_symbol"), _lv["id"], _cur, _e_krw,
-                            " (레거시 관용 %.1f%%)" % (_arm_tol * 100) if _first and _arm_tol else "")
+                            " (레거시 관용 %.1f%%, armed_at=now)" % (_arm_tol * 100) if _by_tol else "")
                     elif _first:
                         _wait_ids.append((_lv["id"], None))
                         _lv["armed"] = 0
@@ -2360,15 +2400,24 @@ def _judge_outcomes(conn, prices, usdt_krw, get_range, now, cfg_get, obs=None) -
                 # Q4: 최종 목표 완주 🏆 — 우선순위 최상위라 👍 를 덮는다.
                 _react(conn, lv, "hit", cfg_get)
         elif outcome == "miss":
+            # best_tp_hit (2026-09-27 S1, 감사 B-E1): 중간 TP 에 도달했다가 손절·
+            # 만료로 끝난 건도 도달한 최고 TP 단계를 남긴다. 종전엔 hit 경로만
+            # 기록해 "best_tp_hit=2 = 2단 사다리 완주"로 뜻이 좁아져 TP2 급감처럼
+            # 보였다. tp_alert_idx = 이미 도달한 TP 개수(다음 감시 TP 인덱스).
+            # 해시 체인(_compute_outcome_hash)은 best_tp_hit 를 포함하지 않는다.
             db.resolve_outcome(conn, lv["id"], "miss", resolve_price, mode,
-                               r_multiple=_r(resolve_price), ambiguous=ambiguous, now=now)
+                               r_multiple=_r(resolve_price), ambiguous=ambiguous,
+                               best_tp_hit=(_tp_alert_idx if _tp_alert_idx > 0 else None),
+                               now=now)
             db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
             _react(conn, lv, "fail", cfg_get)   # Q4: 실패 종결 👎
         elif elapsed >= window_sec:
             oc = "timeboxed_win" if current >= base_eff else "timeboxed_loss"
             db.resolve_outcome(conn, lv["id"], oc, current, mode,
-                               r_multiple=_r(current), now=now)
+                               r_multiple=_r(current),
+                               best_tp_hit=(_tp_alert_idx if _tp_alert_idx > 0 else None),
+                               now=now)
             db.record_mfe_mae(conn, lv["id"], _running_mfe, _running_mae)
             resolved += 1
             # Q4: 이익 상태 기간만료 👌 / 손실 상태 기간만료는 실패(👎)와 동급.

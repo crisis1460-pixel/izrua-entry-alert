@@ -62,6 +62,15 @@ from storage import alert_ledger as _alert_ledger   # noqa: E402
 if os.path.exists(_alert_ledger.ledger_path(TEST_DB)):
     os.remove(_alert_ledger.ledger_path(TEST_DB))
 db.init_db(TEST_DB)
+# 2026-09-27 S1 (감사 P0-3): 무장 관용은 이제 meta.arming_since **이전** 수집분에만
+# 적용된다. 이 파일의 T*/RS*/LG* 등 구세대 블록 픽스처는 무장 기능 이전에 설계된
+# "이미 감시 중이던 정상 대기 레벨"(진입가 바로 아래 현재가로 터치를 재현)이므로
+# 메인 TEST_DB 에 한해 기준선을 먼 미래로 둬 레거시로 취급한다(EI8 의 armed=1
+# 심기와 같은 취지 — 픽스처가 뜻하는 운영 상황을 재현). 신규 레벨 규칙은 ARM7~
+# 이 별도 DB 에서 못박는다.
+with db.connect(TEST_DB) as _c0:
+    db.set_meta(_c0, "arming_since", repr(9e12))
+    _c0.commit()
 
 now = time.time()
 # 자정 경계 가드(2026-07-27 실전 발견): 이 파일은 run_once(now+60 ~ now+1310)로
@@ -2285,6 +2294,38 @@ with db.connect(_UPS_DB) as conn:
     ).fetchone()["timeframe_hours"]
 check("RPA1 reparse_all 이 구세대 timeframe_hours=0 을 재파싱 결과(None)로 치유",
       _rrpa1 is None)
+
+# RPX1~3 (2026-09-27 S1): 개선 파서가 '셋업 아님'으로 보는 활성 레벨은 만료, 정상은 유지.
+# 실사례 ATOM 790 — "Entry: CMP | RR: 1:1.5" 에서 진입 1.0 을 오인한 오염 레벨.
+with db.connect(_UPS_DB) as conn:
+    conn.execute("UPDATE levels SET status='watching', raw_text=? WHERE id=?",
+                 ("ATOM/USDT | ATOM Trade Analaysis | Strategy:CWT | H1+H4 | H4:Bearish "
+                  "| Entry: CMP | Risk:0.50% | RR: 1:1.5 |", _idups))
+    conn.commit()
+    db.reparse_all(conn)
+    _rpx1 = conn.execute("SELECT status, expired_reason FROM levels WHERE id=?",
+                         (_idups,)).fetchone()
+check("RPX1 재파싱이 '셋업 아님'으로 보는 활성 오염 레벨은 reparse_invalid 로 만료",
+      _rpx1["status"] == "expired" and _rpx1["expired_reason"] == "reparse_invalid")
+with db.connect(_UPS_DB) as conn:
+    conn.execute("UPDATE levels SET status='watching', expired_reason=NULL, "
+                 "expired_at=NULL, raw_text=? WHERE id=?", ("진입가 50 손절 45 목표 60", _idups))
+    conn.commit()
+    db.reparse_all(conn)
+    _rpx2 = conn.execute("SELECT status FROM levels WHERE id=?", (_idups,)).fetchone()
+check("RPX2 정상 셋업 원문은 재파싱 후에도 감시 유지", _rpx2["status"] == "watching")
+_orig_rpx = settings.SETTINGS.get("reparse_expire_invalid")
+settings.SETTINGS["reparse_expire_invalid"] = False
+try:
+    with db.connect(_UPS_DB) as conn:
+        conn.execute("UPDATE levels SET raw_text=? WHERE id=?",
+                     ("ATOM/USDT | H4:Bearish | Entry: CMP | RR: 1:1.5 |", _idups))
+        conn.commit()
+        db.reparse_all(conn)
+        _rpx3 = conn.execute("SELECT status FROM levels WHERE id=?", (_idups,)).fetchone()
+finally:
+    settings.SETTINGS["reparse_expire_invalid"] = _orig_rpx
+check("RPX3 스위치 OFF 면 종전대로 건너뛰기(만료 안 함)", _rpx3["status"] == "watching")
 
 # ── UPS3: author_whitelisted 3상 보존 회귀 (2026-08-07 재검토 C1 재수정) ──
 # 종전 `1 if ... else 0` 바인딩은 NULL 을 만들 수 없어 COALESCE 가 죽은 코드 —
@@ -4650,20 +4691,56 @@ check("ARM4 무장 전 캔들 저가는 무시된다 (하한 = max(collected_at,
       _a4_row["status"] == "watching" and _a4_row["touched_at"] is None
       and _a4_sent == 0)
 
-# ── ARM5: 레거시 관용 — armed IS NULL & 밴드(2%) 안이면 1 로 판정 ────────
-# 배포 첫 회차에 진입가 바로 아래에서 정상 대기 중인 레벨까지 잠그면 정상 대기를
-# 벌주는 셈이다. 첫 판정의 armed_at 은 collected_at — 터치 판정 축이 종전과
-# 동일해져 소급 터치 검출이 줄지 않는다.
+def _arm_set_since(path, since):
+    """meta.arming_since 를 직접 심는다 (레거시/신규 구분 기준선)."""
+    with db.connect(path) as conn:
+        db.set_meta(conn, "arming_since", repr(float(since)))
+        conn.commit()
+
+
+def _arm_meta_since(path):
+    with db.connect(path) as conn:
+        return db.get_meta(conn, "arming_since")
+
+
+class _ArmLogCap(logging.Handler):
+    """price_check 무장 로그 캡처 (ARM11 — 관용 꼬리표 문구 검증)."""
+    def __init__(self):
+        super().__init__(logging.INFO)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+_arm_logcap = _ArmLogCap()
+_arm_pc_logger = logging.getLogger("alert.price_check")
+_arm_pc_prev_level = _arm_pc_logger.level
+_arm_pc_logger.addHandler(_arm_logcap)
+_arm_pc_logger.setLevel(logging.INFO)
+
+
+def _arm_log_lines(since_idx):
+    return [ln for ln in _arm_logcap.lines[since_idx:] if ln.startswith("[체크] 무장:")]
+
+
+# ── ARM5: 레거시 관용 — armed IS NULL & collected_at < arming_since & 밴드(2%) 안
+# 배포 첫 회차에 진입가 바로 아래에서 정상 대기 중인 **기존** 레벨까지 잠그면
+# 정상 대기를 벌주는 셈이다. 2026-09-27 S1 수리: 관용으로 무장한 경우(현재가가
+# 진입가 아래)는 armed_at = now — 수집 이후 저가를 소급 인정하지 않는다(A-T2 ②).
 _a5_path = _arm_open("legacy")
 _a5_col = _ARM_T0 - 3600
 _a5_id = _arm_seed(_a5_path, "legacy", _a5_col)
+_arm_set_since(_a5_path, _ARM_T0 - 60)  # 수집이 기준선보다 앞 = 레거시
+_a5_log0 = len(_arm_logcap.lines)
 _arm_cycle(_ARM_T0, _ARM_E * 0.99)      # 진입가 1% 아래 = 관용 밴드(2%) 안
+_a5_logs = _arm_log_lines(_a5_log0)
 _a5_row = _arm_row(_a5_path, _a5_id)
 _arm_close(_a5_path)
-check("ARM5 레거시 관용: armed NULL & 진입가 -1%(밴드 내) → armed=1, "
-      "armed_at=collected_at",
+check("ARM5 레거시 관용: armed NULL & collected<since & 진입가 -1% → armed=1, "
+      "armed_at=now(관용 무장은 소급 불인정)",
       _a5_row["armed"] == 1 and _a5_row["armed_at"] is not None
-      and abs(_a5_row["armed_at"] - _a5_col) < 1e-6)
+      and abs(_a5_row["armed_at"] - _ARM_T0) < 1e-6)
 
 # ── ARM6: 롤백 스위치 — 두 게이트 OFF 면 완전한 종전 동작 ────────────────
 _a6_path = _arm_open("off")
@@ -4680,6 +4757,204 @@ check("ARM6 스위치 OFF — 종전 동작(즉시 터치 + 발송), armed 컬�
       _a6_row["armed"] is None and _a6_row["armed_at"] is None
       and _a6_row["status"] == "touched" and _a6_sent == 1
       and _a6_logs == [("touch", 1)])
+
+# ── ARM7~ARM11: 관용 범위 수리 (2026-09-27 S1, 감사 P0-3 / A-T2) ────────
+# 결함: 신규 레벨도 INSERT 시 armed=NULL 이라 첫 판정이 항상 '레거시 관용' 경로를
+# 탔다 → 진입가 0~2% 아래에서 수집된 글이 armed_at=collected_at 으로 무장해 즉시
+# 터치(147건·발송 30). 관용은 meta.arming_since 이전 수집분에만 준다.
+# ARM7: 신규 레벨(collected >= since) · 진입가 -1% → armed=0, 터치·알림 없음
+_a7_path = _arm_open("new_below")
+_a7_col = _ARM_T0 - 120
+_a7_id = _arm_seed(_a7_path, "new_below", _a7_col)
+_arm_set_since(_a7_path, _ARM_T0 - 3600)
+_a7_sent = _arm_cycle(_ARM_T0, _ARM_E * 0.99,
+                      candles=[(_a7_col + 30, _ARM_T0 - 30, _ARM_E * 0.995,
+                                _ARM_E * 0.985, _ARM_E * 0.99)])
+_a7_row = _arm_row(_a7_path, _a7_id)
+_a7_logs = _arm_logs(_a7_path)
+_arm_close(_a7_path)
+check("ARM7 신규 레벨 진입가 -1% 수집 → 관용 없음: armed=0 · 터치 안 됨 · 알림 0",
+      _a7_row["armed"] == 0 and _a7_row["armed_at"] is None
+      and _a7_row["status"] == "watching" and _a7_row["touched_at"] is None
+      and _a7_sent == 0 and _a7_logs == [])
+
+# ARM8: 신규 레벨 · current >= entry → armed_at=collected_at, 소급 터치 유지
+_a8_path = _arm_open("new_above")
+_a8_col = _ARM_T0 - 600
+_a8_id = _arm_seed(_a8_path, "new_above", _a8_col)
+_arm_set_since(_a8_path, _ARM_T0 - 3600)
+_a8_log0 = len(_arm_logcap.lines)
+_a8_sent = _arm_cycle(_ARM_T0, _ARM_E * 1.001,
+                      candles=[(_a8_col + 60, _ARM_T0 - 60, _ARM_E * 1.01,
+                                _ARM_E * 0.999, _ARM_E * 1.001)])
+_a8_logs = _arm_log_lines(_a8_log0)
+_a8_row = _arm_row(_a8_path, _a8_id)
+_arm_close(_a8_path)
+check("ARM8 신규 레벨 current>=entry → armed_at=collected_at · 수집 이후 캔들로 "
+      "소급 터치 + 발송(09-27 설계 보존)",
+      _a8_row["armed"] == 1 and abs(_a8_row["armed_at"] - _a8_col) < 1e-6
+      and _a8_row["status"] == "touched" and _a8_sent == 1)
+
+# ARM9: 레거시 관용 무장(armed_at=now)은 무장 전 캔들 저가를 터치 앵커로 쓰지 않는다
+# (현재가 자체가 진입가 아래라 같은 회차 터치는 레거시 관용의 설계 그대로다 —
+#  다만 touched_at 이 수집 이후 과거 캔들로 소급되지 않는다).
+_a9_path = _arm_open("legacy_retro")
+_a9_col = _ARM_T0 - 3600
+_a9_id = _arm_seed(_a9_path, "legacy_retro", _a9_col)
+_arm_set_since(_a9_path, _ARM_T0 - 60)
+_arm_cycle(_ARM_T0, _ARM_E * 0.99,
+           candles=[(_a9_col + 60, _a9_col + 120, _ARM_E * 1.0,
+                     _ARM_E * 0.97, _ARM_E * 0.99)])
+_a9_row = _arm_row(_a9_path, _a9_id)
+_arm_close(_a9_path)
+check("ARM9 레거시 관용 무장 → armed_at=now, touched_at 이 무장 전 캔들로 소급 안 됨",
+      _a9_row["armed"] == 1 and abs(_a9_row["armed_at"] - _ARM_T0) < 1e-6
+      and (_a9_row["touched_at"] is None or _a9_row["touched_at"] >= _ARM_T0 - 1e-6))
+
+# ARM10: meta.arming_since — 없으면 settings 값을 1회 기록, 있으면 존중(덮어쓰기 X)
+_a10_path = _arm_open("since_meta")
+_arm_seed(_a10_path, "since_meta", _ARM_T0 - 120)
+_a10_pre = _arm_meta_since(_a10_path)
+_arm_cycle(_ARM_T0, _ARM_E * 1.05)
+_a10_after = _arm_meta_since(_a10_path)
+_arm_set_since(_a10_path, 12345.0)
+_arm_cycle(_ARM_T0 + 300, _ARM_E * 1.05)
+_a10_kept = _arm_meta_since(_a10_path)
+_arm_close(_a10_path)
+_a10b_path = _arm_open("since_now")
+_arm_seed(_a10b_path, "since_now", _ARM_T0 - 120)
+_a10_saved = settings.SETTINGS["watch_arming_since_ts"]
+settings.SETTINGS["watch_arming_since_ts"] = None
+_arm_cycle(_ARM_T0, _ARM_E * 1.05)
+settings.SETTINGS["watch_arming_since_ts"] = _a10_saved
+_a10_now = _arm_meta_since(_a10b_path)
+_arm_close(_a10b_path)
+check("ARM10 arming_since: meta 없으면 settings 값 기록 · 있으면 유지 · "
+      "settings 없으면 now",
+      _a10_pre is None
+      and float(_a10_after) == float(settings.SETTINGS["watch_arming_since_ts"])
+      and float(_a10_kept) == 12345.0
+      and abs(float(_a10_now) - _ARM_T0) < 1e-6)
+
+# ARM11 (CTO 추가): 무장 로그 "레거시 관용" 꼬리표는 **실제로 관용 구간에서
+# 무장했을 때만** 붙는다. 종전엔 첫 판정이면 무조건 붙어, 현재가가 진입가보다
+# 한참 위인 건(SOL 164,500 vs 88,335)에도 찍혔다. 레거시라도 current>=entry 면 없음.
+_a11_path = _arm_open("legacy_above")
+_arm_seed(_a11_path, "legacy_above", _ARM_T0 - 3600)
+_arm_set_since(_a11_path, _ARM_T0 - 60)       # 레거시(관용 대상)지만
+_a11_log0 = len(_arm_logcap.lines)
+_arm_cycle(_ARM_T0, _ARM_E * 1.8)              # 현재가가 진입가보다 한참 위
+_a11_logs = _arm_log_lines(_a11_log0)
+_arm_close(_a11_path)
+_arm_pc_logger.removeHandler(_arm_logcap)
+_arm_pc_logger.setLevel(_arm_pc_prev_level)
+check("ARM11 무장 로그 '레거시 관용' 꼬리표 — 관용 구간 무장(ARM5)에만, "
+      "current>=entry(레거시 ARM11·신규 ARM8)엔 없음",
+      len(_a5_logs) == 1 and "레거시 관용" in _a5_logs[0]
+      and len(_a11_logs) == 1 and "레거시 관용" not in _a11_logs[0]
+      and len(_a8_logs) == 1 and "레거시 관용" not in _a8_logs[0])
+
+# ── BTH1~BTH4: best_tp_hit — miss/timeboxed 에도 도달 TP 단계 기록 (S1, B-E1) ──
+# 종전엔 hit 경로만 best_tp_hit 를 넘겨, TP 에 도달했다가 손절·만료로 끝난 62건이
+# NULL 이었다("best_tp_hit TP2 급감" 착시의 원인). tp_alert_idx = 이미 도달한 TP 수.
+import json as _json_bth  # noqa: E402
+
+
+def _bth_seed(conn, tag, tps, tp_idx, touched_at, window_h=None):
+    lv = dict(coin_symbol="BTHC", ticker="KRW-BTHC", direction="long",
+              entry_usd=100.0, sl_usd=94.0, tp_usd=tps[0], rr=2.0,
+              grade="B", score=60, author="BTH_auth", author_followers=100,
+              author_hit_rate=None, author_hit_count=None, author_whitelisted=False,
+              mcap_rank=50, mcap_tier_icon="🥇", post_url="https://tv.com/bth" + tag,
+              post_age_minutes=100, collected_at=touched_at - 600,
+              tps_usd=_json_bth.dumps(tps), judgment_window_hours=window_h)
+    lv["signal_key"] = db.make_signal_key("BTHC", 100.0, "BTH_auth", tag)
+    db.upsert_level(conn, lv)
+    lid = conn.execute("SELECT id FROM levels WHERE signal_key=?",
+                       (lv["signal_key"],)).fetchone()["id"]
+    conn.execute("UPDATE levels SET status='touched', touched_at=?, touch_price_krw=?, "
+                 "touch_usdt_krw=?, tp_alert_idx=?, armed=1, armed_at=? WHERE id=?",
+                 (touched_at, 100.0 * USDT_KRW, USDT_KRW, tp_idx,
+                  touched_at - 600, lid))
+    return lid
+
+
+_bth_t = _ARM_T0
+# BTH1/BTH3: 창 안에서 SL(94) 관통 캔들 → miss. TP1 도달(idx=1) vs 미도달(idx=0).
+_bth_path = _arm_open("bth")
+with db.connect(_bth_path) as conn:
+    _b1 = _bth_seed(conn, "miss1", [108.0, 120.0], 1, _bth_t - 3600)
+    _b3 = _bth_seed(conn, "miss0", [108.0, 120.0], 0, _bth_t - 3600)
+    conn.commit()
+    _bth_c = [(_bth_t - 900, _bth_t - 600,
+               101.0 * USDT_KRW, 93.0 * USDT_KRW, 95.0 * USDT_KRW)]
+    price_check._judge_outcomes(conn, {"KRW-BTHC": 95.0 * USDT_KRW}, USDT_KRW,
+                                lambda t, l: _bth_c, _bth_t, settings.get)
+    _bth_rows = {r["id"]: dict(r) for r in conn.execute(
+        "SELECT id, outcome, best_tp_hit FROM levels")}
+    _bth_chain = db.verify_outcome_chain(conn)
+_arm_close(_bth_path)
+
+# BTH2: 창(1h) 만료 · 캔들 없음 · 현재가 SL~TP 사이 → timeboxed_*.
+_bth2_path = _arm_open("bth2")
+with db.connect(_bth2_path) as conn:
+    _b2 = _bth_seed(conn, "tbox2", [108.0, 120.0, 130.0], 2, _bth_t - 7200, window_h=1.0)
+    _b2z = _bth_seed(conn, "tbox0", [108.0, 120.0, 130.0], 0, _bth_t - 7200, window_h=1.0)
+    conn.commit()
+    price_check._judge_outcomes(conn, {"KRW-BTHC": 105.0 * USDT_KRW}, USDT_KRW,
+                                lambda t, l: [], _bth_t, settings.get)
+    _bth2_rows = {r["id"]: dict(r) for r in conn.execute(
+        "SELECT id, outcome, best_tp_hit FROM levels")}
+_arm_close(_bth2_path)
+check("BTH1 TP1 도달 후 SL 종결(miss) → best_tp_hit=1",
+      _bth_rows[_b1]["outcome"] == "miss" and _bth_rows[_b1]["best_tp_hit"] == 1)
+check("BTH2 TP2 도달 후 기간만료(timeboxed_*) → best_tp_hit=2 · 미도달(idx=0)은 NULL",
+      _bth2_rows[_b2]["outcome"] in ("timeboxed_win", "timeboxed_loss")
+      and _bth2_rows[_b2]["best_tp_hit"] == 2
+      and _bth2_rows[_b2z]["outcome"] in ("timeboxed_win", "timeboxed_loss")
+      and _bth2_rows[_b2z]["best_tp_hit"] is None)
+check("BTH3 TP 미도달(tp_alert_idx=0) miss → best_tp_hit NULL · 해시 체인 정상",
+      _bth_rows[_b3]["outcome"] == "miss" and _bth_rows[_b3]["best_tp_hit"] is None
+      and _bth_chain is None)
+
+# BTH4: 1회성 백필 — 가드(meta.backfill_best_tp_hit_v1) · 해시 불변 · 판정값 불변
+_bth4_path = _arm_open("bth4")
+with db.connect(_bth4_path) as conn:
+    _g_new_db = db.get_meta(conn, "backfill_best_tp_hit_v1") is not None  # 신규 DB 도 가드 기록
+    _p = _bth_seed(conn, "bf_miss", [108.0, 120.0], 1, _bth_t - 3600)
+    _q = _bth_seed(conn, "bf_tbox", [108.0, 120.0, 130.0], 3, _bth_t - 3600)
+    _z = _bth_seed(conn, "bf_zero", [108.0, 120.0], 0, _bth_t - 3600)
+    _h = _bth_seed(conn, "bf_hit", [108.0, 120.0], 1, _bth_t - 3600)
+    db.resolve_outcome(conn, _p, "miss", 94.0 * USDT_KRW, "tp_sl", r_multiple=-1.0, now=_bth_t)
+    db.resolve_outcome(conn, _q, "timeboxed_win", 125.0 * USDT_KRW, "tp_sl",
+                       r_multiple=1.5, now=_bth_t)
+    db.resolve_outcome(conn, _z, "timeboxed_loss", 97.0 * USDT_KRW, "tp_sl",
+                       r_multiple=-0.5, now=_bth_t)
+    db.resolve_outcome(conn, _h, "hit", 120.0 * USDT_KRW, "tp_sl", r_multiple=3.3,
+                       best_tp_hit=None, now=_bth_t)   # hit 은 백필 대상 아님
+    conn.execute("DELETE FROM meta WHERE key='backfill_best_tp_hit_v1'")  # 레거시 DB 재현
+    conn.commit()
+    _snap = {r["id"]: (r["outcome"], r["r_multiple"], r["resolved_at"],
+                       r["outcome_hash"], r["outcome_prev_hash"])
+             for r in conn.execute("SELECT * FROM levels")}
+    _n1 = db._backfill_best_tp_hit(conn)
+    conn.commit()
+    _after = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM levels")}
+    # 가드 이후 생긴 NULL 행은 건드리지 않는다(1회성)
+    conn.execute("UPDATE levels SET best_tp_hit=NULL WHERE id=?", (_p,))
+    _n2 = db._backfill_best_tp_hit(conn)
+    _p2 = conn.execute("SELECT best_tp_hit FROM levels WHERE id=?", (_p,)).fetchone()[0]
+    _chain4 = db.verify_outcome_chain(conn)
+_arm_close(_bth4_path)
+check("BTH4 백필: miss/timeboxed & tp_idx>0 만 채움(2행) · 가드로 1회성 · "
+      "outcome/r/resolved_at/해시 불변 · 체인 정상",
+      _g_new_db and _n1 == 2 and _n2 == 0 and _p2 is None
+      and _after[_p]["best_tp_hit"] == 1 and _after[_q]["best_tp_hit"] == 3
+      and _after[_z]["best_tp_hit"] is None and _after[_h]["best_tp_hit"] is None
+      and all((_after[i]["outcome"], _after[i]["r_multiple"], _after[i]["resolved_at"],
+               _after[i]["outcome_hash"], _after[i]["outcome_prev_hash"]) == _snap[i]
+              for i in _snap)
+      and _chain4 is None)
 
 # ── DEEP1~DEEP4: 관통 깊이 게이트 (②, 안전망) ───────────────────────────
 # ①이 새더라도 알림 직전에 한 번 더 끊는다. 기준은 **현재가**

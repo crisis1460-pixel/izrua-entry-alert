@@ -183,6 +183,10 @@ vs 정상 터치(관통≤2%) 60.9%.
   전부 같은 축. 무장 전 저가로는 터치되지 않는다.
 - armed=0 레벨은 감시 유지·타임프레임 만료 종전대로. 한 번 무장하면 되돌리지 않는다.
 - 배포 첫 회차가 백필(활성 42건 전부 current≥entry → 무해). 롤백: `watch_arming_enabled=False`.
+- **2026-09-27 S1 수정(감사 A-T2)**: 2% 관용은 `collected_at < arming_since`(= `meta.arming_since`,
+  기본 `watch_arming_since_ts` 1790473697 = 09-27 10:48 KST, 무장 첫 가동 회차) 레거시 행에만. 신규 행
+  첫 판정은 관용 0(`current ≥ entry` 라야 무장). 관용 구간으로 무장하면 armed_at=now(무장 전 캔들 소급 금지).
+  로그 "레거시 관용" 꼬리표는 실제 관용 구간 무장에만. 테스트 ARM7~11.
 **파일:** `monitor/price_check.py` (summary 키 `armed`/`arm_waiting`), `storage/db.py` `set_armed`. 테스트 ARM1~6.
 
 ### 게이트 1: 최소 등급
@@ -1232,6 +1236,36 @@ milestone_v6 150 / milestone_mfe 50`. 파일: `analytics/weekly.py`(신규, 순�
 (`get_resolved_rows_between`·`count_touch_alerts_between`·`count_resolved_touches_since`·
 `get_weekly_calibration_rows`). 테스트 `test_weekly_report.py` 97체크. 샘플
 `sample_weekly_2026-09-22.txt`(평문 1,947자). 상세 `note_2026-09-22_weekly_v2.md`.
+
+
+---
+
+## 스프린트 1 — 모순 오류 감사 P0 수리 (2026-09-27, audit_2026-09-27_종합.md)
+
+### 추출기 (collector/extractor.py, scripts/run_collect.py)
+| 수리 | 내용 | 스위치 |
+|---|---|---|
+| 방향 | TradingView 작성자 방향 태그 우선(`_ingest_idea` → `direction_hint`) · "as long as/long-term/short-term" 등 비방향 관용구 제거 후 판정 · 방향 애매 + 유효 TP 2개 이상 전부 진입가 아래 → short(수집 스킵, 숏 배제 정책 유지) | `extract_use_tv_direction` |
+| 숫자 오인 | `_clean` 에 괄호 서수("Target 1 (TP1)"), RR 비율("RR 1:1.5", "R/R:2"), 레버리지("Leverage x 5-10-20"), 타임프레임(H1/4H), 기간("30 Days") 제거 · 산문 라벨-숫자 거리 60자(25자는 정상 4건 손실, 80자는 734 오인) · 숫자 직후 "resistance" 면 버림 · "Re-Entry"/buy-side 제외 · 창 경계 숫자 절단 방지 · "N to N" 범위는 진입 라벨 줄만 | — |
+| 돌파 트리거 | 진입값 주변 "buy stop/close above/breakout above/bullish flip/reclaim" 이면 진입가로 안 씀. "retest/pullback to" 동반 시 예외 | `extract_breakout_trigger_skip` |
+| 비셋업 글 | "NOT signal(s)"(표준 면책문 제외)·"From Our Entry"·"TP hit"·"target reached" 결과보고 스킵 · 제목/첫 줄 거래소 티커가 대상 코인과 불일치면 스킵 | `extract_nonsetup_skip` |
+| 대표 TP | `tp` = 유효 TP 사다리 첫 값(본문 순서 아님) — 알림 "목표"가 TP1 과 일치(감사 A-T5) | — |
+
+과거 원문 301행 재파싱(수정 전 대비): 변경 없음 186 · 스킵 전환 63 · 값 변경 27 · 감사 판정표 '정상' 91건 중
+값이 틀려진 건 **0** · 발송 '오해' 31건 **31건 수정**. 대가: 원문상 타당한 먼 거리 산문 진입가 4건(739·765·867·642)은
+판단 보류(틀린 알림은 안 나감). 상세 `note_2026-09-27_s1_extractor.md`. 테스트 test_extractor 133(신규 42).
+
+### 재파싱 오염 레벨 만료 (storage/db.py `reparse_all`, CTO)
+개선 파서가 '셋업 아님'/숏으로 판정한 **활성** 롱 레벨은 `expired_reason='reparse_invalid'` 로 만료(종전엔 건너뛰기만 해
+오염 레벨이 감시에 남았음). 배포 시점 대상 6건: ATOM 790·809(진입 1.0 = "RR 1:1.5"), NEAR 822(진입 1.0), SUI 863
+(진입 0.93 = 원문 Invalidation), XRP 867, SOL 882(돌파 트리거). 원문 결정적이라 일시 오판 없음.
+롤백 `reparse_expire_invalid=False`. 테스트 RPX1~3. 재파싱은 수집 회차(4h)마다 돈다 — **TP 가 새로 생긴 기존 레벨 5건
+(799·851·783·868·877)은 무TP 게이트가 풀려 발송 대상이 될 수 있음**(정상 — 전엔 TP 오인으로 빠져 있었음).
+
+### best_tp_hit 의미 변경 (감사 B-E1)
+miss·timeboxed_* 종결도 `best_tp_hit = tp_alert_idx`(>0) 기록 → 이제 "종결 유형과 무관한 최고 도달 TP 단계".
+**적중 여부는 outcome='hit' 으로 판단할 것.** 1회성 백필 `meta.backfill_best_tp_hit_v1`(운영 사본 검증 62행, outcome_hash
+입력에 미포함이라 해시 체인 불변). 주간 감사 덤프에 62행 diff 가 예상됨. 운영 코드 중 이 값을 읽는 곳 없음. 테스트 BTH1~4.
 
 ### 09-27 무장·관통 설정
 

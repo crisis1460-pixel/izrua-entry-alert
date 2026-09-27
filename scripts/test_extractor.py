@@ -540,8 +540,11 @@ _fb_with = parse_setup(_FB_TEXT, current_price=_sanity_price(_fb_coin))
 _fb_cg = _sanity_price({"symbol": "GMT", "price_usd": 0.05,
                         "price_usd_fallback": 999.0})
 for _desc, _passed in [
-        ("FB1 현재가 없으면 레버리지 12.5 가 진입가로 통과(사고 재현)",
-         _fb_none is not None and abs(_fb_none["entry"] - 12.5) < 1e-9),
+        # 2026-09-27 스프린트1: 원래 "현재가 없으면 12.5 통과(사고 재현)"였다. 이제는
+        # 산문 라벨 근접 제약(라벨-숫자 25자·다른 라벨에서 끊기)과 레버리지 라벨 제거로
+        # 추출기 자체가 12.5 를 줍지 않는다 — 폴백 sanity(FB2)는 2중 방어선으로 남는다.
+        ("FB1 현재가 없어도 레버리지 12.5 를 진입가로 줍지 않음(2026-09-27 근본 수리)",
+         _fb_none is None or abs(_fb_none["entry"] - 12.5) > 1e-9),
         ("FB2 업비트 폴백가를 주면 같은 글이 sanity 탈락(None)", _fb_with is None),
         ("FB3 폴백가 계산 = KRW 현재가 ÷ USDT-KRW 환율",
          abs(_usd_price_fallback(_FB_KRW, _FB_USDT_KRW) - _FB_KRW / _FB_USDT_KRW) < 1e-12),
@@ -668,6 +671,266 @@ for _desc, _passed in [
          _sx_had2 is True and _sx_new2 is True and _sx_rows2 == 1),
         ("SX3 스위치 True 로 되돌리면 short 도 저장(원복 가능성)",
          _sx_had3 is True and _sx_new3 is True and _sx_rows3 == 1)]:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += 3
+
+# ── S1: 2026-09-27 감사(종합 P0-1·2·4·5, A-T5) 회귀 — 원문 발췌 픽스처 ─────────
+# 감사 문서: izrua_company/audit_2026-09-27_C_parsing_semantics.md(부록 판정표),
+# audit_2026-09-27_A_price_geometry.md(T3·T4·T5). 괄호 안 숫자 = levels.id.
+from collector.extractor import nonsetup_reason as _s1_ns  # noqa: E402
+from config import settings as _s1_settings  # noqa: E402
+
+# D — 숏 글이 롱으로 저장되던 유형
+_S1_699 = (  # 699 ETH: "Entry (Short)" + "long upper wick" 공존 → 종전 long
+    "ETHUSDT: Bearish Drop to 2240?\nBINANCE:ETHUSDT  is eyeing a  bearish  continuation on  "
+    "the 1-hour chart  after sweeping liquidity above the equal highs with a long upper wick "
+    "in the greed zone.\n\n🎯 Entry (Short):\n2,590 – 2,630\n\n🎯 Target:\n2,240\n\n"
+    "❌ Stop Loss:\n4-hour close above 2,670")
+_S1_682 = (  # 682 FIL: 방향 단어 없음 + Target 1~3 전부 진입가 아래 → 종전 long
+    "#FILUSDT  may continue its trend after correction\n#FIL\n\nThe price is moving within a "
+    "bearish channel on the 1-hour timeframe. This setup supports a decline toward that "
+    "level.\n\nEntry Price: 0.8000\nTarget 1: 0.7785\nTarget 2: 0.7611\nTarget 3: 0.7413\n\n"
+    "Stop Loss: At the green resistance zone.")
+_S1_636 = (  # 636 ETH: "short setup" + "as long as" → 종전 long
+    "My main scenario is therefore a short setup targeting the lower boundary of the range. "
+    "There are several support areas on the way down, but as long as the rectangle remains "
+    "valid, I believe price has the potential to reach the lower boundary around $2,419.\n\n"
+    "The potential entry for this setup is below the current candle, around $2,506.\n\nBias: Short")
+_S1_792 = (  # 792 BTC: Targets 가 번호 목록(첫 값만 잡힘) + SL 이 진입가 위
+    "BTC - Ultimate Swing Short - Rev 2\nEntry - 84,800-85,000 (Channel Top) \n\n"
+    "Stop Loss - 93,300 (as close to) \n\nTargets (Revised): \n\n1) 72,300\n\n2) 64,650\n\n"
+    "Suggest the following buy-back zone (IE long entry or spot buy of BTC)")
+# "as long as" 가 들어간 **롱** 글은 롱 유지(힌트 잡음 제거가 롱을 뒤집지 않는다)
+_S1_ASLONG = ("SOL bullish continuation as long as 90 holds.\nBuy zone: 101 - 105\n"
+              "SL: 95\nTP: 115 / 125")
+_S1_ASLONG2 = ("The trend stays intact as long as the weekly support holds; long-term I stay "
+               "bullish.\nEntry: 0.450\nStop: 0.410\nTarget 1: 0.520\nTarget 2: 0.600")
+
+# L/T — 서수·비율·레버리지·타임프레임·기간 숫자
+_S1_878 = (  # 878 ONDO: "Target 1 (TP1):" → 종전 tp=1.0
+    "• Entry Zone: Around $0.5599 (Trading the live structural support hold) \n"
+    "• Invalidation (Stop Loss): $0.5401 (Placed mechanically below core support)  .\n"
+    "• Target 1 (TP1): $0.5843 (Immediate horizontal resistance shelf) \n"
+    "• Target 2 (TP2): $0.6111 (Primary swing target)")
+_S1_643TP = ("SUI long plan\nEntry: 0.7000\nStop Loss: 0.6800\n"
+             " * Take Profit 1 (TP1): 0.7460 (approx. move)\n"
+             " * Take Profit 2 (TP2 / Final Target): 0.7950")  # 643 SUI 괄호 서수 표기
+_S1_772 = (  # 772 FIL: "R/R:2" → 종전 tp=2.0
+    " 🎯 Entry & Exit Signal: \nBuy Entry: 0.9138\nStop Loss: 0.8900\n"
+    "Targets: 0.9614 R/R:2 - 0.9640 - 1.0144\n")
+_S1_656 = (  # 656 PROVE: "(M15 Entry / H1" + "RR  1:1" → 종전 진입 1.0
+    "PROVEUSDT - Trade Analysis (M15 Entry / H1 + H4 Bias)\nThis is the **buy limit zone**.\n\n"
+    "Trade Setup:\n\nBuy Limit Zone:  0.1948 - 0.1962 \nSL\"  Below 0.1854 (structural support) \n"
+    "TP: 0.2045+ \nRR  1:1 \n")
+_S1_671 = (  # 671 MASK (Roddy01 레버리지 템플릿): "Leverage x 5-10-20" → 종전 진입 12.5
+    "maskusdt long\nInstructions:\n\nEntry point: yellow\nStop loss: red\nTake profit: green\n\n"
+    "👉Leverage x 5-10-20 for crypto\n👉Leverage x 20-50-100 for commodities, stocks, indices, "
+    "and forex\n👉Margin 1-5% max.\nAlways practice risk and money management.")
+_S1_LEV = "ETC long\nEntry: 8.20\nLev 10x | Leverage x 5-10-20\nSL: 7.90\nTP: 8.90"
+_S1_575 = (  # 575 ZORA: "Enter … Over The Next 30 Days" → 종전 진입 30.0
+    "If The Historical Structure Repeats, $ZORA Could Enter Another Major Expansion Phase "
+    "Over The Next 30 Days, With A Potential 1000%+ Move From The Breakout Base.")
+_S1_TF = "Entry 4H 0.19 (retest)\nSL: 0.17\nTP: 0.23"  # 타임프레임 토큰만 지우고 가격 보존
+
+# B — 돌파 트리거
+_S1_884 = (  # 884 SUI 원문 발췌: "weekly close above $1.42" + "Re-Entry" → 종전 진입 1.42
+    "$SUI $1.42 BREAKOUT COULD OPEN THE ROAD TO $10–$20\nBut the Real HTF Trend-Change level is "
+    "$1.42\nA weekly close above $1.42 would invalidate the bearish structure and activate my "
+    "upside targets.\n\nTargets: $2.65 → $5.36 → $10 → $20\n\nIf  CRYPTOCAP:SUI  gets rejected "
+    "below $1.42, another retest of the $0.84–$0.70 Accumulation zone remains possible, "
+    "potentially creating another high-quality Re-Entry opportunity.\n\n$1.42 = THE KEY LEVEL "
+    "FOR SUI’S MACRO TREND FLIP. \n\nNFA & DYOR")
+_S1_807 = ("XRP/USDT Trade Analaysis\nH4:Bullish\nEntry: 1.4968 Buy Stop\nSl: 1.3901\n"
+           "Take profit:1.7231\nRisk:0.50%\nRR: 1:2")  # 807 XRP
+_S1_637 = ("3. Trade Setup\n\nEntry: 2,526.97 (Confirmed 1H close breaking above horizontal "
+           "range resistance)\n\nStop Loss (SL): 2,439.75 (Placed safely below)")  # 637 ETH
+_S1_804 = (  # 804 SUI: 리테스트 진입은 예외(정상 눌림목)
+    "Trade Setup & Key Levels:\n\nEntry Zone: $0.98 – $1.03 (Breakout retest / Current market "
+    "range)   \n\nStop Loss (SL): $0.7600 (Dynamic structural invalidation)\n\nTP1: $1.30")
+_S1_855 = (  # 855 ETH: "breaks above"가 근처에 있어도 retest 동반이면 진입 유지
+    "Entry Zone: $2,665 – $2,685 (Breakout retest above the reclaimed range)\n\n"
+    "Stop Loss (SL): $2,447.19 (Below structural support)\n\nTP1: $2,800")
+
+# R/C — 비셋업 글
+_S1_835 = ("$PENGU +91% From Our Entry | Is The Next Move A 10X Rally?\n CSECY:PENGU  Is Currently "
+           "Trading Around $0.01117, Up ~90% From Our Entry Zone.")  # 835 PENGU
+_S1_881 = ("NYSE:PUMP  +208% PROFIT: Our Entry Filled,  NYSE:PUMP  Just Hit $0.0055.\n\n"
+           "That’s +208% From Our Entry.")  # 881 PUMP
+_S1_678 = ("SCENARIOS (to watch — NOT signals)\n📈 Bullish: hold 77,700 and reclaim 77,884 → "
+           "room toward 77,990")  # 678 BTC
+_S1_774 = ("$IO Quick  +16% long opportunity\nBuy zone: 0.1300 - 0.1420\nSL: 0.1250\nTP: 0.1550\n\n"
+           "(Not a Trading signal or Financial Advice)\n(Always Do Your Own Research as well, DYOR)\n"
+           "(Not to FOMO)")  # 774 IO — 면책문 있는 정상 셋업
+_S1_DISC = "Entry: 2.10\nSL: 1.95\nTP: 2.40\nThis is not a signal, DYOR."
+_S1_TPCOND = "Entry: 2.10\nSL: 1.95\nTP1: 2.40\nOnce TP1 hit, move SL to entry."
+_S1_665 = ("#COREUSDT / Ready to go up\n#CORE\n\nThe price is moving within a bearish channel.\n\n"
+           "Entry Price: 0.06100\nTarget 1: 0.06200\nTarget 2: 0.06344\n")  # 665 (URL=CROUSDT)
+_S1_867 = ("XRP holds support\nMacro backdrop first.\n\nWatching CRYPTOCAP:BTC and CRYPTOCAP:ETH "
+           "for direction; CRYPTOCAP:SOL lagging.\nEntry: 1.49\nSL: 1.40\nTP: 1.70")  # 867 XRP — 본문 자동링크
+
+# Z — 창 절단·범위
+_S1_612 = ("Traders can enter from here with minor amount and enter more when its below entry.\n\n"
+           "Trumpsdt is at the retest zone so it can fly anytime.\n\nBuy Trumpusdt from 2.16\n\n"
+           "Stoploss 1.852 (-14.2%)\n\nTarget 2.864(+32.7%)")  # 612 TRUMP — 종전 2.1
+_S1_EDGE = "Entry: (" + "w" * 77 + ") 2.16\nSL: 1.9\nTP: 2.6"  # 80자 경계에 숫자
+_S1_646 = ("Entry zone: $0.16 to $0.10 — I scale in, no need to go all at once.\n"
+           "Invalidation: a 3D close below $0.07.\nTarget: $1.16")  # 646 ARB — 종전 0.16
+
+# T5 — 대표 TP = 유효 사다리 첫 값
+_S1_630 = ("Entry Price: 1.067\nTarget 1: 1.20\nTarget 2: 1.16\nTarget 3: 1.22\n\n"
+           "Stop Loss: At the resistance zone in green")  # 630 ZRO — 종전 tp=1.20
+_S1_852 = ("Possible long plan\n Entry 0.001258\n Stop Loss  below 0.001190\n TP  0.001335\n"
+           " TP  0.001394\n")
+
+
+def _s1p(text, price=None, **kw):
+    return parse_setup(text, current_price=price, **kw)
+
+
+def _s1_close(a, b, tol=1e-6):
+    return a is not None and b is not None and abs(a - b) <= tol * max(1.0, abs(b))
+
+
+_s1_old_tv = _s1_settings.SETTINGS.get("extract_use_tv_direction")
+_s1_old_bt = _s1_settings.SETTINGS.get("extract_breakout_trigger_skip")
+_s1_old_ns = _s1_settings.SETTINGS.get("extract_nonsetup_skip")
+_S1_CASES = []
+try:
+    _S1_CASES += [
+        # D 방향
+        ("S1-D1 699 'Entry (Short)'+'long upper wick' → short",
+         (_s1p(_S1_699) or {}).get("direction") == "short"),
+        ("S1-D2 682 방향 단어 없음 + TP 3개 전부 진입가 아래 → short",
+         (_s1p(_S1_682) or {}).get("direction") == "short"),
+        ("S1-D3 636 'short setup'+'as long as' → short",
+         (_s1p(_S1_636) or {}).get("direction") == "short"),
+        ("S1-D4 792 TP 1개(아래)+SL 진입가 위 → short",
+         (_s1p(_S1_792) or {}).get("direction") == "short"),
+        ("S1-D5 'as long as' 롱 글은 long 유지",
+         (_s1p(_S1_ASLONG) or {}).get("direction") == "long"
+         and _s1_close((_s1p(_S1_ASLONG) or {}).get("entry"), 103.0)),
+        ("S1-D6 'as long as'+'long-term' 롱 글 long 유지(TP 0.52)",
+         (_s1p(_S1_ASLONG2) or {}).get("direction") == "long"
+         and _s1_close((_s1p(_S1_ASLONG2) or {}).get("tp"), 0.52)),
+        ("S1-D7 작성자 태그 short 가 롱처럼 보이는 텍스트보다 우선",
+         (_s1p(_S1_ASLONG, direction_hint="short") or {}).get("direction") == "short"),
+        ("S1-D8 작성자 태그 long 은 TP 기하(숏 판정)보다 우선",
+         (_s1p(_S1_682, direction_hint="long") or {}).get("direction") == "long"),
+        # L/T 숫자 오인
+        ("S1-T1 878 'Target 1 (TP1): $0.5843' → tp 0.5843(종전 1.0)",
+         _s1_close((_s1p(_S1_878) or {}).get("tp"), 0.5843)),
+        ("S1-T2 'Take Profit 1 (TP1): 0.7460' → tp 0.7460",
+         _s1_close((_s1p(_S1_643TP) or {}).get("tp"), 0.7460)),
+        ("S1-T3 772 'R/R:2' 제거 → tp 0.9614(종전 2.0), 3단 사다리",
+         _s1_close((_s1p(_S1_772) or {}).get("tp"), 0.9614)
+         and (_s1p(_S1_772) or {}).get("tp_ladder_count") == 3),
+        ("S1-L1 656 'M15/H1'·'RR 1:1' 제거 → 진입 0.1955(종전 1.0), tp 0.2045",
+         _s1_close((_s1p(_S1_656) or {}).get("entry"), 0.1955)
+         and _s1_close((_s1p(_S1_656) or {}).get("tp"), 0.2045)),
+        ("S1-L2 671 Roddy01 레버리지 템플릿 → 셋업 없음(종전 12.5)", _s1p(_S1_671) is None),
+        ("S1-L3 'Lev 10x | Leverage x 5-10-20' 가 있어도 진입 8.20 보존",
+         _s1_close((_s1p(_S1_LEV) or {}).get("entry"), 8.20)
+         and _s1_close((_s1p(_S1_LEV) or {}).get("sl"), 7.90)),
+        ("S1-L4 575 'Next 30 Days' → 셋업 없음(종전 30.0)", _s1p(_S1_575) is None),
+        ("S1-L5 'Entry 4H 0.19' → 4 가 아니라 0.19", _s1_close((_s1p(_S1_TF) or {}).get("entry"), 0.19)),
+        # B 돌파 트리거
+        ("S1-B1 884 SUI 원문 'weekly close above $1.42' → 진입 없음(종전 1.42)", _s1p(_S1_884) is None),
+        ("S1-B2 807 'Entry: 1.4968 Buy Stop' → 진입 없음", _s1p(_S1_807) is None),
+        ("S1-B3 637 'Confirmed 1H close breaking above' → 진입 없음", _s1p(_S1_637) is None),
+        ("S1-B4 804 'Breakout retest' 존은 리테스트 예외 → 진입 1.005",
+         _s1_close((_s1p(_S1_804) or {}).get("entry"), 1.005)),
+        ("S1-B5 855 'retest above the reclaimed range' 도 예외 → 진입 2675",
+         _s1_close((_s1p(_S1_855) or {}).get("entry"), 2675.0)),
+        # R/C 비셋업
+        ("S1-R1 835 '+91% From Our Entry' → result_report", _s1_ns(_S1_835, "PENGU") == "result_report"),
+        ("S1-R2 881 '+208% PROFIT: Our Entry Filled' → result_report",
+         _s1_ns(_S1_881, "PUMP") == "result_report"),
+        ("S1-R3 678 'NOT signals' → not_signal", _s1_ns(_S1_678, "BTC") == "not_signal"),
+        ("S1-R4 774 면책문 '(Not a Trading signal or Financial Advice)' 정상 셋업은 통과",
+         _s1_ns(_S1_774, "IO") is None and _s1_close((_s1p(_S1_774) or {}).get("entry"), 0.136)),
+        ("S1-R5 'not a signal, DYOR' 면책 문장은 통과", _s1_ns(_S1_DISC, "SXT") is None),
+        ("S1-R6 조건절 'Once TP1 hit, move SL' 은 결과보고 아님", _s1_ns(_S1_TPCOND, "SXT") is None),
+        ("S1-C1 665 URL=CRO, 본문 #COREUSDT/#CORE → coin_mismatch",
+         _s1_ns(_S1_665, "CRO") == "coin_mismatch"),
+        ("S1-C2 같은 글을 CORE 로 수집하면 통과", _s1_ns(_S1_665, "CORE") is None),
+        ("S1-C3 867 본문 자동링크(CRYPTOCAP:BTC 등)만 있는 XRP 글은 통과",
+         _s1_ns(_S1_867, "XRP") is None),
+        ("S1-C4 별칭 PUMPFUN 태그 ↔ PUMP 코인은 일치로 본다",
+         _s1_ns("#PUMPFUNUSDT long\nEntry: 0.004\nTP: 0.005", "PUMP") is None),
+        # Z 창 절단·범위
+        ("S1-Z1 612 'Buy Trumpusdt from 2.16' → 2.16(종전 2.1)",
+         _s1_close((_s1p(_S1_612) or {}).get("entry"), 2.16)),
+        ("S1-Z2 80자 창 경계의 숫자를 끝까지 읽음(2.16)",
+         _s1_close((_s1p(_S1_EDGE) or {}).get("entry"), 2.16)),
+        ("S1-Z3 646 'Entry zone: $0.16 to $0.10' → 범위 0.10~0.16(중앙 0.13)",
+         _s1_close((_s1p(_S1_646) or {}).get("entry"), 0.13)
+         and _s1_close((_s1p(_S1_646) or {}).get("entry_low"), 0.10)),
+        # T5 TP 순서
+        ("S1-O1 630 'Target 1: 1.20 / Target 2: 1.16' → tp=1.16=tps_all[0](종전 1.20)",
+         _s1_close((_s1p(_S1_630) or {}).get("tp"), 1.16)
+         and (_s1p(_S1_630) or {}).get("tps_all", [None])[0] == (_s1p(_S1_630) or {}).get("tp")),
+        ("S1-O2 tp 는 판정부 _volume_band_tps 와 같은 첫 값(오름차순 유효 TP)",
+         (lambda s: s is not None and s["tp"] == min(s["tps_all"]))(_s1p(_S1_852))),
+    ]
+    # 롤백 스위치: 끄면 종전 동작(트리거 스킵·비셋업 스킵·태그 무시)으로 돌아간다
+    _s1_settings.SETTINGS["extract_breakout_trigger_skip"] = False
+    _s1_settings.SETTINGS["extract_nonsetup_skip"] = False
+    _s1_settings.SETTINGS["extract_use_tv_direction"] = False
+    _S1_CASES += [
+        ("S1-SW1 extract_breakout_trigger_skip=False → 807 진입 1.4968 복귀",
+         _s1_close((_s1p(_S1_807) or {}).get("entry"), 1.4968)),
+        ("S1-SW2 extract_nonsetup_skip=False → 결과보고도 통과", _s1_ns(_S1_835, "PENGU") is None),
+        ("S1-SW3 extract_use_tv_direction=False → 태그 무시, 텍스트(long)",
+         (_s1p(_S1_ASLONG, direction_hint="short") or {}).get("direction") == "long"),
+    ]
+finally:
+    for _k, _v in (("extract_use_tv_direction", _s1_old_tv),
+                   ("extract_breakout_trigger_skip", _s1_old_bt),
+                   ("extract_nonsetup_skip", _s1_old_ns)):
+        if _v is None:
+            _s1_settings.SETTINGS.pop(_k, None)
+        else:
+            _s1_settings.SETTINGS[_k] = _v
+
+for _desc, _passed in _S1_CASES:
+    print(("✅" if _passed else "❌"), _desc)
+    if _passed:
+        ok += 1
+TOTAL_EXTRA += len(_S1_CASES)
+
+# S1-I: _ingest_idea 통합 — 작성자 태그 short 는 저장 안 됨, 비셋업 글은 스킵 집계
+_s1_rc_parse = _sx_rc.parse_setup
+_s1_rc_grade = _sx_rc.calculate_grade_with_breakdown
+_sx_rc.calculate_grade_with_breakdown = lambda *a, **k: ("B", 60, 2.0, {})
+_s1_skip = {}
+try:
+    with _sx_db.connect(_SX_DB) as conn:
+        _i1 = dict(_sx_idea("u-s1-tvshort"), title="SXT plan",
+                   description="SXT bullish as long as 9 holds.\nEntry: 10.0\nSL: 9.5\nTP: 11.0",
+                   direction="short")
+        _s1_h1, _s1_n1 = _ingest_idea(conn, _SX_COIN, _i1, {}, 5.0, skip_counts=_s1_skip)
+        _i2 = dict(_sx_idea("u-s1-result"), title="SXT +50% From Our Entry",
+                   description="Entry: 10.0\nSL: 9.5\nTP: 11.0", direction=None)
+        _s1_h2, _s1_n2 = _ingest_idea(conn, _SX_COIN, _i2, {}, 5.0, skip_counts=_s1_skip)
+        _i3 = dict(_sx_idea("u-s1-long"), title="SXT plan",
+                   description="Entry: 10.0\nSL: 9.5\nTP: 11.0", direction="long")
+        _s1_h3, _s1_n3 = _ingest_idea(conn, _SX_COIN, _i3, {}, 5.0, skip_counts=_s1_skip)
+        conn.commit()
+        _s1_rows = {r["post_url"] for r in conn.execute(
+            "SELECT post_url FROM levels WHERE post_url LIKE 'u-s1-%'")}
+finally:
+    _sx_rc.parse_setup = _s1_rc_parse
+    _sx_rc.calculate_grade_with_breakdown = _s1_rc_grade
+for _desc, _passed in [
+        ("S1-I1 작성자 태그 short → 저장 안 됨(had_setup=True, short 집계)",
+         _s1_h1 is True and _s1_n1 is False and "u-s1-tvshort" not in _s1_rows
+         and _s1_skip.get("short") == 1),
+        ("S1-I2 결과보고 글 → 저장 안 됨(nonsetup 집계)",
+         _s1_h2 is True and _s1_n2 is False and "u-s1-result" not in _s1_rows
+         and _s1_skip.get("nonsetup") == 1),
+        ("S1-I3 태그 long 정상 셋업은 저장", _s1_n3 is True and "u-s1-long" in _s1_rows)]:
     print(("✅" if _passed else "❌"), _desc)
     if _passed:
         ok += 1

@@ -124,6 +124,21 @@ SETTINGS = {
     # (기존 119건은 과거 데이터 불변 원칙에 따라 건드리지 않음, 자연 만료).
     "collect_short_enabled": False,
 
+    # 추출기 의미 오해 수리 롤백 스위치 (2026-09-27 스프린트1, 감사 종합 P0-1·4·5).
+    # 전부 True 가 수리 상태, False 로 두면 해당 규칙만 종전 동작으로 돌아간다.
+    #  - extract_use_tv_direction: TradingView 작성자 방향 태그(long/short)를 텍스트
+    #    판정보다 우선(숏 글→롱 저장 방지; short 는 collect_short_enabled 로 스킵).
+    #  - extract_breakout_trigger_skip: 진입값 주변에 "buy stop"/"close above"/
+    #    "bullish flip"/"reclaim" 류가 있으면 그 값을 진입가로 쓰지 않음(리테스트 예외).
+    #  - extract_nonsetup_skip: 결과보고("From Our Entry", "TP hit")·"NOT signals"
+    #    (면책문 제외)·본문 티커≠수집 코인 글을 수집하지 않음.
+    # 재파싱 시 개선 파서가 '셋업 아님/숏'으로 판정한 활성 롱 레벨 만료 (2026-09-27 S1).
+    # False 면 종전처럼 건너뛰기만 한다(오염 레벨이 감시에 남음).
+    "reparse_expire_invalid": True,
+    "extract_use_tv_direction": True,
+    "extract_breakout_trigger_skip": True,
+    "extract_nonsetup_skip": True,
+
     # 뉴스·시황 요약 알림 (2026-08-17 사용자 요청) — 저자 채널의 매매 시그널이
     # 아닌 코인별 시황·뉴스 게시글(extractor.parse_setup 실패 + 심볼 매칭 성공)
     # 을 원문 요약으로 별도 알림. kind='news', 무음 발송, 매매 알림 상한과 별개.
@@ -449,6 +464,15 @@ SETTINGS = {
     # 기록된 뒤 0 → 1 로 올라갈 때는 관용 없이 current >= entry 를 요구한다
     # (관용을 계속 적용하면 진입가 2% 아래에서 '무장'해 버그가 축소 재발한다).
     "watch_arm_tolerance_pct": 2.0,
+    # 레거시 기준선(epoch) — 2026-09-27 S1 수리(감사 P0-3 / A-T2). 위 관용이
+    # 실제로는 **모든 신규 레벨**(INSERT 시 armed=NULL)에 적용돼, 진입가 0~2%
+    # 아래에서 수집된 글이 즉시 터치됐다. 이제 collected_at 이 이 시각 **이전**인
+    # 행만 관용 대상이다. 값 = 운영 DB 에서 무장이 처음 기록된 회차
+    # (data 커밋 dbfe55dde, meta.last_cycle_at 1790473697.16
+    #  = 2026-09-27 10:48:17 KST, bf84af80b 배포 직후 첫 회차). 런타임은
+    # meta.arming_since 를 우선하고, 없으면 이 값을 meta 에 1회 기록해 쓴다.
+    # 관용으로 무장한 경우(진입가 아래에서 무장)는 armed_at=now 가 된다.
+    "watch_arming_since_ts": 1790473697.0,
 
     # ── 관통 깊이 게이트 (2026-09-27 즉시터치 버그 수리 ② 안전망) ──────────
     # 무장 게이트가 새더라도(수집 경로가 또 바뀌거나, 스위치가 꺼졌거나) 알림

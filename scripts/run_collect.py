@@ -28,7 +28,8 @@ except Exception:
     pass
 
 from collector import coingecko, telegram_source, tradingview, watcher_stats
-from collector.extractor import judgment_window_hours, parse_setup, parse_timeframe_hours
+from collector.extractor import (judgment_window_hours, nonsetup_reason, parse_setup,
+                                 parse_timeframe_hours)
 from collector.grading import calculate_grade_with_breakdown
 from config import settings
 from notify import news_brief, telegram
@@ -272,9 +273,26 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
     try:
         text = f"{idea['title']}\n{idea['description']}"
         # sanity 기준가는 CoinGecko 달러가 → 업비트 폴백가 순 (2026-09-13 B1).
-        setup = parse_setup(text, current_price=_sanity_price(coin))
+        # 작성자 방향 태그(TradingView direction 1/2)를 추출기에 넘긴다 (2026-09-27
+        # 감사 C-D ①). 태그가 없으면(텔레그램·중립 0) 종전 호출 그대로 — 인자를 아예
+        # 안 넘겨 구 시그니처 대역(테스트 목)과도 호환된다.
+        _tv_dir = idea.get("direction")
+        if _tv_dir in ("long", "short"):
+            setup = parse_setup(text, current_price=_sanity_price(coin), direction_hint=_tv_dir)
+        else:
+            setup = parse_setup(text, current_price=_sanity_price(coin))
         if not setup or not setup.get("entry"):
             return False, False
+        # 비셋업 글 스킵 (2026-09-27 감사 C-R/C-C, 스위치 extract_nonsetup_skip) —
+        # 결과보고·"NOT signals"·본문 티커 불일치. short 스킵과 같은 반환 규약:
+        # had_setup=True 로 돌려 텔레그램 루프가 뉴스로 오분류하지 않게 한다.
+        _ns = nonsetup_reason(text, coin.get("symbol"))
+        if _ns:
+            logger.info("[수집] %s 비셋업 글 스킵(%s): %s", coin.get("symbol"), _ns,
+                        idea.get("url"))
+            if skip_counts is not None:
+                skip_counts["nonsetup"] = skip_counts.get("nonsetup", 0) + 1
+            return True, False
         # short 시그널 수집 배제 (2026-09-13 Q3, 사용자 결정) — 근거는
         # config/settings.py "collect_short_enabled" 주석 참고: short 119건이
         # 터치/알림 0건이었고 monitor/price_check.py 는 애초에 long 만 감시한다.

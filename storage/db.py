@@ -613,6 +613,35 @@ def _migrate(conn) -> None:
     # 표본을 한정**한다 — scripts/analyze_touch_quality.py 참고.
     if get_meta(conn, "mfe_mae_fixed_since") is None:
         set_meta(conn, "mfe_mae_fixed_since", str(time.time()))
+    _backfill_best_tp_hit(conn)
+
+
+def _backfill_best_tp_hit(conn) -> int:
+    """best_tp_hit 1회성 백필 (2026-09-27 S1, 감사 P2-13 / B-E1).
+
+    miss·timeboxed_* 종결 경로가 best_tp_hit 를 넘기지 않아, 중간 TP 에 도달
+    (tp_alert_idx>0)했다가 손절·만료로 끝난 행이 NULL 로 남았다(운영 DB 62건).
+    이 행들을 도달한 최고 TP 단계(= tp_alert_idx)로 채운다.
+
+    · 불변 스냅샷 원칙의 **문서화된 예외**다 — outcome·r_multiple·resolved_at 등
+      판정값은 건드리지 않고 best_tp_hit 컬럼만 채운다.
+    · 해시 체인 무영향: _compute_outcome_hash 의 입력은 (id, outcome, resolved_at,
+      r_multiple, ambiguous) 뿐이라 best_tp_hit 를 채워도 체인이 깨지지 않는다.
+      outcome_hash 재계산도 하지 않는다.
+    · meta.backfill_best_tp_hit_v1 가드로 DB 당 1회만 돈다(이후 init_db 는
+      meta 조회 1건). 이후 신규 종결은 price_check 가 직접 기록한다.
+    반환 = 이번 호출에서 갱신한 행 수(가드로 건너뛰면 0)."""
+    if get_meta(conn, "backfill_best_tp_hit_v1") is not None:
+        return 0
+    cur = conn.execute(
+        "UPDATE levels SET best_tp_hit=tp_alert_idx "
+        "WHERE outcome IN ('miss','timeboxed_win','timeboxed_loss') "
+        "AND best_tp_hit IS NULL AND tp_alert_idx > 0")
+    n = cur.rowcount or 0
+    set_meta(conn, "backfill_best_tp_hit_v1", json.dumps({"at": time.time(), "rows": n}))
+    if n:
+        logger.info("[마이그레이션] best_tp_hit 백필 %d건 (miss/timeboxed 중간 TP 도달)", n)
+    return n
 
 
 def _maybe_audit_dump(conn, db_path: str) -> None:
@@ -763,9 +792,23 @@ def reparse_all(conn) -> int:
         "FROM levels WHERE status IN ('watching','previewed') AND raw_text IS NOT NULL "
         "AND direction='long'"
     ).fetchall()
+    from config import settings as _s_rp
+    _expire_invalid = _s_rp.get("reparse_expire_invalid")
+    _invalid_ids = []
     for r in rows:
         entry = r["entry_usd"]
         setup = parse_setup(r["raw_text"], current_price=entry)
+        # 2026-09-27 S1(감사 P0): 개선된 파서가 '셋업 아님'(서수·RR·타임프레임 숫자를
+        # 진입가로 오인, 무효화선·돌파 트리거를 진입가로 오인, 결과보고 글)이나
+        # '숏'으로 판정한 활성 롱 레벨은 종전엔 건너뛰기만 해서 **오염 레벨이 감시에
+        # 계속 남았다**(배포 시점 6건: ATOM·NEAR 진입 1.0, SUI 863 진입=Invalidation,
+        # SOL 882 돌파 트리거 등). 이제 만료시킨다(사유 reparse_invalid). 원문은
+        # 결정적이라 같은 raw_text 는 매 회차 같은 결과 — 일시 오판 위험 없음.
+        # 롤백: reparse_expire_invalid=False (종전처럼 건너뜀).
+        if entry and entry > 0 and (not setup or setup.get("direction") == "short"):
+            if _expire_invalid:
+                _invalid_ids.append(r["id"])
+            continue
         if not setup or not entry or entry <= 0:
             continue
         new_sl, new_tp = setup.get("sl"), setup.get("tp")
@@ -808,6 +851,11 @@ def reparse_all(conn) -> int:
             (new_sl, new_tp, rr, win, new_lad, new_tps_usd, new_tf, r["id"]),
         )
         changed += 1
+    if _invalid_ids:
+        n = expire_levels_by_ids(conn, _invalid_ids, "reparse_invalid")
+        logger.info("[재파싱] 개선 파서가 셋업 아님/숏으로 판정한 활성 레벨 %d건 만료: ids=%s",
+                    n, _invalid_ids)
+        changed += n
     return changed
 
 
