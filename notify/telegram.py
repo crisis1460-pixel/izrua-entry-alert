@@ -771,11 +771,16 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
 
     # Coin Metrics 활성주소 30d 백분위 (2026-08-17). 무료 커버 138종만 값.
     # ≥80 활발 (매수 유리) / ≤20 저조 (매수 부담) / 중립 무표기.
+    # 2026-09-27 사용자 제보(XRP 888): 값은 **자기 코인 30일 대비 백분위**인데 "저조 7위"로
+    # 표기돼 순위(시총·거래대금 7위)로 읽혔다 → "하위 7%" / "상위 12%" 로 표기.
+    # 0·100 백분위도 '하위 0%'가 되지 않게 최소 1%.
     if active_addr_pctile is not None:
         if active_addr_pctile >= 80:
-            positive_badges.append(f"⛓ 온체인 활발 {active_addr_pctile:.0f}위 (매수 유리)")
+            _top = max(1, round(100 - active_addr_pctile))
+            positive_badges.append(f"⛓ 활성주소 상위 {_top}% (매수 유리)")
         elif active_addr_pctile <= 20:
-            risk_badges.append(f"⛓ 온체인 저조 {active_addr_pctile:.0f}위 (매수 부담)")
+            _bot = max(1, round(active_addr_pctile))
+            risk_badges.append(f"⛓ 활성주소 하위 {_bot}% (매수 부담)")
 
     # StockTwits 소셜 심리 (2026-08-17). SOL/SUI/APT/TAO/WLD/TIA 등 최근 유행 알트
     # 커버 (Coin Metrics 미커버 자산 상당수 보완). 태그된 표본 <5는 이미 fetch

@@ -687,11 +687,24 @@ check("CM6 활성주소 백분위 ≥80 +1 / ≤20 -1 / 중간·None 0",
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=85.5)
 check("CM7 활발(≥80) 배지 표시(매수 유리)",
-      "온체인 활발" in _txt and "매수 유리" in _txt)
+      "활성주소 상위 14%" in _txt and "매수 유리" in _txt)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=12.0)
 check("CM7b 저조(≤20) 배지 표시(매수 부담)",
-      "온체인 저조" in _txt and "매수 부담" in _txt)
+      "활성주소 하위 12%" in _txt and "매수 부담" in _txt)
+
+# 2026-09-27 사용자 제보: 백분위를 "7위"(순위)로 표기하던 오류 → "하위 7%"·"상위 12%", 32칼럼 이내
+from notify import telegram as _tg_onc
+for _p, _want in ((6.7, "⛓ 활성주소 하위 7% (매수 부담)"), (0.0, "하위 1%"),
+                  (88.0, "⛓ 활성주소 상위 12% (매수 유리)"), (100.0, "상위 1%")):
+    _m_onc = _tg_onc.render_alert("touch", "XRP", [dict(coin_symbol="XRP", entry_usd=1.5225,
+                                   tp_usd=1.6149, tps_usd="[1.6149, 1.7704]", grade="A",
+                                   score=56, author="a", author_followers=2)],
+                                  2071.0, 1360.0, active_addr_pctile=_p)
+    _onc = [ln for ln in _m_onc.split(chr(10)) if "활성주소" in ln]
+    check(f"ONC {_p}% → '{_want}' · '위' 표기 없음 · 32칼럼 이내",
+          _onc and _want in _onc[0] and "위 (" not in _onc[0]
+          and _tg_onc._line_width(_onc[0]) <= _tg_onc._MAX_LINE_COLS)
 _txt = _tg.render_alert("touch", "TEST", _base_cluster, 100000.0, 1300.0, rep=_base_rep,
                        active_addr_pctile=50.0)
 check("CM7c 중립(20~80) → 배지 없음", "온체인" not in _txt)
