@@ -952,7 +952,11 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     # 패는 가려지는 소표본 배지를 막는다.
     _tp_hits = rep.get("author_self_tp_hits") or 0
     if _tp_hits >= 1 and (rep.get("author_self_neff") or 0.0) >= _SELF_STATS_MIN_N:
-        lines.append(f"🏅 TP도달: {_tp_hits}회")
+        # 2026-09-28 대표 승인: 종결 건수를 분모로 병기("94/161회") — 분자만 보이면 SL 미기재
+        # 작성자(🏹 승률 줄이 가려짐)가 백전백승처럼 읽혔다. 분모 미주입(구 경로)이면 종전 표기.
+        _tp_closed = rep.get("author_self_tp_closed") or 0
+        lines.append(f"🏅 TP도달: {_tp_hits}/{_tp_closed}회" if _tp_closed >= _tp_hits
+                     else f"🏅 TP도달: {_tp_hits}회")
     lines.extend(_author_block(rep))
     lines.append(_SEP)
 

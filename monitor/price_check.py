@@ -1478,6 +1478,7 @@ def run_once(now: float | None = None) -> dict:
                             lv["author_self_wins"], lv["author_self_losses"] = st["wins"], st["losses"]
                             # 🏅 배지 원천 (2026-09-27 S2 D12): 실제 TP 적중(hit) 건수
                             lv["author_self_tp_hits"] = st.get("tp_hits", 0)
+                            lv["author_self_tp_closed"] = st.get("tp_closed", 0)  # 배지 분모(09-28)
                             lv["author_touched_n"] = st["touched"]
                             lv["author_untouched_expired"] = st["untouched_expired"]
                             # 자체 승률 줄 게이트용 n_eff (2026-07-26 카드: raw n≥5 →

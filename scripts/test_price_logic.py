@@ -5322,7 +5322,11 @@ _m_b2 = _dtg.render_alert("touch", "POL", [dict(_b, author_self_tp_hits=3,
                                                 author_self_neff=6.0)], 1933.0, _D_USDT)
 check("DSP6 🏅 배지: 만료·수익만 있는 작성자(TP 적중 0) 무배지 / n_eff<5 숨김 / 통과 시 hit 건수",
       "🏅" not in _m_b0 and "🏅" not in _m_b1 and "🏅 TP도달: 3회" in _m_b2)
-
+_m_b3 = _dtg.render_alert("touch", "WLD", [dict(_b, author_self_tp_hits=94, author_self_tp_closed=161,
+                                                author_self_neff=40.0)], 1933.0, _D_USDT)
+check("DSP6b 🏅 배지 분모 병기 '94/161회'(09-28) · 32칸 이내",
+      "🏅 TP도달: 94/161회" in _m_b3
+      and all(_dtg._line_width(x) <= _dtg._MAX_LINE_COLS for x in _m_b3.split("\n") if "TP도달" in x))
 # D10: 소셜 표본 병기·소표본 극단 숨김
 def _soc(r, n):
     return _dtg.render_alert("touch", "SUI", [dict(_sui)], 1933.0, _D_USDT,

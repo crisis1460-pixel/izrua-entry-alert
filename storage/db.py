@@ -1970,11 +1970,14 @@ def get_author_self_stats(conn, author: str) -> dict:
     """
     if not author:
         return {"wins": 0, "losses": 0, "touched": 0, "untouched_expired": 0,
-                "tp_hits": 0}
+                "tp_hits": 0, "tp_closed": 0}
     row = conn.execute(
         """SELECT
              SUM(CASE WHEN outcome = 'hit' AND touched_at IS NOT NULL
                       THEN 1 ELSE 0 END) AS th,
+             SUM(CASE WHEN outcome IN ('hit','miss','timeboxed_win','timeboxed_loss')
+                       AND touched_at IS NOT NULL
+                      THEN 1 ELSE 0 END) AS tc,
              SUM(CASE WHEN outcome IN ('hit','timeboxed_win')
                        AND r_multiple IS NOT NULL AND touched_at IS NOT NULL
                       THEN 1 ELSE 0 END) AS w,
@@ -1990,7 +1993,10 @@ def get_author_self_stats(conn, author: str) -> dict:
     ).fetchone()
     return {"wins": row["w"] or 0, "losses": row["l"] or 0,
             "touched": row["t"] or 0, "untouched_expired": row["e"] or 0,
-            "tp_hits": row["th"] or 0}
+            # tp_closed (2026-09-28 대표 승인): 🏅 배지 분모 — tp_hits 와 같은 기준(실터치·
+            # 비오염)의 종결 건수. "TP도달 94회" 만 보이면 SL 미기재 작성자의 만료 손실 46건이
+            # 가려져 백전백승처럼 읽혔다 → "94/161회".
+            "tp_hits": row["th"] or 0, "tp_closed": row["tc"] or 0}
 
 
 def get_author_avg_holding_days(conn, author: str) -> Optional[float]:
