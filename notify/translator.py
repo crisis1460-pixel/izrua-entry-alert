@@ -12,6 +12,8 @@ from typing import Optional
 
 import requests
 
+from notify.ko_terms import fix_ko_terms
+
 logger = logging.getLogger("alert.translator")
 
 _GOOGLE_URL = "https://translate.googleapis.com/translate_a/single"
@@ -88,6 +90,8 @@ def translate_en_ko(text: str, timeout: float = 5.0) -> str:
     if result is None:
         logger.warning("[번역] 전 경로 실패 — 원문 유지")
         return text
+    # 차트·매매 용어 직역 보정("곰 보정"→"하락 조정" 등, 2026-09-28 notify/ko_terms.py).
+    result = fix_ko_terms(result)
 
     if len(_cache) >= _CACHE_MAX:
         _cache.popitem(last=False)

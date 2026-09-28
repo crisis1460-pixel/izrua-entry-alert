@@ -21,6 +21,8 @@
 import re
 from typing import Optional
 
+from notify.ko_terms import fix_ko_terms
+
 # ── 정제 ─────────────────────────────────────────────────────────────
 
 # 채널 꼬리말: 같은 기호 3번 이상 연속(➖➖➖, ---) 이후는 서명·홍보다.
@@ -1477,6 +1479,8 @@ def compose(p: dict, sym: str, text_en: str, summary_ko: str = "",
         return None
     ctx = ctx or {}
     n = max(2, int(n_sent or 3))
+    # 큐에 이미 저장된 번역문도 렌더 시점에 차트 용어 직역을 보정한다(09-28 — "곰 보정" 등).
+    summary_ko = fix_ko_terms(summary_ko or "")
     text = clean(text_en)
     if kind == "fact":
         what = _fact_what(p, text, sym)
