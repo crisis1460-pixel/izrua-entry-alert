@@ -2765,6 +2765,81 @@ check("KO-TERM2 일반 문장은 건드리지 않음(통합·지원·보정·곰
       all(_fk(s) == s for s in _KO_KEEP))
 check("KO-TERM3 빈 값·None 안전", _fk("") == "" and _fk(None) is None)
 
+# ── RSS-*: 영문 뉴스 RSS 입력원 (2026-09-29 대표 승인) ──
+from collector import rss_source as _rss
+from scripts import run_collect as _rc_rss
+from notify import morning_brief as _mb_rss, news_parse as _np_rss
+
+_RSS_XML = b"""<?xml version="1.0"?><rss><channel>
+<item><title>Solana ETFs draw record $188 million in a week</title>
+<description><![CDATA[<p>Spot <b>Solana</b> ETFs drew $188M &amp; more.</p>]]></description>
+<link>https://example.com/sol</link><pubDate>Mon, 28 Sep 2026 10:00:00 +0000</pubDate></item>
+<item><title>Old story</title><description>x</description><link>https://example.com/old</link>
+<pubDate>Mon, 21 Sep 2026 10:00:00 +0000</pubDate></item>
+</channel></rss>"""
+
+
+class _RssResp:
+    status_code = 200
+    content = _RSS_XML
+
+
+_rss_orig_get = _rss.requests.get
+_rss.requests.get = lambda *a, **k: _RssResp()
+try:
+    _rss_items = _rss.fetch_items("CoinDesk", "https://x/rss", 5.0, max_age_hours=48,
+                                  now=1790600000.0)
+finally:
+    _rss.requests.get = _rss_orig_get
+check("RSS-1 피드 파싱: 48h 밖 제외 · HTML 태그/엔티티 제거 · 채널=매체명",
+      len(_rss_items) == 1 and _rss_items[0]["channel"] == "CoinDesk"
+      and "<" not in _rss_items[0]["description"] and "&amp;" not in _rss_items[0]["description"]
+      and _rss_items[0]["published_at"] is not None)
+_rss.requests.get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+try:
+    _rss_fail = _rss.fetch_items("CoinDesk", "https://x/rss", 5.0)
+finally:
+    _rss.requests.get = _rss_orig_get
+check("RSS-2 요청 실패는 조용히 빈 목록", _rss_fail == [])
+
+_rss_uni = [{"symbol": "TRUMP", "name": "Official Trump"}, {"symbol": "XRP", "name": "XRP"},
+            {"symbol": "BTC", "name": "Bitcoin"}, {"symbol": "SOL", "name": "Solana"},
+            {"symbol": "ETH", "name": "Ethereum"}]
+_rss_known = [u["symbol"] for u in _rss_uni]
+_rss_idx = _np_rss.build_name_index(_rss_uni)
+check("RSS-3 제목 기준 코인 판정 — 'Opposite of Trump' 는 TRUMP 아님 · 본문 XRP 언급은 무시",
+      _rc_rss._rss_symbol("Newsom signs memecoin ban and calls it 'The Opposite of Trump'",
+                          "The California governor ...", _rss_known, _rss_idx) is None
+      and _rc_rss._rss_symbol("Bitcoin ETFs draw $2.4B in biggest inflow week",
+                              "Flows into XRP funds also rose.", _rss_known, _rss_idx) == "BTC"
+      and _rc_rss._rss_symbol("Solana ETFs draw record $188 million", "", _rss_known, _rss_idx) == "SOL"
+      and _rc_rss._rss_symbol("Hacker swaps ETH via THORChain", "", _rss_known, _rss_idx) == "ETH")
+check("RSS-4 브리핑 머리줄 — RSS 매체는 '@' 없이, 텔레그램 채널은 '@' 유지",
+      "· CoinDesk" in _mb_rss._item_header("SOL", "CoinDesk")
+      and "@CoinDesk" not in _mb_rss._item_header("SOL", "CoinDesk")
+      and "· @BitcoinBullets" in _mb_rss._item_header("BTC", "BitcoinBullets"))
+check("RSS-5 뉴스 0건 안내 줄 32칸 이내",
+      _mb_rss._display_width(_mb_rss._NO_NEWS_LINE) <= 32)
+
+# RSS 미리보기에서 찾은 해석 결함 (2026-09-29)
+_mv_t = ("Bitcoin falls to $83,000 while altcoins unwind Friday's rally\n"
+         "Bitcoin fell 1.7% to $83,000, though the CoinDesk 100 dropped 2.6%.")
+_mv_p = _np_rss.parse(_mv_t)
+_mv_c = _np_rss.compose(_mv_p, "BTC", _mv_t, "", {"chg24": -0.8, "cur_usd": 83500})
+check("RSS-6 'falls to $83,000'(이미 일어난 이동)은 목표가 아님 → '$83,000 도달'",
+      "목표" not in _np_rss.summary_line(_mv_p, _mv_t) and "도달" in _np_rss.summary_line(_mv_p, _mv_t)
+      and _mv_c and "목표" not in (_mv_c.get("context") or "")
+      and not any("향해" in s for s in _mv_c["detail"]))
+check("RSS-6b 저항·지지 기사 제목은 종전대로('저항 $0.1000')",
+      "저항 $0.1000" in _np_rss.summary_line(
+          _np_rss.parse("Dogecoin (DOGE) Faces Strong Resistance at $0.1000\nDOGE price is testing."),
+          "x"))
+check("RSS-7 'Scammers steal $2M in ETH' 는 해킹(탈취) — 업그레이드 🟢 아님",
+      (_np_rss.classify_event("Scammers steal $2M in ETH as fake GIWA network fools DYORSWAP")
+       or {}).get("type") == "hack")
+check("RSS-8 목표가 토큰 끝 쉼표 제거('$83,000,' → '$83,000')",
+      _np_rss._norm_level("$83,000,") == "$83,000")
+
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")
 print(f"{'='*40}")

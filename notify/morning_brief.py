@@ -176,7 +176,8 @@ _MACRO_LOOKAHEAD_DAYS = 7
 # ── 알림량 A안 (2026-09-13) 브리핑 흡수 블록 상한 ────────────────────
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
 _TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
-_NEWS_BLOCK_MAX = 12         # 📰 주요 뉴스 — 뉴스 상한(12/일, 09-28 5→12)과 동수
+_NO_NEWS_LINE = "📰 새 뉴스 없음 (조건 통과 0건)"   # 32칸 — 뉴스 0건인 날 첫 통 끝 안내(09-29)
+_NEWS_BLOCK_MAX = 12        # 📰 주요 뉴스 — 뉴스 상한(12/일, 09-28 5→12)과 동수
 # 큐에서 꺼낼 배수 (2026-09-17). 렌더 직전 2차 필터(_is_queued_noise)가 걸러내는
 # 만큼을 채우려면 상한보다 넉넉히 꺼내야 한다 — 딱 5건만 꺼내면 그중 3건이
 # 노이즈일 때 2건만 실린다. 3배면 실측 노이즈 비율(약 절반)을 충분히 흡수한다.
@@ -714,7 +715,9 @@ def _price_ctx(symbols: list, timeout: float, kimchi=None) -> dict:
 
 def _item_header(sym: str, ch: str) -> str:
     """항목 머리줄. 소비 가드·분할이 이 줄의 머리("   <b>")로 항목 경계를 센다."""
-    ch_part = f" · @{html.escape(ch)}" if ch else ""
+    # RSS 피드(09-29 신설)는 텔레그램 채널이 아니라 '@' 없이 매체명만("· CoinDesk").
+    _rss_names = {str(f[0]) for f in (settings.get("rss_news_feeds") or []) if f}
+    ch_part = (f" · {html.escape(ch)}" if ch in _rss_names else f" · @{html.escape(ch)}") if ch else ""
     label = "🌐 시장" if sym == news_parse.MARKET_SYMBOL else html.escape(sym or "?")
     return f"{_NEWS_INDENT}<b>{label}</b>{ch_part}"
 
@@ -1322,6 +1325,9 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
         # 소비한다(RV2-N8 "싣지 않고 소비만"). 종전엔 [] 로 버려 이런 행이 큐 머리에 영구히
         # 남았다 — 꺼낼 수 있는 15건이 전부 그런 행이면 새 뉴스가 영영 안 꺼내진다.
         # 뉴스 블록 조립이 예외로 죽은 경우는 _assemble 이 consumed_ids 를 비운다.
+        # 2026-09-29 대표 결정: 뉴스 0건인 날은 첫 메시지 끝에 한 줄 안내 — 두 번째 메시지가
+        # 없는 게 오류로 보이지 않게(09-29 "왜 뉴스 메시지는 안 와?").
+        lines = list(lines) + [_SEP, _NO_NEWS_LINE]
         return [("\n".join(_fit_telegram(lines, -1)), list(consumed_ids))]
     # 2026-09-28 대표 요청: 뉴스는 **항상** 두 번째 메시지로 뺀다(한 통에 들어가도) — 시장환경
     # 요약과 코인별 뉴스를 한 말풍선에 몰지 않고, 뉴스 항목 수를 늘려도 첫 통이 길어지지 않게.

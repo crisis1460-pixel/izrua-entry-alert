@@ -174,6 +174,8 @@ sent_log.clear()
 check("M1 창 안 첫 회차는 발송 ok",
       morning_brief.maybe_send_brief(TEST_DB, now=AT_9) == "ok" and len(sent_log) == 1)
 check("M1b 성공 시 오늘 날짜 마킹", get_brief_meta() == TODAY)
+check("M1c 뉴스 0건인 날은 첫 통 끝에 안내 줄(09-29 대표 결정)",
+      sent_log and "새 뉴스 없음" in sent_log[0])
 
 check("M2 같은 날 두 번째 회차는 skipped(재발송 없음)",
       morning_brief.maybe_send_brief(TEST_DB, now=AT_9 + 120) == "skipped"

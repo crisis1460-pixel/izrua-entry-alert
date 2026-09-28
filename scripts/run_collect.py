@@ -380,6 +380,74 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
 
 
 # ── 텔레그램 공개채널 수집 (2026-07-27 기획 카드 #14) ──────────────────
+def _rss_symbol(title: str, desc: str, known: list, name_idx: dict):
+    """기사 1건의 주제 코인 — 제목 기준(2026-09-29). 기사 산문은 여러 코인을 지나가며 언급하므로
+    텔레그램 글처럼 본문 전체에서 대소문자 무시로 티커를 찾으면 오탐이 난다(실측: "The Opposite
+    of Trump" → TRUMP, "Bitcoin ETFs draw $2.4B …" 본문의 XRP 언급 → XRP).
+      ① 제목의 **대문자 그대로** 티커($ 허용)가 정확히 1개 → 그 코인
+      ② 아니면 이름 매칭(match_coin_name: 제목 등장 또는 본문 2회↑, 불용어·'-based' 제외)
+      ③ 아니면 None → 호출부가 🌐 시장 뉴스 판정."""
+    import re as _re
+    from notify import news_brief as _nb, news_parse as _np
+    found = set()
+    for sym in known:
+        if not sym or len(sym) < 2 or sym.upper() in _nb._AMBIGUOUS_SYMBOLS:
+            continue
+        if _re.search(r"(?<![A-Za-z0-9$])\$?" + _re.escape(sym.upper()) + r"(?![A-Za-z0-9])", title):
+            found.add(sym)
+    if len(found) == 1:
+        return next(iter(found))
+    if len(found) > 1:
+        return None
+    return _np.match_coin_name(f"{title}\n{desc}", name_idx)
+
+
+def _collect_rss_news(conn, universe: list, timeout: float) -> tuple:
+    """영문 뉴스 RSS → 뉴스 큐 (2026-09-29 대표 승인). 반환 (항목 수, 적재 수).
+
+    뉴스 전용 — 셋업(진입가) 파싱은 하지 않는다. 티커가 본문에 있으면 코인 뉴스 경로
+    (maybe_send_news_brief), 없으면 이름 매칭·🌐 시장 경로(maybe_send_unmatched_news).
+    두 경로 모두 48h 신선도·업비트 유니버스·상한(채널=피드 이름)·쿨다운이 그대로 걸린다."""
+    if not settings.get("rss_news_enabled") or not settings.get("news_alert_enabled"):
+        return 0, 0
+    from collector import rss_source
+    feeds = settings.get("rss_news_feeds") or []
+    known = [u["symbol"] for u in universe]
+    from notify import news_parse as _np
+    name_idx = _np.build_name_index(universe)
+    max_age = settings.get("news_max_age_hours") or None
+    n_items = n_queued = 0
+    for feed in feeds:
+        try:
+            name, url = feed[0], feed[1]
+        except (TypeError, IndexError):
+            continue
+        items = rss_source.fetch_items(name, url, timeout, max_age_hours=max_age,
+                                       max_items=settings.get("rss_news_max_items") or 30)
+        n_items += len(items)
+        for it in items:
+            try:
+                symbol = _rss_symbol(it.get("title") or "", it.get("description") or "",
+                                     known, name_idx)
+                if symbol:
+                    # 해킹 기사는 코인이 피해 주체가 아닌 경우가 대부분이다("hacker swaps ETH via
+                    # THORChain" = Bitget 해킹) — "이더리움에서 해킹 피해"로 쓰지 않게 🌐 시장으로 보낸다.
+                    _ev = _np.classify_event(f"{it.get('title') or ''}\n{it.get('description') or ''}")
+                    if _ev and _ev.get("type") == "hack":
+                        symbol = None
+                if not symbol:
+                    res = news_brief._maybe_market_news(conn, it, name)
+                    n_queued += 1 if res in ("queued", "ok") else 0
+                    continue
+                res = news_brief.maybe_send_news_brief(conn, it, symbol, name)
+                n_queued += 1 if res in ("queued", "ok") else 0
+            except Exception as e:  # noqa: BLE001 - 항목 1건 격리
+                logger.warning("[rss] %s 항목 처리 실패(무시): %s", name, e)
+        conn.commit()
+    logger.info("[rss] 피드 %d개: 기사 %d건 → 뉴스 적재 %d건", len(feeds), n_items, n_queued)
+    return n_items, n_queued
+
+
 def _collect_telegram(conn, universe: list, author_stats: dict, timeout: float,
                       max_age_hours, skip_counts: dict = None):
     """공개채널 화이트리스트를 돌며 글을 수집·저장. 반환 (글수, 셋업수, 신규수).
@@ -719,6 +787,13 @@ def main() -> int:
         n_posts += tg_posts
         n_setup += tg_setup
         n_new += tg_new
+
+        # ── 뉴스 전용 입력원: 영문 RSS (2026-09-29) — 셋업 수집과 무관, 실패 격리 ──
+        try:
+            _collect_rss_news(conn, universe, timeout)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[rss] 뉴스 수집 실패(무시): %s", e)
+        conn.commit()
         n_short_skipped = skip_counts.get("short", 0)
 
         # ── 뒷정리 구간 ─────────────────────────────────────────────────

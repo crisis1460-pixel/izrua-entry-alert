@@ -185,6 +185,16 @@ SETTINGS = {
     "news_max_age_hours": 48,
     # 항목 설명 문장 수 상한(최소 2). 사용자 요청 "내용별 문장을 좀 길게" (2026-09-27).
     "news_detail_sentences": 3,
+    # 영문 뉴스 RSS 입력원 (2026-09-29 대표 승인 — 09-29 브리핑 뉴스 0건: 텔레그램 4채널 글이
+    # 시그널·홍보·미상장 코인 위주라 조건 통과 0). 뉴스 전용(셋업 수집 아님), 가입·키 없는 공개
+    # 피드. 하류는 텔레그램 뉴스와 같은 news_brief 게이트·상한(채널=피드 이름 단위).
+    "rss_news_enabled": True,
+    "rss_news_feeds": [
+        ["CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"],
+        ["Cointelegraph", "https://cointelegraph.com/rss"],
+        ["Decrypt", "https://decrypt.co/feed"],
+    ],
+    "rss_news_max_items": 30,     # 피드당 최신순 상한
 
     # 알림 트리거
     "preview_band_pct": 1.0,             # entry 대비 이 % 이내 접근 시 예고

@@ -173,7 +173,10 @@ NOISE_RX = re.compile(
 # ── 사실형 이벤트 12유형 (기획안 §4-3 표 그대로) ────────────────────────
 # (key, 트리거, 라벨, 기본 방향, 시간축, 등급)
 _TYPES = [
-    ("hack", r"\bhack(?:ed|s|er|ers)?\b|\bexploit(?:ed|s)?\b|\bdrain(?:ed|s)?\b|\bstolen\b|\bheist\b|\bbreach", "해킹", -1, "단기", "H"),
+    # 09-29: "Scammers steal $2M in ETH …" 가 트리거에 안 걸려 '업그레이드'(mainnet)로 🟢 가 됐다 —
+    # steal/stole/theft 추가(사기 탈취도 자산 탈취 사실).
+    ("hack", r"\bhack(?:ed|s|er|ers)?\b|\bexploit(?:ed|s)?\b|\bdrain(?:ed|s)?\b|\bstolen\b|\bheist\b|\bbreach|"
+             r"\bsteal(?:s|ing)?\b|\bstole\b|\btheft\b", "해킹", -1, "단기", "H"),
     ("etf", r"\bETFs?\b", "ETF", 0, "단기", "H"),
     ("reg", r"\bSEC\b|\bCFTC\b|\bclarity act\b|\bact\b.{0,20}\bsenate|\bsenate\b|\bbill\b|\bregulat\w*|"
             r"\blawsuit\b|\bsu(?:e|es|ed|ing)\b|\bcourt\b|\bruling\b|\binjunction\b|\bexemption\b", "규제", 0, "중장기", "H"),
@@ -401,6 +404,21 @@ PATTERNS = [
     (re.compile(r"(?:hold|bounc|retest)\w*[^.\n]{0,30}support|support[^.\n]{0,20}holds?", re.I), "지지 확인"),
     (re.compile(r"balance|range|rectangle|sideways", re.I), "박스권"),
 ]
+# 이미 일어난 가격 이동("falls to $83,000", "rose to $4,000")의 "to $X" 는 목표가 아니라 현재 수준이다
+# (09-29 RSS 미리보기: "Bitcoin falls to $83,000 while altcoins unwind" → "목표 $83,000" 오표기).
+_MOVED_VERB = (r"\b(?:falls?|fell|drops?|dropped|slides?|slid|slips?|slipped|sinks?|sank|plunges?|plunged|"
+               r"tumbles?|tumbled|dips?|dipped|declines?|declined|rises?|rose|climbs?|climbed|jumps?|jumped|"
+               r"surges?|surged|soars?|soared|rallies|rallied|spikes?|spiked|trades?|traded|sits?|sat|"
+               r"hovers?|hovered)\s+(?:back\s+)?(?:(?:by\s+)?[\d.,]+%\s+)?"
+               r"(?:under\s+|below\s+|above\s+|near\s+)?to")
+_MOVED_TO_RX = re.compile(_MOVED_VERB + r"\s*$", re.I)
+
+
+def _is_moved_to(text: str, pos: int) -> bool:
+    """text[pos] 가 'to $X' 의 't' 일 때, 앞말이 이미 일어난 이동 동사면 True."""
+    return bool(_MOVED_TO_RX.search(text[max(0, pos - 30):pos + 2]))
+
+
 _TARGET_RX = [
     (re.compile(r"(\$?[\d.,]+)\s*-\s*(\$?[\d.,]+)\s+is the (\w+) target", re.I), "range"),
     (re.compile(r"first target should be around (\d+%)", re.I), "pct"),
@@ -416,7 +434,8 @@ _DOLLAR_LEVEL_RX = re.compile(r"\$\d[\d,]*(?:\.\d+)?(?:\s?K\b)?" + _NO_UNIT, re.
 
 def _norm_level(tok: str) -> str:
     """"$150K" → "$150,000", "$1.5k" → "$1,500". 그 외는 그대로."""
-    t = (tok or "").strip()
+    # 문장 속 쉼표("to $83,000, …")가 딸려 오면 떼어 낸다(09-29 "$83,000,(-0.7%)").
+    t = (tok or "").strip().rstrip(",")
     m = re.fullmatch(r"\$(\d[\d,]*(?:\.\d+)?)\s?[Kk]", t)
     if not m:
         return t
@@ -452,7 +471,14 @@ def parse_call(text: str) -> dict:
     pat = next((lab for rx, lab in PATTERNS if rx.search(body)), "")
     target = ""
     for rx, kind in _TARGET_RX:
-        m = rx.search(body)
+        m = None
+        for mm in rx.finditer(body):
+            # "falls to $83,000" 류(이미 일어난 이동)는 목표가 아니다(09-29).
+            if kind == "level" and mm.group(0).lower().startswith("to") \
+                    and _is_moved_to(body, mm.start()):
+                continue
+            m = mm
+            break
         if not m:
             continue
         if kind == "range":
@@ -634,6 +660,9 @@ def parse(text: str) -> dict:
                 c["levels"] = {"support": lv}
             elif re.search(r"resistance|ceiling", title, re.I):
                 c["levels"] = {"resistance": lv}
+            elif re.search(_MOVED_VERB + r"\s*\$?" + re.escape(lv.lstrip("$")), title, re.I):
+                # 제목의 가격이 "falls to $83,000" 처럼 이미 도달한 수준이면 목표가 아니다(09-29).
+                c["title_moved"] = True
             else:
                 c["target"] = c["target"] or lv
         return {"kind": "call", "title": title, "source": "기사", **c}
@@ -1051,6 +1080,8 @@ def summary_line(p: dict, text: str) -> str:
                 lvs = f" · 지지 {tl}"
             elif tl and lv.get("resistance") == tl:
                 lvs = f" · 저항 {tl}"
+            elif tl and p.get("title_moved"):
+                lvs = f" · {tl} 도달"
             elif tl:
                 lvs = f" · 목표 {tl}"
             else:
@@ -1370,6 +1401,8 @@ def _call_sentences(p: dict, sym: str, summary_ko: str) -> list:
             out.append(f"분석 기사는 {josa(name, '이/가')} {tl} 지지선 위에서 버티고 있다고 봤습니다.")
         elif tl and lv.get("resistance") == tl:
             out.append(f"분석 기사는 {josa(name, '이/가')} {tl} 저항선에 부딪혀 있다고 봤습니다.")
+        elif tl and p.get("title_moved"):
+            out.append(f"기사는 {josa(name, '이/가')} {tl} 부근까지 움직였다고 전했습니다.")
         elif tl:
             out.append(f"분석 기사는 {josa(name, '이/가')} {tl} 부근을 향해 움직이고 있다고 봤습니다.")
         else:
