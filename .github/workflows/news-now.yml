@@ -1,0 +1,30 @@
+# 수시 뉴스 발송 — 대표 요청 시 수동 실행 전용 (2026-09-29).
+#
+# 모닝 브리핑과 같은 뉴스 경로(텔레그램 채널 + 영문 RSS → 게이트·상한 → 렌더)를 **운영 DB 임시
+# 복사본**에서 돌려 뉴스 메시지만 그룹에 보낸다(scripts/send_news_now.py). data/ 커밋백 없음 —
+# 라이터는 price-check.yml 하나뿐이라는 불변식 유지. 내일 브리핑에 같은 기사가 다시 실릴 수 있다.
+name: news-now
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 수시 뉴스 발송
+        env:
+          PYTHONIOENCODING: utf-8
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/send_news_now.py --send
