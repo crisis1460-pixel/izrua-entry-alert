@@ -2840,6 +2840,36 @@ check("RSS-7 'Scammers steal $2M in ETH' 는 해킹(탈취) — 업그레이드 
 check("RSS-8 목표가 토큰 끝 쉼표 제거('$83,000,' → '$83,000')",
       _np_rss._norm_level("$83,000,") == "$83,000")
 
+# ── DBG3: 09-29 금일 개발분 리뷰 회귀 ──
+from notify import news_parse as _n3, ko_terms as _k3
+from scripts import run_collect as _rc3
+_sl3 = lambda t: _n3.summary_line(_n3.parse(t), t)
+check("DBG3-1 전망('could fall to'·'will climb to')은 '도달' 아님",
+      "도달" not in _sl3("Bitcoin could fall to $80,000 key level, analyst warns\nBTC may test support.")
+      and "도달" not in _sl3("Solana will climb to $300 mark, says analyst\nSOL rally continues."))
+check("DBG3-2 'falls to $80K'·'drops under $83K'(이미 일어난 이동)은 목표 아님 → 도달",
+      "$80,000 도달" in _sl3("Bitcoin falls to $80K as altcoins unwind rally\nBitcoin fell 3% to $80,000.")
+      and "목표" not in _sl3("Bitcoin drops under $83K as liquidity hunting keeps bulls away\nBTC fell."))
+_u3 = [{"symbol": s, "name": n} for s, n in (("ATH", "Aethir"), ("ARK", "Ark"), ("ZK", "ZKsync"),
+                                             ("MLK", "MiL.k"), ("BTC", "Bitcoin"))]
+_k3n = [u["symbol"] for u in _u3]
+_i3 = _n3.build_name_index(_u3)
+check("DBG3-3 RSS 제목 약어(ATH·ARK·ZK·MLK)는 코인으로 잡지 않음",
+      _rc3._rss_symbol("Bitcoin hits new ATH above $130,000", "", _k3n, _i3) == "BTC"
+      and _rc3._rss_symbol("ARK Invest sells $50M of Coinbase shares", "", _k3n, _i3) is None
+      and _rc3._rss_symbol("Ethereum Foundation unveils ZK roadmap", "", _k3n, _i3) is None)
+check("DBG3-4 번역 보정 오탐 없음(패스키 지원·정부 지원 수준·베어스턴스)",
+      _k3.fix_ko_terms("패스키 지원을 추가했다") == "패스키 지원을 추가했다"
+      and _k3.fix_ko_terms("정부 지원 수준") == "정부 지원 수준"
+      and _k3.fix_ko_terms("베어스턴스 사태") == "베어스턴스 사태")
+check("DBG3-5 조사: 괄호 끝 용어·으로/로",
+      _k3.fix_ko_terms("더 낮은 저점을 기록") == "저점 갱신(하락)을 기록"
+      and _k3.fix_ko_terms("주요 지지대로 후퇴") == "핵심 지지선으로 후퇴")
+check("DBG3-6 통계 기사('Crypto theft falls 50% in Q3')는 개별 해킹 사실 아님",
+      (_n3.classify_event("Crypto theft falls 50% in Q3, report says\nLosses dropped to $200M.")
+       or {}).get("type") != "hack"
+      and (_n3.classify_event("Scammers steal $2M in ETH as fake network fools users") or {}).get("type") == "hack")
+
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")
 print(f"{'='*40}")

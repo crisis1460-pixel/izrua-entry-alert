@@ -1995,7 +1995,7 @@ def get_author_self_stats(conn, author: str) -> dict:
             "touched": row["t"] or 0, "untouched_expired": row["e"] or 0,
             # tp_closed (2026-09-28 대표 승인): 🏅 배지 분모 — tp_hits 와 같은 기준(실터치·
             # 비오염)의 종결 건수. "TP도달 94회" 만 보이면 SL 미기재 작성자의 만료 손실 46건이
-            # 가려져 백전백승처럼 읽혔다 → "94/161회".
+            # 가려져 백전백승처럼 읽혔다 → "94/160회".
             "tp_hits": row["th"] or 0, "tp_closed": row["tc"] or 0}
 
 

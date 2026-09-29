@@ -380,6 +380,12 @@ def _ingest_idea(conn, coin: dict, idea: dict, author_stats: dict, timeout: floa
 
 
 # ── 텔레그램 공개채널 수집 (2026-07-27 기획 카드 #14) ──────────────────
+# 기사 제목에 대문자 약어로 흔히 쓰이는 업비트 티커(09-29 리뷰): "new ATH above $130,000"(All-Time
+# High), "ARK Invest", "ZK roadmap"(zero-knowledge), "MLK Day", "AI"·"ID" 등은 _AMBIGUOUS_SYMBOLS 쪽.
+_RSS_ACRONYM_TICKERS = frozenset({"ATH", "ARK", "ZK", "MLK", "CEO", "USD", "ETF", "SEC", "DAO",
+                                  "NFT", "API", "GDP", "CPI", "IPO", "TVL", "OI", "UP"})
+
+
 def _rss_symbol(title: str, desc: str, known: list, name_idx: dict):
     """기사 1건의 주제 코인 — 제목 기준(2026-09-29). 기사 산문은 여러 코인을 지나가며 언급하므로
     텔레그램 글처럼 본문 전체에서 대소문자 무시로 티커를 찾으면 오탐이 난다(실측: "The Opposite
@@ -391,7 +397,8 @@ def _rss_symbol(title: str, desc: str, known: list, name_idx: dict):
     from notify import news_brief as _nb, news_parse as _np
     found = set()
     for sym in known:
-        if not sym or len(sym) < 2 or sym.upper() in _nb._AMBIGUOUS_SYMBOLS:
+        if not sym or len(sym) < 2 or sym.upper() in _nb._AMBIGUOUS_SYMBOLS \
+                or sym.upper() in _RSS_ACRONYM_TICKERS:
             continue
         if _re.search(r"(?<![A-Za-z0-9$])\$?" + _re.escape(sym.upper()) + r"(?![A-Za-z0-9])", title):
             found.add(sym)

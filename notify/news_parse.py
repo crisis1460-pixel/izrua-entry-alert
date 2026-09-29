@@ -262,6 +262,9 @@ _HACK_NEG_RX = re.compile(
     r"\bfalse (?:alarm|reports?|claims?)\b|\bfake (?:hack|reports?|news|claims?)\b|"
     # 09-28 디버깅: "reports of a hack are false"·"hack claims are fake" 어순.
     r"\b(?:claims?|reports?|rumou?rs?)\b[^.\n]{0,30}\b(?:are|were|is|was)\s+(?:false|fake|untrue|baseless)\b|"
+    # 09-29 리뷰: 통계 기사("Crypto theft falls 50% in Q3", "hacks dropped to $200M")는 개별 해킹 사실이 아니다.
+    r"\b(?:thefts?|hacks|exploits|losses)\b[^.\n]{0,25}\b(?:falls?|fell|drop(?:s|ped)?|declin\w*|rises?|rose|"
+    r"plunge\w*|surge\w*|down|up)\b[^.\n]{0,20}(?:\d|%)|\bquarter(?:ly)?\b[^.\n]{0,30}\breport\b|"
     r"\bimpersonat\w*", re.I)
 # ETF 승인·거절·연기(RV2-N4). 자금 흐름 단어가 함께 있으면 흐름 기사로 둔다.
 _ETF_FLOW_WORD_RX = re.compile(r"\binflows?\b|\boutflows?\b|\bnet-?flows?\b|\bflows?\b", re.I)
@@ -406,12 +409,17 @@ PATTERNS = [
 ]
 # 이미 일어난 가격 이동("falls to $83,000", "rose to $4,000")의 "to $X" 는 목표가 아니라 현재 수준이다
 # (09-29 RSS 미리보기: "Bitcoin falls to $83,000 while altcoins unwind" → "목표 $83,000" 오표기).
-_MOVED_VERB = (r"\b(?:falls?|fell|drops?|dropped|slides?|slid|slips?|slipped|sinks?|sank|plunges?|plunged|"
-               r"tumbles?|tumbled|dips?|dipped|declines?|declined|rises?|rose|climbs?|climbed|jumps?|jumped|"
-               r"surges?|surged|soars?|soared|rallies|rallied|spikes?|spiked|trades?|traded|sits?|sat|"
-               r"hovers?|hovered)\s+(?:back\s+)?(?:(?:by\s+)?[\d.,]+%\s+)?"
-               r"(?:under\s+|below\s+|above\s+|near\s+)?to")
+# 09-29 리뷰: 원형(fall·rise·climb)은 "could fall to $80,000"·"will climb to $300" 같은 **전망**에도
+# 쓰여 '도달'로 오표기됐다 — 3인칭 현재·과거형만 인정한다.
+_MOVED_VERB_WORDS = (r"\b(?:falls|fell|drops|dropped|slides|slid|slips|slipped|sinks|sank|plunges|plunged|"
+                     r"tumbles|tumbled|dips|dipped|declines|declined|rises|rose|climbs|climbed|jumps|jumped|"
+                     r"surges|surged|soars|soared|rallies|rallied|spikes|spiked|trades|traded|sits|sat|"
+                     r"hovers|hovered)\s+(?:back\s+)?(?:(?:by\s+)?[\d.,]+%\s+)?")
+_MOVED_VERB = _MOVED_VERB_WORDS + r"(?:under\s+|below\s+|above\s+|near\s+)?to"
 _MOVED_TO_RX = re.compile(_MOVED_VERB + r"\s*$", re.I)
+# 제목 판정용 — "drops under $83K"(to 없음)·"falls to $80K"(K 표기)도 이동으로 본다(09-29 리뷰).
+_MOVED_TITLE_RX = re.compile(
+    _MOVED_VERB_WORDS + r"(?:(?:under|below|above|near|past)(?:\s+to)?|to)\s*\$?\d", re.I)
 
 
 def _is_moved_to(text: str, pos: int) -> bool:
@@ -660,7 +668,7 @@ def parse(text: str) -> dict:
                 c["levels"] = {"support": lv}
             elif re.search(r"resistance|ceiling", title, re.I):
                 c["levels"] = {"resistance": lv}
-            elif re.search(_MOVED_VERB + r"\s*\$?" + re.escape(lv.lstrip("$")), title, re.I):
+            elif _MOVED_TITLE_RX.search(title):
                 # 제목의 가격이 "falls to $83,000" 처럼 이미 도달한 수준이면 목표가 아니다(09-29).
                 c["title_moved"] = True
             else:

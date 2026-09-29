@@ -1314,8 +1314,8 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
 
     소비 계약: 각 메시지의 consume_ids 는 **그 메시지가 발송에 성공했을 때만** 소비할
     id 다. 실린 항목의 id 는 그 항목이 들어간 메시지에, 판정만 하고 싣지 않은 후보
-    (노이즈·중복·5건 컷)의 id 는 첫 뉴스 메시지에 붙는다 — 뉴스 메시지가 하나도
-    나가지 않으면 그 후보들도 다음 브리핑에서 다시 판정된다.
+    (노이즈·중복·48h 초과·상한 컷)의 id 는 **본문(첫) 메시지**에 붙는다(09-29 — 뉴스 메시지 실패 시
+    재시도 목록의 신선도 면제로 이미 걸러진 글이 실리던 문제 방지).
     시장환경 본문이 단독으로 한도를 넘는 극단은 종전 _fit_telegram 절단(마지막 수단)."""
     consumed_ids: list = []
     lines, news_start, items = _assemble(conn, now, timeout, consumed_ids)
@@ -1356,9 +1356,11 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
     if cur_ids:
         msgs.append(("\n".join(cur_lines), cur_ids))
     # 판정만 한 후보 id 는 첫 뉴스 메시지에 붙인다.
-    if len(msgs) >= 2:
-        t, ids = msgs[1]
-        msgs[1] = (t, ids + extra_ids)
+    # 판정만 하고 싣지 않은 후보(48h 초과·노이즈·레거시)는 **본문 메시지**에 붙인다(09-29 리뷰).
+    # 종전엔 첫 뉴스 메시지에 붙어, 그 메시지가 실패하면 재시도 목록(신선도 면제)에 들어가
+    # 이미 '오래됨'으로 걸러진 글이 다음 날 실렸다. 싣지 않을 글이라 본문과 함께 소비해도 된다.
+    t0, ids0 = msgs[0]
+    msgs[0] = (t0, ids0 + extra_ids)
     for t, _ids in msgs:
         if _tg_len(t) > 4096:
             # 항목 1건이 4096 을 넘는 일은 설계상 없다(설명 3문장). 넘으면 텔레그램

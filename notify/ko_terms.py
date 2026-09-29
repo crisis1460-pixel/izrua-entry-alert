@@ -42,8 +42,9 @@ _RULES = [
     # 세력
     (r"곰(?=[은는이가을를의도과와]|\s|$)", "매도세"),
     (r"황소(?=[은는이가을를의도과와]|\s|$)", "매수세"),
-    (r"베어스", "매도세"),
-    (r"불스(?!\s*아이)", "매수세"),
+    # (?![가-힣]): "베어스턴스"·"불스원" 같은 고유명사 안쪽은 건드리지 않는다(09-29 리뷰).
+    (r"(?<![가-힣])베어스(?![가-힣])", "매도세"),
+    (r"(?<![가-힣])불스(?![가-힣])(?!\s*아이)", "매수세"),
     (r"불리시", "강세"),
     (r"베어리시", "약세"),
     # 스퀴즈·청산
@@ -55,9 +56,11 @@ _RULES = [
     (r"분류\s*수준\s*재검사", "돌파 구간 리테스트"),
     (r"(?:돌파|분류)\s*(?:수준|레벨)", "돌파 구간"),
     (r"재검사", "리테스트"),
-    (r"키\s*지원", "핵심 지지"),
+    # "키 지원"은 앞이 단어 경계일 때만("패스키 지원"·"API 키 지원" 오탐, 09-29 리뷰) + 가격·차트 문맥
+    # ($·숫자가 가까이)일 때만. "지원 수준"은 일반 문장("정부 지원 수준")에 흔해 빼고 레벨·구역만.
+    (r"(?<![가-힣A-Za-z])(?<![A-Za-z]\s)키\s*지원(?=[^.\n]{0,15}[$\d])", "핵심 지지"),
     (r"주요\s*지지대", "핵심 지지선"),
-    (r"지원\s*(?:수준|레벨|구역|영역)", "지지 구간"),
+    (r"(?<![가-힣])지원\s*(?:레벨|구역|영역|존)", "지지 구간"),
     (r"저항\s*(?:수준|레벨)", "저항선"),
     (r"공급\s*(?:구역|영역|존)", "매도 대기 구간"),
     (r"수요\s*(?:구역|영역|존)", "매수 대기 구간"),
@@ -91,21 +94,41 @@ _COMPILED = [(re.compile(p), r) for p, r in _RULES]
 
 # 치환된 용어 뒤 조사 맞춤 — "지지대를"→"지지선를" 같은 어긋남(받침 유무가 바뀜)을 바로잡는다.
 _JOSA_PAIRS = {"은": ("은", "는"), "는": ("은", "는"), "이": ("이", "가"), "가": ("이", "가"),
-               "을": ("을", "를"), "를": ("을", "를"), "과": ("과", "와"), "와": ("과", "와")}
+               "을": ("을", "를"), "를": ("을", "를"), "과": ("과", "와"), "와": ("과", "와"),
+               "으로": ("으로", "로"), "로": ("으로", "로")}
 _TERMS = sorted({r.strip() for _p, r in _RULES if isinstance(r, str) and "\\" not in r},
                 key=len, reverse=True)
-_JOSA_RX = re.compile("(" + "|".join(re.escape(t) for t in _TERMS if t) + r")(은|는|이|가|을|를|과|와)(?![가-힣])")
+_JOSA_RX = re.compile("(" + "|".join(re.escape(t) for t in _TERMS if t)
+                      + r")(으로|로|은|는|이|가|을|를|과|와)(?![가-힣])")
+_HANGUL_RX = re.compile(r"[가-힣]")
+
+
+def _last_hangul(term: str) -> str:
+    """조사 판단용 마지막 한글 글자 — "저점 갱신(하락)" 처럼 괄호·기호로 끝나면 그 안쪽 글자(09-29)."""
+    for ch in reversed(term):
+        if _HANGUL_RX.match(ch):
+            return ch
+    return ""
+
+
+def _batchim_code(ch: str) -> int:
+    code = ord(ch) - 0xAC00 if ch else -1
+    return code % 28 if 0 <= code <= 11171 else 0
 
 
 def _has_batchim(ch: str) -> bool:
-    code = ord(ch) - 0xAC00
-    return 0 <= code <= 11171 and code % 28 != 0
+    return _batchim_code(ch) != 0
 
 
 def _fix_josa(m) -> str:
     term, josa = m.group(1), m.group(2)
     with_b, without_b = _JOSA_PAIRS[josa]
-    return term + (with_b if _has_batchim(term[-1]) else without_b)
+    last = _last_hangul(term)
+    if josa in ("으로", "로"):
+        # 받침이 없거나 ㄹ 받침(종성 8)이면 '로'
+        b = _batchim_code(last)
+        return term + ("로" if b in (0, 8) else "으로")
+    return term + (with_b if _has_batchim(last) else without_b)
 
 
 def fix_ko_terms(text: str) -> str:
