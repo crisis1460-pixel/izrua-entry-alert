@@ -15,9 +15,12 @@
 전 실패 격리 — 이 모듈 실패가 수집·매매 알림을 죽이면 안 된다.
 """
 
+import json
 import logging
+import os
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 from config import settings
@@ -193,6 +196,73 @@ def _is_trade_setup(text: str) -> bool:
 _SESSION_STATE = {"day": None, "global_reached": False, "ch_reached": set()}
 
 
+# ── 시총 순위 게이트 (2026-10-09 대표 요청 "시총 200위 안쪽 애들만") ─────────
+# 순위 출처 = 유니버스 캐시(collector/coingecko.build_universe 가 쓰는 universe_cache_path,
+# {updated_at, universe: [{symbol, rank, ...}]}). rank 는 CoinGecko 시총 순위, top-N 밖이면 None.
+# 수집(maybe_send_news_brief)과 브리핑 렌더(morning_brief._news_items)가 같은 함수를 쓴다.
+_ROOT = Path(__file__).resolve().parent.parent
+_RANK_CACHE: dict = {"key": None, "ranks": None}
+
+
+def load_mcap_ranks() -> Optional[dict]:
+    """{SYMBOL: rank|None}. 캐시 파일이 없거나 읽기 실패면 None(= 판정 불가).
+    파일 경로·수정 시각이 같으면 다시 읽지 않는다(회차당 수십 건 호출)."""
+    raw = settings.get("universe_cache_path") or ""
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute() and not path.exists():
+        path = _ROOT / raw          # 작업 디렉터리가 저장소 루트가 아닐 때
+    try:
+        key = (str(path), os.stat(path).st_mtime)
+    except OSError:
+        return None
+    if _RANK_CACHE["key"] == key:
+        return _RANK_CACHE["ranks"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        uni = data.get("universe") if isinstance(data, dict) else data
+        ranks = {}
+        for c in uni or []:
+            s = str(c.get("symbol") or "").upper()
+            if s:
+                rk = c.get("rank")
+                ranks[s] = int(rk) if isinstance(rk, (int, float)) else None
+    except Exception as e:  # noqa: BLE001 — 순위 판정 불가 → 호출부 fail-open
+        logger.warning("[news] 유니버스 순위 읽기 실패(제한 없이 진행): %s", e)
+        return None
+    _RANK_CACHE["key"], _RANK_CACHE["ranks"] = key, ranks
+    return ranks
+
+
+_STABLECOINS = frozenset({"USDT", "USDC", "USDG", "USD1", "USDE", "USDS", "DAI", "FDUSD", "PYUSD",
+                          "TUSD", "RLUSD", "USDD", "USDP", "GUSD", "EURC", "USDF", "USDX"})
+
+
+def mcap_rank_ok(symbol: str) -> bool:
+    """뉴스 대상 코인인가 — 시총 순위 ≤ news_max_mcap_rank.
+
+    · 🌐 시장(MARKET)·설정 0 → 항상 True.
+    · 캐시 파일 없음/읽기 실패 → True(fail-open — 순위를 모른다고 뉴스를 끊지 않는다).
+    · 캐시에 **없는** 심볼(캐시 갱신 전 신규 상장·테스트 가짜 심볼) → True(판정 불가).
+    · 캐시에 있는데 rank 가 None(CoinGecko top-N 밖) 또는 상한 초과 → False."""
+    try:
+        max_rank = int(settings.get("news_max_mcap_rank") or 0)
+    except (TypeError, ValueError):
+        max_rank = 0
+    sym = (symbol or "").upper()
+    # 스테이블코인은 시세가 움직이지 않아 "상승/하락 재료"가 의미 없다(10-09 미리보기: USDG 🟢 상승 재료).
+    if sym in _STABLECOINS:
+        return False
+    if max_rank <= 0 or not sym or sym == news_parse.MARKET_SYMBOL:
+        return True
+    ranks = load_mcap_ranks()
+    if ranks is None or sym not in ranks:
+        return True
+    rk = ranks[sym]
+    return rk is not None and rk <= max_rank
+
+
 def _reset_session_state(today: str) -> None:
     """새 KST 일 진입 시 세션 캐시 리셋."""
     if _SESSION_STATE["day"] != today:
@@ -286,6 +356,13 @@ def maybe_send_news_brief(conn, post: dict, symbol: str, channel: str,
     # 신선도 가드 (2026-09-27 대표 결정 "48시간 이내") — 티커 경로도 게시 경과 상한.
     if _older_than(post, now, "news_max_age_hours"):
         logger.debug("[news] %s 게시 경과 초과 — 스킵", symbol)
+        return "skipped"
+
+    # 시총 순위 게이트 (2026-10-09 대표 요청 "시총 200위 안쪽만") — 상한 판정보다 **앞**에서
+    # 걸러 순위 밖 코인 글이 하루 상한(전체·채널)과 코인 쿨다운을 먹지 않게 한다.
+    if not mcap_rank_ok(symbol):
+        logger.debug("[news] %s 시총 순위 %s위 밖 — 스킵", symbol,
+                     settings.get("news_max_mcap_rank"))
         return "skipped"
 
     # title+description 결합 (2026-08-17 리뷰): 종전 description 우선 단일 선택은

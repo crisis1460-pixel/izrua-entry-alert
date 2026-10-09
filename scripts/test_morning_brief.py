@@ -23,6 +23,14 @@ from storage import db
 
 TEST_DB = "cache/_test_morning_brief.db"
 settings.SETTINGS["db_path"] = TEST_DB
+# 뉴스 압축 항목(10-09, 기본 ON) — 이 파일의 분할·소비 픽스처는 종전 긴 형식 줄 수 기준이라
+# OFF 로 고정한다. 압축 형식은 끝의 NEWS-CMP-MB* 블록에서 켜서 검증한다.
+settings.SETTINGS["news_compact_enabled"] = False
+# 시총 순위 게이트(10-09)도 끈다 — 실물 유니버스 캐시가 매일 바뀌어 결과가 실행일에 따라 흔들린다.
+# 게이트는 NEWS-CMP-MB* 블록에서 고정 픽스처 유니버스로 켜서 검증한다.
+settings.SETTINGS["news_max_mcap_rank"] = 0
+# 순위 캐시도 없는 파일로 고정(최종 리뷰 10-09) — 실물 data/universe.json 순위에 결과가 기대지 않게.
+settings.SETTINGS["universe_cache_path"] = "cache/_test_mb_no_universe.json"
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 db.init_db(TEST_DB)
@@ -375,6 +383,95 @@ sent_log.clear()
 check("RV2-N8b 뉴스 블록이 없어도 판정한 레거시 행은 발송 성공 후 소비(큐 머리 영구 잔류 방지)",
       morning_brief.maybe_send_brief(TEST_DB, now=AT_9) == "ok" and len(sent_log) == 1
       and "…" not in sent_log[0] and "주요 뉴스" not in sent_log[0] and _unconsumed() == 0)
+
+# ── NEWS-CMP-MB: 압축 항목 + 시총 게이트 + 분할 (2026-10-09 대표 요청) ─────────
+# 30건(200위 안 26 · 250위 2 · rank 없음 2) → 압축 4~5줄 항목 15건(블록 상한) · 순위 밖 4건은 판정만
+# (본문 메시지와 함께 소비) · 한도를 줄여도 항목 경계에서만 나뉜다.
+import json as _json_cmp
+import re as _re_cmp
+import tempfile as _tmp_cmp
+
+_cmp_dir = _tmp_cmp.mkdtemp()
+_cmp_uni = os.path.join(_cmp_dir, "universe.json")
+_cmp_syms = [(f"C{i:02d}", 10 + i) for i in range(26)] + [("OUT1", 250), ("OUT2", 251),
+                                                          ("NONE1", None), ("NONE2", None)]
+with open(_cmp_uni, "w", encoding="utf-8") as _f:
+    _json_cmp.dump({"updated_at": AT_9, "universe": [{"symbol": s, "rank": r} for s, r in _cmp_syms]}, _f)
+_cmp_orig = {k: settings.SETTINGS[k] for k in ("universe_cache_path", "news_max_mcap_rank",
+                                                "news_compact_enabled")}
+settings.SETTINGS.update(universe_cache_path=_cmp_uni, news_max_mcap_rank=200, news_compact_enabled=True)
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+    for i, (sym, _r) in enumerate(_cmp_syms):
+        en = (f"#{sym} Market Analysis\n{sym} is at 1.2345 on the 4h, pulling back from the "
+              f"1.4000 highs and holding above the demand zone.\nBull case: hold above 1.2000 "
+              f"and resume the push toward 1.4000.\nBear case: lose 1.1500 and slide toward 1.0500.")
+        db.queue_news_digest(conn, sym, f"cmpch{i % 7}", f"{sym} 는 1.2345 부근입니다.",
+                             f"https://t.me/cmp/{i}", TODAY, AT_9 - 600 + i,
+                             summary_en=en, posted_at=AT_9 - 3600 + i)
+    conn.commit()
+    _cmp_out_ids = {r[0] for r in conn.execute(
+        "SELECT id FROM news_digest_queue WHERE consumed=0 AND symbol IN ('OUT1','OUT2','NONE1','NONE2')")}
+_orig_max2 = morning_brief._TELEGRAM_MAX_CHARS
+morning_brief._TELEGRAM_MAX_CHARS = 1200
+with db.connect(TEST_DB) as conn:
+    _cmp_msgs = morning_brief.build_brief_messages(conn, AT_9, timeout=1.0)
+morning_brief._TELEGRAM_MAX_CHARS = _orig_max2
+_cmp_news = _cmp_msgs[1:]
+_cmp_items = []           # 메시지별 항목(빈 줄 경계) 목록
+for _t, _ids in _cmp_news:
+    _body = _t.split("\n")[1:]
+    _blk = "\n".join(_body).split("\n\n")
+    _cmp_items.append([b.split("\n") for b in _blk if b])
+_cmp_flat = [it for m in _cmp_items for it in m]
+_cmp_txt = "\n".join(t for t, _ in _cmp_news)
+
+
+def _cmp_w(ln):
+    import html as _h
+    return morning_brief._display_width(_h.unescape(_re_cmp.sub(r"</?b>", "", ln)))
+
+
+check("NEWS-CMP-MB1 압축 ON: 항목 15건(블록 상한) · 항목 2~5줄 · 머리 0열 '<b>' · 하위 정확히 2칸 · 32칸",
+      len(_cmp_flat) == 15 and all(4 <= len(it) <= 5 and it[0].startswith("<b>") for it in _cmp_flat)
+      and all(ln.startswith("  ") and not ln.startswith("   ") for it in _cmp_flat for ln in it[1:])
+      and all(_cmp_w(ln) <= 32 for it in _cmp_flat for ln in it)
+      and all(t.split("\n")[0].startswith("📰 <b>주요 뉴스</b>") for t, _ in _cmp_news))
+check("NEWS-CMP-MB1b 차트 분기 항목은 요약(목표 1.4000·1.0500) 1~2줄 보강 → 4~5줄",
+      all(4 <= len(it) <= 5 and "1.4000" in "".join(it[2:-1]) for it in _cmp_flat))
+check("NEWS-CMP-MB2 시총 게이트: 250위·rank 없음 4건은 안 실리고 본문 메시지 소비 id 로(판정 계약)",
+      all(s not in _cmp_txt for s in ("OUT1", "OUT2", "NONE1", "NONE2"))
+      and _cmp_out_ids <= set(_cmp_msgs[0][1]))
+check("NEWS-CMP-MB3 한도 축소(1200) → 항목 경계에서만 분할 · 메시지마다 한도 이내 · id 수 = 항목 수",
+      len(_cmp_news) >= 2 and all(morning_brief._tg_len(t) <= 1200 for t, _ in _cmp_news)
+      and all(len(ids) == len(its) for (_t, ids), its in zip(_cmp_news, _cmp_items))
+      and all(t.split("\n")[0].startswith("📰") for t, _ in _cmp_news))
+check("NEWS-CMP-MB4 레이아웃 C 차트: 머리 '[시총 N위] 💬 채널 의견' · 키워드는 셋업만 · 요약 '채널:' 인용 · 색 칩 없음",
+      all(_re_cmp.match(r"<b>C\d\d</b> \[시총 \d+위\] 💬 채널 의견$", it[0]) for it in _cmp_flat)
+      and all("위↑" not in "".join(it) and it[2].startswith("  채널") for it in _cmp_flat)
+      and "🟢" not in _cmp_txt and "🔴" not in _cmp_txt)
+_cmp_ranks = [int(_re_cmp.search(r"시총 (\d+)위", it[0]).group(1)) for it in _cmp_flat]
+check("NEWS-CMP-MB6 표시 순서 = 시총 오름차순(메시지 경계를 넘어서도) · 헤더 '(시총순'",
+      _cmp_ranks == sorted(_cmp_ranks) and _cmp_news[0][0].startswith("📰 <b>주요 뉴스</b> (시총순"))
+# 한 통 경로(build_brief → _fit_telegram): 압축 항목은 머리줄 뒤 하위 줄이 여럿 — 길이 방어가
+# **항목 경계**까지 되돌려 반쪽 항목이 남지 않고, 소비 id 수 = 온전히 실린 항목 수(구조 기반 경계).
+with db.connect(TEST_DB) as conn:
+    _cmp_full = morning_brief.build_brief(conn, AT_9, timeout=1.0)   # 한도 안: 전부 실림
+_cmp_body_len = len(_cmp_full.split("📰")[0])
+morning_brief._TELEGRAM_MAX_CHARS = _cmp_body_len + 700
+_cmp_ids1: list = []
+with db.connect(TEST_DB) as conn:
+    _cmp_one = morning_brief.build_brief(conn, AT_9, timeout=1.0, consumed_ids=_cmp_ids1)
+morning_brief._TELEGRAM_MAX_CHARS = _orig_max2
+_cmp_one_news = _cmp_one.split("📰", 1)[1].split("\n")[1:] if "📰" in _cmp_one else []
+_cmp_heads1 = [ln for ln in _cmp_one_news if ln.startswith("<b>")]
+check("NEWS-CMP-MB5 한 통 절단: 항목 경계까지만 남음(마지막 줄 = 꼬리 '24h'/출처) · 소비 id 수 = 실린 항목 수",
+      0 < len(_cmp_heads1) < 15 and _cmp_one_news[-1].startswith("  ") and "@cmpch" in _cmp_one_news[-1]
+      and len(_cmp_ids1) == len(_cmp_heads1))
+settings.SETTINGS.update(_cmp_orig)
+with db.connect(TEST_DB) as conn:
+    conn.execute("UPDATE news_digest_queue SET consumed=1")
+    conn.commit()
 
 # ── X1: run_cycle 편입 — 결과 dict 에 morning_brief 키가 들어간다 ─────────
 from scripts import run_cycle

@@ -177,7 +177,10 @@ _MACRO_LOOKAHEAD_DAYS = 7
 # 실시간 발송을 끈 TP 적중·뉴스를 다음 날 아침 브리핑 1통이 대신 전달한다.
 _TP_BLOCK_MAX_LINES = 8      # 🏁 목표 도달 — 초과분은 "외 N건"
 _NO_NEWS_LINE = "📰 새 뉴스 없음 (조건 통과 0건)"   # 32칸 — 뉴스 0건인 날 첫 통 끝 안내(09-29)
-_NEWS_BLOCK_MAX = 12        # 📰 주요 뉴스 — 뉴스 상한(12/일, 09-28 5→12)과 동수
+# 📰 주요 뉴스 — 뉴스 상한(15/일)과 동수. 09-28 5→12, 10-09 12→15(대표 피드백 "25개는 너무 많으니
+# 건당 내용 보강으로 줄여도 됨" — 압축 항목 4~5줄. 한도를 넘으면 build_brief_messages 가 항목
+# 경계에서 나눈다).
+_NEWS_BLOCK_MAX = 15
 # 큐에서 꺼낼 배수 (2026-09-17). 렌더 직전 2차 필터(_is_queued_noise)가 걸러내는
 # 만큼을 채우려면 상한보다 넉넉히 꺼내야 한다 — 딱 5건만 꺼내면 그중 3건이
 # 노이즈일 때 2건만 실린다. 3배면 실측 노이즈 비율(약 절반)을 충분히 흡수한다.
@@ -719,11 +722,135 @@ def _price_ctx(symbols: list, timeout: float, kimchi=None) -> dict:
     return out
 
 
+def _is_feed(ch: str) -> bool:
+    """RSS 피드 이름인가(09-29 신설) — 텔레그램 채널이 아니라 '@' 없이 매체명만 쓴다."""
+    return bool(ch) and ch in {str(f[0]) for f in (settings.get("rss_news_feeds") or []) if f}
+
+
+def _source_label(ch: str) -> str:
+    """출처 표기(escape 전 평문) — 텔레그램 "@채널", RSS "CoinDesk", 없으면 ""."""
+    if not ch:
+        return ""
+    return ch if _is_feed(ch) else f"@{ch}"
+
+
+# 압축 항목 하위 줄 들여쓰기(2026-10-09 대표 피드백 "기존처럼 행별 시작줄 맞추고 하위내용만
+# 들여쓰기") — 진입 알림("타점" / "  현재: …")과 같은 모양: 머리줄 0열, 하위 줄 2칸.
+_CMP_SUB = "  "
+_CMP_SUMMARY_MAX_LINES = 2
+
+
+def _compact_comp(parsed: dict, sym: str, row: dict, ctx: dict):
+    """news_parse.compact 호출(폭·출처·번역문을 브리핑 규격으로 채워서)."""
+    ch = str(row.get("channel") or "")
+    return news_parse.compact(parsed, sym, row.get("summary_en") or "", ctx,
+                              source=_source_label(ch), is_feed=_is_feed(ch),
+                              avail=_NEWS_WRAP_W - _display_width(_CMP_SUB),
+                              head_avail=_NEWS_WRAP_W, summary_ko=row.get("summary") or "")
+
+
+def _compact_empty(comp) -> bool:
+    """내용 없는 의견 항목("💬 분석 기사 / → 기사: 방향 단정 없음", 숫자 없음)인가 — 싣지 않는다
+    (10-09 대표 요청 "진짜 시세와 관련된 최고 중요내용만"). 후보 단계에서 걸러 블록 상한 자리를
+    차지하지 않게 한다(리뷰 10-09). 판정은 했으니 소비는 본문 메시지와 함께."""
+    if not comp or comp.get("kind") == "fact":
+        return False                       # 사실형은 건너뛰지 않는다
+    call = comp.get("call") or ""
+    summ = " ".join(_compact_summary_lines(comp.get("summary")))
+    if summ.startswith("확인된 사건이 아닌"):
+        # 전망·가정 기사인데 실을 수 있는 요약이 일반 안내문뿐(제목도 2줄에 안 들어감) — 정보 0
+        # (최종 리뷰 10-09: 큐 89·102·125 "전망·가정 기사 / 확인된 사건이 아닌 예상·가정 기사").
+        return True
+    blob = (comp.get("kw") or "") + call + summ
+    # 숫자(레벨·목표·수치)가 하나도 없이 "관망"·"방향 단정 없음"뿐인 의견(큐 119·132 "박스권 / 기사:
+    # 박스권 관망")은 판단 재료가 없다.
+    return not re.search(r"\d", blob) and ("관망" in blob or "방향 단정 없음" in blob)
+
+
+def _compact_summary_lines(cands: list) -> list:
+    """요약 후보 중 하위 들여쓰기(2칸)·32칸으로 접어 **2줄 이내·고아 줄 0** 인 첫 후보의 줄들
+    (escape 전). 하나도 안 맞으면 [] — 자르거나 "…" 를 붙이지 않는다."""
+    avail = _NEWS_WRAP_W - _display_width(_CMP_SUB)
+    for s in cands or []:
+        s = " ".join((s or "").split())
+        if not s:
+            continue
+        # 폭보다 긴 한 어절(글자 단위로 쪼개짐)은 중간 절단과 같아 후보에서 뺀다.
+        if any(_display_width(w) > avail for w in s.split(" ")):
+            continue
+        wrapped = _wrap_indented(s, _NEWS_WRAP_W, _CMP_SUB)
+        if 1 <= len(wrapped) <= _CMP_SUMMARY_MAX_LINES and orphan_lines(wrapped, _CMP_SUB) == 0:
+            return [ln[len(_CMP_SUB):] for ln in wrapped]
+    return []
+
+
+def _rank_tag(sym: str, rank) -> str:
+    """머리줄 순위 표기 — "[시총 N위]" / 🌐 "[전체]" / 순위 모름(fail-open)이면 ""."""
+    if sym == news_parse.MARKET_SYMBOL:
+        return "[전체]"
+    return f"[시총 {int(rank)}위]" if rank else ""
+
+
+def _compact_item_lines(parsed: dict, sym: str, row: dict, ctx: dict, rank=None):
+    """압축 항목 — 2026-10-09 대표 결정 **레이아웃 C**. 4~5줄, 줄마다 32칸 이내.
+
+    ① "<b>SYM</b> [시총 N위] 🟢 상승 재료"  — 0열. 의견은 "💬 채널 의견"/"💬 기사 의견".
+                                             32칸을 넘으면 판정 글자를 빼고 칩만(접지 않는다).
+    ② "  핵심 키워드( · 짧은 이유)"          — 사실은 이유가 들어가면 붙인다. 차트는 셋업 키워드만.
+    ③ "  판단 보강 요약 1~2줄"               — 의견은 "채널:"/"기사:" 인용. 사실은 요약 후보가 하나도
+                                             안 들어가면 이유(_fact_why)로 채워 **항목 모양을 통일**.
+    ④ "  24h ±x% · 출처"
+    폭 맞춤은 평문 기준, escape 는 **맞춘 뒤** 줄마다. 반환 None = 내용 없는 의견(건너뜀),
+    [] = 압축 불가(종전 형식으로 강등)."""
+    comp = _compact_comp(parsed, sym, row, ctx)
+    if not comp:
+        return []
+    if _compact_empty(comp):
+        return None
+    sub_w = _NEWS_WRAP_W - _display_width(_CMP_SUB)
+    # ① 머리줄 — 라벨 + 순위 + 칩 + 판정. 넘치면 칩만.
+    tag = _rank_tag(sym, rank)
+    base = " ".join(x for x in (comp["label"], tag) if x)
+    verdict_full = f"{comp['chip']} {comp['verdict']}"
+    vtxt = verdict_full if _display_width(f"{base} {verdict_full}") <= _NEWS_WRAP_W else comp["chip"]
+    head = f"<b>{html.escape(comp['label'])}</b>" + (f" {html.escape(tag)}" if tag else "") \
+        + f" {html.escape(vtxt)}"
+    # ② 키워드 줄 · ③ 요약
+    summ = _compact_summary_lines(comp.get("summary"))
+    kw = comp["kw"]
+    if comp["kind"] == "fact":
+        whys = comp.get("whys") or []
+        kws0 = (comp.get("kws") or [kw])[0]
+        # 키워드에 이미 든 말은 이유로 다시 붙이지 않는다("연준 금리 동결 · 금리 동결" 방지).
+        whys_all = list(whys)
+        whys = [w for w in whys if w.split(",")[0].strip() not in kws0]
+        if summ:
+            with_why = [f"{kws0} · {w}" for w in whys] + [f"{kw} · {w}" for w in whys]
+            l2 = next((c for c in with_why if _display_width(c) <= sub_w), kw)
+        else:
+            # 요약 후보가 하나도 안 들어가면 이유를 요약 자리로 — 키워드 줄과 중복되지 않게
+            # 키워드 줄엔 이유를 붙이지 않는다(대표 요구: 코인마다 같은 모양).
+            l2 = kw
+            summ = _compact_summary_lines([comp.get("why_full")] + whys + whys_all
+                                          + [comp.get("verdict")])
+    else:
+        l2 = kw
+    subs = [l2] + [s for s in summ if s.strip() != (l2 or "").strip()] + [comp["tail"]]
+    return [head] + [_CMP_SUB + html.escape(ln) for ln in subs if ln]
+
+
+def _is_item_head(line: str) -> bool:
+    """뉴스 블록 안에서 항목 머리줄인가 — 종전 긴 형식("   <b>SYM</b> · @ch")과 압축 형식
+    ("<b>SYM</b> 칩 …", 0열) 둘 다. 하위 줄은 각각 3칸 평문·2칸 들여쓰기라 '<b>' 로 시작하지
+    않는다. 항목 구조((줄들, id) 목록)를 넘길 수 없는 호출(종전 테스트 등)의 폴백 판정용."""
+    return line.startswith(_NEWS_INDENT + "<b>") or line.startswith("<b>")
+
+
 def _item_header(sym: str, ch: str) -> str:
-    """항목 머리줄. 소비 가드·분할이 이 줄의 머리("   <b>")로 항목 경계를 센다."""
+    """항목 머리줄(종전 긴 형식). 항목 경계는 (줄들, id) 구조로 넘기고, 구조가 없는 호출만
+    _is_item_head 가 이 줄의 머리("   <b>")로 센다."""
     # RSS 피드(09-29 신설)는 텔레그램 채널이 아니라 '@' 없이 매체명만("· CoinDesk").
-    _rss_names = {str(f[0]) for f in (settings.get("rss_news_feeds") or []) if f}
-    ch_part = (f" · {html.escape(ch)}" if ch in _rss_names else f" · @{html.escape(ch)}") if ch else ""
+    ch_part = (f" · {html.escape(ch)}" if _is_feed(ch) else f" · @{html.escape(ch)}") if ch else ""
     label = "🌐 시장" if sym == news_parse.MARKET_SYMBOL else html.escape(sym or "?")
     return f"{_NEWS_INDENT}<b>{label}</b>{ch_part}"
 
@@ -879,7 +1006,9 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
     rows = db.get_news_digest(conn, limit=_NEWS_BLOCK_MAX * _NEWS_FETCH_MULT)
     if not rows:
         return None
+    from notify import news_brief as nb   # 시총 순위 게이트(수집 단계와 같은 함수)
     structured = bool(settings.get("news_structured_enabled"))
+    compact = bool(settings.get("news_compact_enabled"))
     market_ok = bool(settings.get("news_market_enabled"))
     try:
         n_sent = int(settings.get("news_detail_sentences") or 3)
@@ -911,6 +1040,12 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
                         r.get("symbol"))
             continue
         sym = r.get("symbol") or ""
+        # 시총 순위 게이트 (2026-10-09 대표 요청 "시총 200위 안쪽만") — 수집 단계(news_brief)와
+        # 같은 판정. 게이트 신설 전에 적재된 큐 잔존분·순위가 밀려난 코인을 여기서 거른다.
+        # 판정한 후보라 소비는 위에서 처리됐다(본문 메시지와 함께 소비 — build_brief_messages).
+        if not nb.mcap_rank_ok(sym):
+            logger.info("[brief] 시총 순위 %s위 밖 — 제외: %s", settings.get("news_max_mcap_rank"), sym)
+            continue
         summary = r.get("summary") or ""
         en = (r.get("summary_en") or "") if structured else ""
         if structured and not en:
@@ -933,6 +1068,10 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
                 # 🌐 시장 항목은 확인된 시장 사실만(RV2-N3·N5) — 적재 뒤 판정 규칙이 바뀌어
                 # 가정·예상 기사로 풀린 옛 MARKET 행은 코인이 없어 실을 자리가 없다.
                 logger.info("[brief] 🌐 시장 사실 아님 — 제외: %s", p.get("title", "")[:40])
+                continue
+            if compact and _compact_empty(_compact_comp(p, sym, r, {})):
+                # 내용 없는 의견 — 블록 상한 자리를 차지하지 않게 후보 단계에서 거른다(리뷰 10-09).
+                logger.info("[brief] 내용 없는 의견 — 제외: %s (%s)", sym, p.get("title", "")[:40])
                 continue
             tier = news_parse.compose(p, sym, en, "", {}, n_sent)["tier"]
             fresh = r.get("posted_at") or r.get("created_at") or 0
@@ -986,10 +1125,36 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
         except Exception as e:  # noqa: BLE001 - 맥락 줄 생략으로 강등
             logger.warning("[brief] 뉴스 가격 맥락 실패: %s", e)
 
+    ranks = {}
+    if compact:
+        # 레이아웃 C(10-09 대표 결정): **어떤 항목을 실을지**는 위 중요도 선택이 정하고, 고른 뒤의
+        # **표시 순서만** 시총 순위 오름차순(1위 먼저)으로 바꾼다. 순위 모름(fail-open)은 순위 있는
+        # 코인 뒤, 🌐 시장은 맨 끝. 같은 그룹 안에서는 선택 순서(중요도)를 유지한다.
+        ranks = nb.load_mcap_ranks() or {}
+
+        def _disp_key(ic):
+            i, c = ic
+            s = str(c["row"].get("symbol") or "").upper()
+            if s == news_parse.MARKET_SYMBOL:
+                return (2, 0, i)
+            rk = ranks.get(s)
+            return (0, rk, i) if rk else (1, 0, i)
+
+        picked = [c for _i, c in sorted(enumerate(picked), key=_disp_key)]
+
     items = []
     for c in picked:
         r = c["row"]
         sym = str(r.get("symbol") or "?")
+        if c["v2"] and compact:
+            # 압축 항목(2026-10-09 레이아웃 C) — 4~5줄. [] 면 아래 종전 긴 형식으로 강등.
+            lines = _compact_item_lines(c["parsed"], sym, r, _item_ctx(ctx_map, sym, r, now),
+                                        rank=ranks.get(sym.upper()))
+            if lines is None:
+                continue   # 내용 없는 의견 — 건너뜀(소비는 본문 메시지와 함께)
+            if lines:
+                items.append((lines, r["id"]))
+                continue
         lines = [_item_header(sym, str(r.get("channel") or ""))]
         if c["v2"]:
             comp = news_parse.compose(c["parsed"], sym, r.get("summary_en") or "",
@@ -1005,9 +1170,16 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
 
     # "외 N건" 은 **아직 안 본 잔여분** 기준. 위에서 소비한 건 이미 처리된 것이라
     # 세면 안 된다(노이즈·컷 탈락까지 '남았다'고 표시되면 숫자가 거짓이 된다).
+    if not items:
+        # 뽑힌 항목이 전부 건너뛰어졌으면 블록 없음(None) — 호출부가 "📰 새 뉴스 없음" 안내를
+        # 붙이고 판정 id 는 본문 메시지와 함께 소비한다(리뷰 10-09: (헤더, []) 면 안내도 뉴스도 없었다).
+        return None
     remain = max(0, db.count_news_digest(conn) - len(consumed_ids))
     head = "📰 <b>주요 뉴스</b>"
-    if remain:
+    if compact:
+        # 레이아웃 C — 표시 순서가 시총순임을 헤더에 밝힌다(잔여 건수는 같은 괄호에).
+        head += f" (시총순 · 외 {remain}건)" if remain else " (시총순)"
+    elif remain:
         head += f" (외 {remain}건)"
     return head, items
 
@@ -1025,7 +1197,7 @@ def _news_lines(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0) -> 
     return out
 
 
-def _fit_telegram(lines: list, news_start: int) -> list:
+def _fit_telegram(lines: list, news_start: int, item_lens: list = None) -> list:
     """전체 길이가 텔레그램 한도를 넘으면 뉴스 줄부터 줄인다 (2026-09-13 A안).
 
     news_start: lines 안에서 뉴스 블록이 시작하는 인덱스(-1 이면 뉴스 없음).
@@ -1053,8 +1225,17 @@ def _fit_telegram(lines: list, news_start: int) -> list:
         # 통째로 빼서 다음 브리핑에 온전히 나오게 한다. 잘림이 실제로 일어난
         # 경우에만 적용한다 — 원래 요약이 비어 헤더만 있는 정상 항목은 건드리지
         # 않는다. (2026-09-14 감사 F1 후속)
-        if trimmed:
-            while len(lines) > news_start + 1 and lines[-1].startswith("   <b>"):
+        if trimmed and item_lens:
+            # 항목 구조가 있으면(10-09) **항목 경계**까지 되돌린다 — 압축 항목은 머리줄 뒤에도
+            # 하위 줄이 여럿이라, 머리줄 문자열만 보면 반쪽 항목이 남을 수 있다.
+            end, keep_to = news_start + 1, news_start + 1
+            for n in item_lens:
+                end += n
+                if end <= len(lines):
+                    keep_to = end
+            lines = lines[:keep_to]
+        elif trimmed:
+            while len(lines) > news_start + 1 and _is_item_head(lines[-1]):
                 lines.pop()
         if len(lines) == news_start + 1:
             # 헤더만 남으면 블록 통째 제거. 헤더 **앞의 구분선**까지 걷어낸다 —
@@ -1286,7 +1467,8 @@ def build_brief(conn, now: float, timeout: float,
     처리한다 — 실패 시 재시도에서 같은 뉴스가 다시 실리게(유실 방지)."""
     consumed_ids = consumed_ids if consumed_ids is not None else []
     lines, news_start, _items = _assemble(conn, now, timeout, consumed_ids)
-    fitted = _fit_telegram(lines, news_start)
+    item_lens = [len(ls) for ls, _rid in _items]
+    fitted = _fit_telegram(lines, news_start, item_lens)
     if consumed_ids:
         # 길이 방어로 뉴스 줄이 잘려 나갔으면 그만큼 소비 처리도 취소한다 —
         # 안 실린 뉴스를 consumed 로 찍으면 영원히 못 본다. 항목 헤더 줄
@@ -1298,8 +1480,16 @@ def build_brief(conn, now: float, timeout: float,
         # 실제로 일어나도 소비 취소가 한 번도 실행되지 않아 안 실린 뉴스가
         # consumed=1 로 영구 소실된다. 가드를 걷고 실린 줄을 무조건 세어 맞춘다
         # (잘리지 않았으면 kept == len(consumed_ids) 라 del 이 no-op).
-        kept = sum(1 for x in fitted[news_start:] if x.startswith("   <b>")) \
-            if news_start >= 0 else 0
+        # 10-09: 항목 수는 (줄들, id) 구조로 센다 — 끝까지 온전히 남은 항목만(압축 항목은 머리줄
+        # 뒤 하위 줄이 여럿이라 머리줄 문자열 세기로는 반쪽 항목도 '실림'이 된다).
+        kept = 0
+        if news_start >= 0:
+            end = news_start + 1
+            for n in item_lens:
+                end += n
+                if end > len(fitted):
+                    break
+                kept += 1
         del consumed_ids[kept:]
     return "\n".join(fitted)
 

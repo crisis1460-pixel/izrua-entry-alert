@@ -19,6 +19,7 @@
 """
 
 import re
+import unicodedata
 from typing import Optional
 
 from notify.ko_terms import fix_ko_terms
@@ -1554,3 +1555,482 @@ def compose(p: dict, sym: str, text_en: str, summary_ko: str = "",
         tier = TIER_CALL
     return {"summary": summary_line(p, text), "detail": [d for d in detail if d],
             "context": context_line(p, sym, ctx), "tier": tier}
+
+
+# ── 압축 항목 (2026-10-09 대표 요청) ─────────────────────────────────
+# "코인별 뉴스 요약설명을 더 함축해서 진짜 시세와 관련된 최고 중요내용만 간결하게 하고 중요핵심
+# 키워드 요약 + 그래서 오른다 내린다? 설명과 같이 핵심만 기재해서 최대한 여러 코인들을 소개".
+# 항목 = 3줄(① 칩 + 핵심 키워드 ② → 그래서 오르나·내리나 ③ 24h 등락 · 출처). 줄마다 **한 줄에
+# 들어가는 후보 중 가장 풍부한 것**을 고른다 — 접지 않는다(접으면 3줄 계약이 깨진다).
+# 방향 색은 종전 원칙 그대로 **사실형에만**(09-27 대표 결정: 논조·의견은 예측력 0 실측).
+# 차트 해석·방향 콜·분석 기사는 "채널:"/"기사:" 로 출처를 밝혀 **인용**하고, 우리 예측처럼
+# 쓰지 않는다. 템플릿 조각만 쓰고 번역문을 자르지 않으므로 "…"·중간 절단이 없다.
+
+COMPACT_CHIP = {1: "🟢", -1: "🔴", 0: "⚪"}
+COMPACT_OPINION = "💬"
+_VERDICT = {1: "상승 재료", -1: "하락 재료", 0: "방향 중립"}
+_EX_KO = {"Upbit": "업비트", "Bithumb": "빗썸", "Binance": "바이낸스", "Coinbase": "코인베이스",
+          "Robinhood": "로빈후드", "Kraken": "크라켄", "Bybit": "바이비트", "OKX": "OKX"}
+_UNLOCK_PCT_RX = re.compile(r"(\d+(?:\.\d+)?)\s?%[^.\n]{0,40}\bsupply\b", re.I)
+_ETF_FILING_RX = re.compile(r"\bfil(?:es|ed|ing)\b|\bS-1\b|\b19b-4\b", re.I)
+_REG_SUIT_RX = re.compile(r"\blawsuits?\b|\bsu(?:es|ed|ing)\b", re.I)
+# 규제 주체(키워드용 짧은 이름) — 위에서부터 먼저 걸린 것.
+_REG_ACTORS = [
+    (re.compile(r"\bSEC\b"), "SEC"),
+    (re.compile(r"\bCFTC\b"), "CFTC"),
+    (re.compile(r"\bEU\b|\bESMA\b|\bMiCA\b|European"), "EU"),
+    (re.compile(r"\bOCC\b"), "OCC"),
+    (re.compile(r"senate|congress|house committee", re.I), "미 의회"),
+    (re.compile(r"\bcourt\b|\bjudge\b|injunction|\bruling\b", re.I), "법원"),
+]
+
+
+def display_width(text: str) -> int:
+    """한글·CJK·이모지 = 2, 나머지 = 1 — morning_brief._display_width 와 같은 기준
+    (순환 import 를 피하려 여기 따로 둔다)."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in (text or ""))
+
+
+def _fit(cands: list, avail: int) -> str:
+    """후보(풍부한 것 → 짧은 것 순) 중 avail 칸에 들어가는 첫 후보. 다 넘치면 마지막 후보를
+    어절 단위로 뒤에서부터 덜어낸다(글자 중간 절단·"…" 없음)."""
+    cands = [c.strip() for c in cands if c and c.strip()]
+    for c in cands:
+        if display_width(c) <= avail:
+            return c
+    if not cands:
+        return ""
+    words = cands[-1].split(" ")
+    while len(words) > 1 and display_width(" ".join(words)) > avail:
+        words.pop()
+        while len(words) > 1 and words[-1] in ("·", ",", "/", "→"):
+            words.pop()
+    out = " ".join(words).rstrip(",·")
+    # 한 어절만 남았는데도 넘치면(29자 넘는 채널명 등) 그 줄 조각은 싣지 않는다 — 폭 계약 우선.
+    return out if display_width(out) <= avail else ""
+
+
+def _is_etf_filing(p: dict, text: str) -> bool:
+    """ETF '신청' 기사인가 — 결정(승인·거절·연기)도 자금 흐름 단어도 없을 때만(리뷰 10-09:
+    "ETFs log $100M inflows, a day after Fidelity's filing update" 가 'ETF 신청'이 되던 문제)."""
+    return bool(not p.get("decision") and _ETF_FILING_RX.search(text or "")
+                and not _ETF_FLOW_WORD_RX.search(text or ""))
+
+
+def _compact_fact_kw(p: dict, text: str) -> list:
+    """① 사실형 핵심 키워드 후보 — "ETF 순유입 $188M"·"해킹 피해 $6M"·"업비트 상장"·"언락 3.2%"."""
+    k, pol = p.get("type"), p.get("pol", 0)
+    amt = p["amounts"][0][0] if p.get("amounts") else ""
+    ev = event_phrase(p, text)
+    extra = ""
+    if k == "listing":
+        ex = _first_cap(r"\b(Binance|Coinbase|Upbit|Bithumb|OKX|Robinhood|Kraken|Bybit)\b", text)
+        if ex:
+            ev = f"{_EX_KO.get(ex, ex)} {'상장폐지' if pol < 0 else '상장'}"
+    elif k == "unlock":
+        m = _UNLOCK_PCT_RX.search(text or "")
+        ev, extra = "언락", (f"{m.group(1)}%" if m else "")
+    elif k == "macro":
+        extra = _bp(text)
+    elif k == "etf" and _is_etf_filing(p, text):
+        ev, amt = "ETF 신청", ""          # 신청 기사의 금액은 투자 계획액이지 자금 흐름이 아니다
+    elif k == "reg" and not re.search(r"clarity", text or "", re.I):
+        actor = next((lab for rx, lab in _REG_ACTORS if rx.search(text or "")), "")
+        if _REG_SUIT_RX.search(text or ""):
+            # 소송 취하·기각(호재 판정, "SEC drops lawsuit against Ripple")은 '소송 해소'(리뷰 10-09).
+            ev = f"{actor} 소송 해소".strip() if pol > 0 else f"{actor} 소송".strip()
+        elif actor and re.search(r"\bapprov", text or "", re.I) and pol > 0:
+            ev = f"{actor} 승인"
+        else:
+            ev = f"{actor or '규제'} " + ("규제 완화" if pol > 0 else ("규제 강화" if pol < 0 else "규제 이슈"))
+            ev = ev.replace("규제 규제", "규제")
+    full = " ".join(x for x in (ev, amt, extra) if x)
+    out = [full, " ".join(x for x in (ev, amt) if x), " ".join(x for x in (ev, extra) if x), ev]
+    if p.get("stale"):
+        out = [f"{x} (회고)" for x in out] + out
+    return out
+
+
+def _compact_fact_why(p: dict, text: str) -> list:
+    """② 사실형 이유 후보(긴 것 → 짧은 것) — _fact_why 의 뜻을 2~4단어로 압축.
+    "→ 상승 재료 · " 가 14칸이라 이유는 15칸 안팎이어야 한 줄에 들어간다."""
+    k, pol = p.get("type"), p.get("pol", 0)
+    if p.get("stale"):
+        return ["회고 기사, 새 재료 아님", "회고 기사"]
+    if k == "hack":
+        return (["시장 위험회피 우려", "시장 위험회피"] if _EXCHANGE_RX.search(text or "")
+                else ["생태계 매도 압력", "매도 압력 우려"])
+    if k == "etf":
+        dec = p.get("decision")
+        if dec:
+            return {"approve": ["기관 자금 통로 열림", "기관 유입 기대"],
+                    "reject": ["기관 유입 기대 후퇴", "기관 유입 지연"],
+                    "delay": ["불확실성 확대"]}[dec]
+        if _is_etf_filing(p, text):
+            return ["승인 전 단계"]
+        return (["기관 현물 매수"] if pol > 0 else
+                (["기관 수요 약화"] if pol < 0 else ["기관 수요 지표"]))
+    if k == "reg":
+        if pol > 0 and _REG_SUIT_RX.search(text or ""):
+            return ["소송 리스크 해소", "소송 부담 해소"]
+        return (["규제 불확실성 감소", "규제 부담 완화"] if pol > 0 else
+                (["규제 불확실성 확대", "규제 부담 확대"] if pol < 0 else ["세부 조건 확인"]))
+    if k == "macro":
+        mv = _fed_move(text)
+        if mv == "인상":
+            return ["위험자산 선호 약화", "위험자산 부담"]
+        if mv == "인하":
+            return ["유동성 확대 기대", "유동성 기대"]
+        if mv == "동결":
+            return ["금리 동결, 관망", "금리 동결"]
+        return (["위험회피 국면"] if pol < 0 else (["위험선호 회복"] if pol > 0 else ["시장 전체 변수"]))
+    if k == "whale":
+        if _DEPOSIT_RX.search(text or ""):
+            return ["거래소 입금, 매도 대기", "매도 대기 물량"]
+        return (["대형 지갑 매수"] if pol > 0 else
+                (["대형 지갑 매도"] if pol < 0 else ["방향 미정 대량 이동", "방향 미정 이동"]))
+    if k == "flow":
+        return (["수요 증가 신호"] if pol > 0 else
+                (["수요 감소 신호"] if pol < 0 else ["유입·유출 혼재"]))
+    if k in ("partner", "product"):
+        return ["중장기 펀더멘털", "중장기 재료"]
+    if k == "inst":
+        return ["중장기 수요 기반", "중장기 수요"]
+    if k == "listing":
+        return ["유동성 소멸"] if pol < 0 else ["신규 수요 유입"]
+    if k == "unlock":
+        return ["유통 물량 증가"]
+    if k == "burn":
+        return ["유통량 감소"]
+    return ["가격 반응 확인"]
+
+
+def _compact_scenario(p: dict, who: str) -> tuple:
+    """차트 분기 글(BitcoinBullets 템플릿) → (키워드 후보, ② 후보)."""
+    tf, price, act = p.get("tf") or "", p.get("price") or "", p.get("action") or ""
+    b, r = p.get("bull") or {}, p.get("bear") or {}
+    up, bt = b.get("trigger", ""), b.get("target", "")
+    dn, rt = r.get("trigger", ""), r.get("target", "")
+    # 강세 트리거가 "hold X"(지키기)면 X 는 지지선이지 저항이 아니다 — 저항 키워드엔 쓰지 않는다
+    # (실측 ETH "hold 2,400 and reclaim 2,600" 이 "저항 2,400" 이 되던 문제).
+    res_lv = up if (up and b.get("verb") != "hold") else ""
+    if act == "지지 시험":
+        core = [f"지지 {dn or price} 시험", "지지 시험"]
+    elif act == "저항 시험":
+        core = [f"저항 {res_lv or price} 시험", "저항 시험"]
+    elif act == "저항에 막힘":
+        core = [f"저항 막혀 {price}" if price else "", "저항에 막힘"]
+    elif act == "돌파":
+        core = [f"{up or price} 돌파 시도", "돌파 시도"]
+    elif act == "되돌림":
+        core = [f"{p['high']} 고점서 되돌림" if p.get("high") else "", f"{price} 되돌림" if price else "",
+                "되돌림"]
+    elif act == "박스권":
+        core = [f"박스권 {dn}~{up}" if (up and dn) else "", "박스권"]
+    elif act == "신고점 갱신":
+        core = [f"신고점 {price}" if price else "", "신고점 갱신"]
+    elif act == "급등":
+        core = [f"급등 {price}" if price else "", "급등"]
+    else:
+        core = [f"{price} 분기점" if price else "", "차트 분기"]
+    core = [c for c in core if c]
+    # 레벨 있는 표현이 우선 — 폭이 모자라면 봉 단위(tf)를 먼저 버리고 레벨은 지킨다.
+    kws = [x for c in core for x in ([f"{tf} {c}", c] if tf else [c])]
+    pre = f"→ {who}:"
+    if up and dn and up == dn:
+        l2 = [f"{pre} {up} 지키면 {bt}, 잃으면 {rt}" if (bt and rt) else "",
+              f"{pre} {up} 지키면 상승, 잃으면 하락", f"{pre} {up} 기준 위↑ 밑↓", f"{pre} 상·하 분기 제시"]
+    elif up and dn:
+        l2 = [f"{pre} {up} 위면 {bt}, {dn} 밑이면 {rt}" if (bt and rt) else "",
+              f"{pre} {up} 위 상승, {dn} 밑 하락", f"{pre} {up} 위↑ {dn} 밑↓", f"{pre} 상·하 분기 제시"]
+    elif up:
+        l2 = [f"{pre} {up} 위면 {bt} 상승 전망" if bt else "", f"{pre} {up} 위면 {bt} 상승" if bt else "",
+              f"{pre} {up} 위면 상승 전망", f"{pre} {up} 위 상승"]
+    elif dn:
+        l2 = [f"{pre} {dn} 밑이면 {rt} 하락 전망" if rt else "", f"{pre} {dn} 밑이면 {rt} 하락" if rt else "",
+              f"{pre} {dn} 밑이면 하락 전망", f"{pre} {dn} 밑 하락"]
+    else:
+        l2 = [f"{pre} 분기 제시"]
+    return kws, l2
+
+
+def _article_move_kw(body: str) -> str:
+    """기사 본문 등락 → "4거래일 +42.86%" / "+42.86%". 없으면 ""."""
+    m = _MOVE_RX.search(body or "")
+    if not m:
+        return ""
+    up = m.group(1).lower() in ("gained", "rose", "risen", "surged", "climbed", "jumped", "rallied")
+    pct = ("+" if up else "-") + m.group(2)
+    sp = _SPAN_RX.search(body or "")
+    if sp:
+        n = _NUM_WORDS.get(sp.group(1).lower(), sp.group(1))
+        unit = _SPAN_KO.get(sp.group(2).lower().rstrip("s"), "")
+        if n.isdigit() and unit:
+            return f"{n}{unit} {pct}"
+    return pct
+
+
+def _compact_call(p: dict, who: str, body: str) -> tuple:
+    """방향 콜·분석 기사 → (키워드 후보, ② 후보). ② 는 반드시 출처(who) 인용."""
+    pre = f"→ {who}:"
+    if p.get("speculative"):
+        return ["전망·가정 기사"], [f"{pre} 미확인 전망·가정", f"{pre} 미확인"]
+    st = p.get("stance") or "관망"
+    tgt, pat, tf = p.get("target") or "", p.get("pattern") or "", p.get("tf") or ""
+    lv = p.get("levels") or {}
+    sup, res = lv.get("support") or "", lv.get("resistance") or ""
+    tl = p.get("title_level") or ""
+    d = {"강세": "상승", "약세": "하락"}.get(st, "")
+    kws, l2 = [], []
+    if p.get("source") == "기사":
+        if tl and sup == tl:
+            kws.append(f"지지 {tl}")
+        elif tl and res == tl:
+            kws.append(f"저항 {tl}")
+        elif tl and p.get("title_moved"):
+            kws.append(f"{tl} 도달")
+        elif tl:
+            kws.append(f"{tl} 향해 이동")
+        kws += [_article_move_kw(body), "분석 기사"]
+        if d:
+            if tl and p.get("title_moved"):
+                l2.append(f"{pre} {tl} 도달 후 {st}")
+            elif tl:
+                l2.append(f"{pre} {tl} 기준 {d} 전망")
+            l2 += [f"{pre} {d} 쪽 전망", f"{pre} {st}"]
+        else:
+            if tl and sup == tl:
+                l2.append(f"{pre} {tl} 지지 여부 주목")
+            elif tl and res == tl:
+                l2.append(f"{pre} {tl} 돌파 여부 주목")
+            elif tl and p.get("title_moved"):
+                l2.append(f"{pre} {tl}까지 이동, 방향 단정 없음")
+                l2.append(f"{pre} {tl}까지 이동")
+            elif tl:
+                l2.append(f"{pre} {tl} 향해 이동 중")
+            l2.append(f"{pre} 방향 단정 없음")
+        return kws, l2
+    lvl = f"저항 {res}" if res else (f"지지 {sup}" if sup else "")
+    if pat and lvl:
+        kws.append(f"{pat} · {lvl}")
+    if pat:
+        kws += ([f"{tf} {pat}"] if tf else []) + [pat]
+    if lvl:
+        kws.append(lvl)
+    kws.append(f"{tf} 차트 의견" if tf else "차트 의견")
+    cond = "조건부 " if p.get("conditional") else ""
+    if d:
+        if tgt:
+            l2 += [f"{pre} {tgt} 목표 {cond}{d} 전망", f"{pre} {tgt} 목표 {d} 전망", f"{pre} {tgt} {d}"]
+        l2 += [f"{pre} {cond}{d} 전망", f"{pre} {d} 전망"]
+    else:
+        if sup and res:
+            l2.append(f"{pre} {sup}~{res} 박스권 관망")
+        if tgt:
+            l2.append(f"{pre} 목표 {tgt} 제시, 방향 관망")
+        l2.append(f"{pre} 박스권 관망" if pat == "박스권" else f"{pre} 방향 관망")
+    return kws, l2
+
+
+def compact(p: dict, sym: str, text_en: str, ctx: Optional[dict] = None, source: str = "",
+            is_feed: bool = False, avail: int = 30, head_avail: Optional[int] = None,
+            summary_ko: str = "") -> Optional[dict]:
+    """압축 항목 1건의 재료(전부 escape 전 평문). 노이즈면 None.
+    줄 조립·줄바꿈·escape 는 호출부(morning_brief._compact_item_lines — 10-09 대표 결정 레이아웃 C).
+
+    반환 키:
+    · label("SYM" / "🌐 시장"), chip(🟢🔴⚪/💬), verdict("상승 재료"…/"채널 의견"·"기사 의견"), kind, who
+    · kw = 핵심 키워드(하위 줄 폭 avail 에 맞춤), kws = 키워드 후보 전체
+    · whys = 사실형 짧은 이유 후보, why_full = 사실형 이유 완결 문장(_fact_why)
+    · call_body = 의견 인용 한 줄("채널: 하락 전망" — 요약 후보가 없을 때의 폴백)
+    · summary = 판단 보강 요약 **후보 목록**(풍부한 것 먼저) — 호출부가 2줄 안에 접히는 첫 후보
+    · tail = "24h ±x% · 출처"
+    head_avail 은 하위 호환용(미사용). source = 화면 표기 출처("@채널"/RSS 매체명)."""
+    kind = p.get("kind")
+    if kind not in ("fact", "scenario", "call"):
+        return None
+    ctx = ctx or {}
+    text = clean(text_en)
+    label = "🌐 시장" if sym == MARKET_SYMBOL else (sym or "?")
+    # 인용 주체는 **출처 종류**로 정한다(최종 리뷰 10-09): RSS 매체 → "기사", 텔레그램 채널 → "채널".
+    # 종전엔 글 모양(기사형 분석)으로 정해 @cryptosignals0rg 글이 "기사 의견"으로 나갔다.
+    who = "기사" if is_feed else "채널"
+    whys, why_full, call_body = [], "", ""
+    if kind == "fact":
+        pol = 0 if p.get("stale") else p.get("pol", 0)
+        chip = COMPACT_CHIP[pol]
+        kws = _compact_fact_kw(p, text)
+        verdict = _VERDICT[pol]
+        whys = _compact_fact_why(p, text)
+        # ETF '신청' 기사엔 종전 이유문("ETF 자금 흐름은 …")이 맞지 않는다 — 짧은 이유("승인 전 단계")로.
+        why_full = "" if (p.get("type") == "etf" and _is_etf_filing(p, text)) else _fact_why(p, text)
+        call = ""
+    else:
+        chip = COMPACT_OPINION
+        verdict = f"{who} 의견"
+        if kind == "scenario":
+            kws, l2 = _compact_scenario(p, who)
+        else:
+            kws, l2 = _compact_call(p, who, text)
+        call = _fit(l2, avail)
+        call_body = call[2:].strip() if call.startswith("→ ") else call
+    kws = [k for k in kws if k]
+    kw = _fit(kws, avail)
+    # ③ 24h 등락 · (게시 N일 전) · 출처 — 넘치면 뒤쪽 조각부터 뺀다.
+    chg = ctx.get("chg24")
+    c = (("BTC " if sym == MARKET_SYMBOL else "") + f"24h {chg:+.1f}%") if chg is not None else ""
+    age_h = ctx.get("age_h")
+    age = f"{int(age_h // 24)}일 전" if (age_h is not None and age_h >= 24) else ""
+    # 🌐 은 "BTC 24h" 라 4칸 길다 — 출처를 살리려 "BTC ±x%"(24h 생략) 후보를 하나 더 둔다.
+    c_short = f"BTC {chg:+.1f}%" if (chg is not None and sym == MARKET_SYMBOL) else ""
+    tail = _fit([" · ".join(x for x in (c, age, source) if x),
+                 " · ".join(x for x in (c, source) if x),
+                 " · ".join(x for x in (c_short, source) if x) if c_short else "",
+                 " · ".join(x for x in (c, age) if x), c, source], avail)
+    summ = _compact_summary(p, sym, text, summary_ko, who)
+    if kind == "call" and call_body and not p.get("speculative"):
+        # 방향 콜은 요약에 방향("채널: 하락 전망")을 함께 — 레이아웃 C 에서 ② 판정줄이 없어졌다.
+        head_c = call_body
+        merged = [f"{head_c}, {s.split(': ', 1)[1]}" for s in summ
+                  if s.startswith(f"{who}: ") and ": " in s]
+        summ = merged + [head_c] + summ
+    elif kind == "scenario" and call_body:
+        summ = summ + [call_body]          # 분기 문장이 하나도 안 들어갈 때만 쓰이는 폴백
+    # 키워드 줄에 이미 있는 근거(패턴)는 요약에서 뺀다("헤드앤숄더" / "채널: 하락 전망, 근거 헤드앤숄더").
+    pat = p.get("pattern") or ""
+    if kind == "call" and pat and pat in kw:
+        def _drop_pat(s: str) -> str:
+            s = s.replace(f"근거 {pat}", "")
+            s = re.sub(r",\s*,", ",", s)            # 가운데에서 빠지면 쉼표 겹침 정리
+            s = re.sub(r":\s*,\s*", ": ", s)        # "채널: , 목표 …" → "채널: 목표 …"
+            return s.strip().rstrip(",").strip()
+        summ = [_drop_pat(s) for s in summ]
+        summ = [s for s in summ if s.strip() not in (f"{who}:", f"{who}")]
+    # 키워드 줄을 그대로 되풀이하는 후보는 뺀다(대표 요청 — 줄 사이 같은 말 반복 금지).
+    summ = [s for s in summ if s and s.strip() not in kws]
+    seen: set = set()
+    summ = [s for s in summ if not (s in seen or seen.add(s))]
+    return {"label": label, "chip": chip, "verdict": verdict, "kind": kind, "who": who,
+            "kw": kw, "kws": kws, "whys": whys, "why_full": why_full, "call_body": call_body,
+            "call": call, "summary": summ, "tail": tail}
+
+
+def _ko_details(summary_ko: str) -> list:
+    """번역문 본문 문장(제목 제외, 완결 문장만) — 차트 용어 직역 보정 후."""
+    try:
+        return [s.strip() for s in ko_sentences(fix_ko_terms(summary_ko or "")) if s.strip()]
+    except Exception:  # noqa: BLE001 — 보조 재료라 실패는 생략
+        return []
+
+
+# 번역 제목 압축(10-09 레이아웃 C) — 뜻이 바뀌지 않는 **안전한** 줄임만: 괄호 보충 삭제,
+# "~ 규모의" 삭제, 서술 어미 → 명사형, 흔한 장황 표현 치환. 수치·주체가 사라지면 쓰지 않는다.
+_KO_TITLE_SUBS = [
+    (re.compile(r"\s*\([^)]*\)"), ""),
+    (re.compile(r"\s*규모의\s+"), " "),
+    (re.compile(r"승인되지 않은"), "미승인"),
+    (re.compile(r"^(?:속보|단독|BREAKING|JUST IN)\s*[:：]\s*", re.I), ""),
+    (re.compile(r"(?:했습|됐습|되었습|하였습|합|됩|입)니다\.?$"), ""),
+    (re.compile(r"(?:하고|하며)\s+있습니다\.?$|있습니다\.?$"), ""),
+]
+
+
+def _condense_ko_title(kt: str) -> str:
+    """번역 제목 → 압축 제목. 원문 수치가 압축 뒤에도 남아 있어야 한다(없으면 "")."""
+    if not kt:
+        return ""
+    s = fix_ko_terms(kt)
+    for rx, rep in _KO_TITLE_SUBS:
+        s = rx.sub(rep, s)
+    s = " ".join(s.split()).strip(" ,·.-")
+    if not s or s == kt.strip().rstrip("."):
+        return s if s and len(re.findall(r"[가-힣]", s)) >= 2 else ""
+    nums_before = set(re.findall(r"\d[\d,.]*", re.sub(r"\([^)]*\)", "", kt)))
+    nums_after = set(re.findall(r"\d[\d,.]*", s))
+    if not nums_before <= nums_after or len(re.findall(r"[가-힣]", s)) < 2:
+        return ""
+    return s
+
+
+def _compact_summary(p: dict, sym: str, text: str, summary_ko: str, who: str) -> list:
+    """③ 판단 보강 요약 후보(2026-10-09 대표 피드백 "유저가 사고 파는데 있어 판단에 도움되게
+    요약내용 보강, 코인별 1~2줄"). 가장 시세에 직결되는 사실(수치·규모)과 그 의미를 한 문장으로.
+    전부 **완결 문장/구절**만 — 자르지 않는다. 호출부가 2줄 안에 들어가는 첫 후보를 고르고,
+    하나도 안 들어가면 생략한다. 의견·차트는 출처("채널"/"기사")를 앞에 붙여 인용으로만."""
+    kind = p.get("kind")
+    ko = _ko_details(summary_ko)
+    ko_num = [s for s in ko if re.search(r"\d", s)]
+    out: list = []
+    if kind == "fact":
+        # 우선순위: 번역 제목(누가·무엇을 — 키워드가 못 담는 주체) → 수치 있는 번역 문장(규모·기간)
+        # → 템플릿 사실문 → 나머지 번역 문장. 2줄에 안 들어가는 후보는 호출부가 건너뛴다.
+        kt = _ko_title(summary_ko)
+        ck = _condense_ko_title(kt)
+        if ck:
+            out.append(ck)                 # 압축 제목이 맨 앞(10-09 레이아웃 C — 사실 요약이 자주 비던 문제)
+        if kt:
+            out.append(fix_ko_terms(kt))
+        out += [s for s in ko_num if s.rstrip(".") != kt]
+        if not (p.get("type") == "etf" and _is_etf_filing(p, text)):
+            # ETF 신청 기사에 템플릿 "자금 흐름 관련 소식"을 쓰면 원문에 없는 사실이 된다.
+            what = _fact_what(p, text, sym)
+            nums = _fact_numbers(p)
+            if nums:
+                out.append(f"{what} {nums}")
+            out.append(what)
+        out += [s for s in ko if s not in ko_num and s.rstrip(".") != kt]
+        return out
+    if kind == "scenario":
+        tf, price = p.get("tf") or "", p.get("price") or ""
+        b, r = p.get("bull") or {}, p.get("bear") or {}
+        up, bt = b.get("trigger", ""), b.get("target", "")
+        dn, rt = r.get("trigger", ""), r.get("target", "")
+        where = f"{tf} {price} 부근. " if (tf and price) else (f"{price} 부근. " if price else "")
+        if up and dn and up == dn:
+            br = (f"{who}: {up} 지키면 {bt}, 잃으면 {rt}" if (bt and rt) else
+                  f"{who}: {up} 지키면 상승, 잃으면 하락 시나리오")
+        elif up or dn:
+            segs = []
+            if up:
+                segs.append(f"{up} 위 안착 시 {bt}" if bt else f"{up} 위 안착 시 상승")
+            if dn:
+                segs.append(f"{dn} 이탈 시 {rt}" if rt else f"{dn} 이탈 시 하락")
+            br = f"{who}: " + ", ".join(segs)
+        else:
+            br = ""
+        if br:
+            out += [where + br, br]
+        out += [f"{who} 요지: {s}" for s in ko_num]
+        return out
+    # call — 방향 콜·분석 기사
+    if p.get("speculative"):
+        kt = _ko_title(summary_ko)
+        if kt:
+            out.append(f"{who}: {kt}")
+        out.append("확인된 사건이 아닌 예상·가정 기사")
+        return out
+    if p.get("source") == "기사":
+        # 인용 접두는 출처 종류(who) — 텔레그램 채널이 올린 분석 글도 "채널:"(최종 리뷰 10-09).
+        mv = _article_move(text)
+        if mv:
+            out.append(mv.rstrip(".").replace("기사 기준", f"{who}:", 1))
+        kt = _ko_title(summary_ko)
+        if kt:
+            out.append(f"{who}: {kt}")
+        out += [f"{who}: {s}" for s in ko_num]
+        return out
+    pat, tgt = p.get("pattern") or "", p.get("target") or ""
+    lv = p.get("levels") or {}
+    bits = []
+    if pat:
+        bits.append(f"근거 {pat}")
+    if tgt:
+        bits.append(f"목표 {tgt}")
+    if lv.get("resistance"):
+        bits.append(f"저항 {lv['resistance']}")
+    if lv.get("support"):
+        bits.append(f"지지 {lv['support']}")
+    if bits:
+        out.append(f"{who}: " + ", ".join(bits))
+    out += [f"{who} 요지: {s}" for s in ko_num]
+    return out

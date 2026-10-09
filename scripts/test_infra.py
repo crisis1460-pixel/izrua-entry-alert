@@ -67,6 +67,18 @@ _cfg_arm.SETTINGS["watch_arming_since_ts"] = 9e12
 # 순위·렌더 검증용 절대 시각(09-10~09-27)이라 실행일에 따라 전부 "오래된 글"이 된다.
 # 신선도 규칙 자체는 test_morning_brief NEWS-AGE1~4 가 검증한다.
 _cfg_arm.SETTINGS["news_max_age_hours"] = 0
+# 뉴스 압축 항목(news_compact_enabled, 10-09)은 기본 ON 이지만, 이 파일의 NEWS-* 렌더 검증은
+# 종전 긴 형식(머리줄/요약줄/설명/맥락줄) 계약이다 — 여기선 OFF 로 고정하고 압축 형식은
+# 전용 블록(NEWS-CMP*)에서 켜서 검증한다.
+_cfg_arm.SETTINGS["news_compact_enabled"] = False
+# 시총 순위 게이트(news_max_mcap_rank=200, 10-09)도 이 파일에선 끈다 — 실물 유니버스 캐시
+# (data/universe.json)는 매일 갱신돼 XEC·CHZ(200위 밖) 같은 픽스처 코인의 통과 여부가 실행일에
+# 따라 바뀐다. 게이트 자체는 NEWS-MCAP* 가 고정 픽스처 유니버스로 검증한다.
+_cfg_arm.SETTINGS["news_max_mcap_rank"] = 0
+# 순위 캐시 경로도 없는 파일로 고정(최종 리뷰 10-09) — 실물 data/universe.json 순위에 결과가 기대지
+# 않게(종전 MBQ2 'ZRX 미표시'가 실물 순위 덕에 우연히 통과). 순위가 필요한 블록(NEWS-MCAP*·
+# NEWS-CMP9)은 자기 픽스처 유니버스로 바꿨다가 되돌린다.
+_cfg_arm.SETTINGS["universe_cache_path"] = os.path.join(tempfile.gettempdir(), "_izrua_no_universe.json")
 
 def _make_test_db():
     conn = sqlite3.connect(":memory:")
@@ -872,7 +884,7 @@ _nbc.commit()
 _nb3_ok = (r == "ok") if _NB_MAX_CH >= 2 else (r == "skipped")
 check("NB3 다른 코인은 상한 안에서 정상 발송", _nb3_ok)
 # 상한을 채울 때까지 같은 채널로 더 밀어넣는다(상한값 변화에 무관하게 동작).
-_nb_syms = ["UNI", "DOT", "ATOM", "NEAR"]
+_nb_syms = ["UNI", "DOT", "ATOM", "NEAR", "XLM", "TRX", "DOGE", "BCH", "SUI", "HBAR"]
 _nb_t = 1786900000 + 120
 while len(_sent_log) < _NB_MAX_CH - 1 and _nb_syms:
     _nb.maybe_send_news_brief(_nbc, _p, _nb_syms.pop(0), "ch1", now=_nb_t)
@@ -1214,9 +1226,10 @@ check("MBR3b 후보 7건 전부 소비 처리(컷에서 탈락한 것도 포함)
 _mbr.execute("DELETE FROM news_digest_queue")
 _mbr.commit()
 _mb._NEWS_BLOCK_MAX = _MB_ORIG_BLOCK_MAX
-check("MB-CAP 운영 뉴스 블록 상한 12 · 수집 상한 12/일 · 채널 4/일(09-28 대표 요청)",
-      _mb._NEWS_BLOCK_MAX == 12 and _cfg_arm.get("news_alert_max_global_per_day") == 12
-      and _cfg_arm.get("news_alert_max_per_channel_per_day") == 4)
+check("MB-CAP 운영 뉴스 블록 상한 15 · 수집 상한 15/일 · 채널 5/일(10-09 대표 피드백 '25개는 너무 많다')",
+      _mb._NEWS_BLOCK_MAX == 15 and _cfg_arm.get("news_alert_max_global_per_day") == 15
+      and _cfg_arm.get("news_alert_max_per_channel_per_day") == 5
+      and _cfg_arm.get("news_alert_coin_cooldown_hours") == 24)
 
 # MBR4~4c: 같은 코인 중복은 점수 최고 1건만 (실측 XRP·BTC CLARITY 법안 중복)
 db.queue_news_digest(_mbr, "XRP", "cha",
@@ -2894,13 +2907,452 @@ check("MAC-2 발송 창: 31분 전 1건 · 40분 전 0건 · 발표 후 0건 · 
       and len(_ma.due_events(_evs, _t_cpi - 31 * 60, _T, 35, {"CPI|2026-10-14"})) == 0
       and len(_ma.due_events([_ev_ppi], _mac.event_datetime_utc(_ev_ppi).timestamp() - 31 * 60,
                              _T, 35, set())) == 0)
-_m_cpi = _ma.build_message(_ev_cpi, _u_cpi, _t_cpi - 32 * 60)
-_m_fomc = _ma.build_message(_ev_fomc, _u_fomc, _u_fomc.timestamp() - 31 * 60)
+# 10-09 대표 수정: "[nn분 후 발표]" 제거(도달 지연) → "미국 {지표} 지표 발표" + 한국시간 + 이번 발표 예상·직전.
+_ff_rows = [
+    {"title": "CPI y/y", "country": "USD", "date": "2026-10-14T08:30:00-04:00", "forecast": "2.9%", "previous": "3.0%"},
+    {"title": "Core CPI m/m", "country": "USD", "date": "2026-10-14T08:30:00-04:00", "forecast": "0.3%", "previous": "0.4%"},
+    {"title": "CPI y/y", "country": "USD", "date": "2026-09-10T08:30:00-04:00", "forecast": "9.9%", "previous": "9.9%"},
+    {"title": "Federal Funds Rate", "country": "USD", "date": "2026-10-28T14:00:00-04:00", "forecast": "3.75%", "previous": "4.00%"},
+]
+_m_cpi = _ma.build_message(_ev_cpi, _u_cpi, _t_cpi - 32 * 60, _ff_rows)
+_m_fomc = _ma.build_message(_ev_fomc, _u_fomc, _u_fomc.timestamp() - 31 * 60, _ff_rows)
+_m_none = _ma.build_message(_ev_cpi, _u_cpi, _t_cpi - 32 * 60, [])
 _plain = lambda s: s.replace("<b>", "").replace("</b>", "")
-check("MAC-3 본문: 남은 분·한국 시각·지표명, 모든 줄 32칸 이내",
-      "[32분 후 발표]" in _m_cpi and "오늘 21:30 (한국)" in _m_cpi and "CPI 소비자물가" in _m_cpi
-      and "오늘 03:00 (한국)" in _m_fomc
-      and all(_mb4._display_width(x) <= 32 for m in (_m_cpi, _m_fomc) for x in _plain(m).split("\n")))
+check("MAC-3 본문: '미국 … 지표 발표' · 한국시간 · 남은 분 표기 없음 · 모든 줄 32칸 이내",
+      "미국 CPI 소비자물가 지표 발표" in _m_cpi and "오늘 21:30 (한국시간)" in _m_cpi
+      and "분 후" not in _m_cpi and "오늘 03:00 (한국시간)" in _m_fomc
+      and all(_mb4._display_width(x) <= 32 for m in (_m_cpi, _m_fomc, _m_none) for x in _plain(m).split("\n")))
+check("MAC-4 이번 발표 예상·직전 1~2줄(같은 날 행만) · 못 구하면 지표 설명 줄",
+      "예상 2.9%" in _m_cpi and "직전 3.0%" in _m_cpi and "예상 0.3%" in _m_cpi and "9.9%" not in _m_cpi
+      and "예상 3.75%" in _m_fomc and "📊" not in _m_none and "📌" in _m_none)
+
+# MAC-5~7 (10-09 리뷰): 발표 시각은 FF 실제 일정 기준 · FF 없으면 규칙 일정 폴백 · 중복 방지 목록 날짜순
+import json as _jm, sqlite3 as _sqm, tempfile as _tfm, os as _osm
+from unittest.mock import patch as _pm
+_ff_wk = [
+    {"title": "CPI y/y", "country": "USD", "date": "2026-11-12T08:30:00-05:00", "forecast": "2.9%", "previous": "3.0%"},
+    {"title": "Core CPI m/m", "country": "USD", "date": "2026-11-12T08:30:00-05:00", "forecast": "0.3%", "previous": "0.3%"},
+]
+_fe = _ma.ff_events(_ff_wk)
+check("MAC-5 FF 대표 행 → 이벤트(타입·ET 날짜·UTC 시각) — 규칙 일정(11-11)이 아닌 실제 11-12",
+      len(_fe) == 1 and _fe[0]["type"] == "CPI" and _fe[0]["date"] == "2026-11-12"
+      and _fe[0]["_utc"].strftime("%m-%d %H:%M") == "11-12 13:30")
+_mdb = _osm.path.join(_tfm.mkdtemp(), "m.db")
+db.init_db(_mdb)
+_sends = []
+_rule_cpi = {"date": "2026-11-11", "type": "CPI", "label": "CPI 소비자물가", "kst_time": "한국 22:30"}
+with _pm("monitor.macro.get_macro_events", return_value=[_rule_cpi]), \
+        _pm("notify.telegram.send", side_effect=lambda t, **k: _sends.append(t) or 1), \
+        _pm.object(_ma, "fetch_release_rows", return_value=_ff_wk):
+    _r_wrong = _ma.maybe_send_macro_prealert(_mdb, now=_mac.event_datetime_utc(_rule_cpi).timestamp() - 31 * 60)
+    _r_right = _ma.maybe_send_macro_prealert(_mdb, now=_fe[0]["_utc"].timestamp() - 31 * 60)
+    _r_again = _ma.maybe_send_macro_prealert(_mdb, now=_fe[0]["_utc"].timestamp() - 27 * 60)
+check("MAC-6 규칙 일정 날(11-11)엔 FF 미확인이라 안 보냄 · 실제 날(11-12) 1회 · 재발송 없음",
+      _r_wrong == "skipped" and _r_right == "ok" and _r_again == "skipped" and len(_sends) == 1
+      and "예상 2.9%" in _sends[0])
+with db.connect(_mdb) as _cm:
+    _sent_meta = _jm.loads(db.get_meta(_cm, "macro_prealert_sent") or "[]")
+_keys = [f"NFP|2027-{m:02d}-05" for m in range(1, 13)] + [f"FOMC|2027-{m:02d}-20" for m in range(1, 13)] \
+    + [f"CPI|2028-0{m}-10" for m in range(1, 9)]
+_trim = sorted(set(_keys), key=lambda k: k.split("|")[-1])[-30:]
+check("MAC-7 중복 방지 목록은 날짜순으로 최근 30개(최신 CPI 키가 잘리지 않음)",
+      "CPI|2028-08-10" in _trim and _sent_meta == ["CPI|2026-11"])
+
+# MAC-8~9 (10-09 대표 수정): 코인 시장 영향 섹션 · 공식 일정(정적 표) 우선 날짜
+_imp = _ma.impact_lines(_ev_cpi, _u_cpi, _ff_rows)
+_imp_f = _ma.impact_lines(_ev_fomc, _u_fomc, _ff_rows)
+check("MAC-8 코인 시장 영향: 낮으면 상승·높으면 하락 가능성 + 시장 예상 방향, 2칸 들여쓰기·32칸",
+      any("낮으면 → 상승 가능성" in x for x in _imp) and any("높으면 → 하락 가능성" in x for x in _imp)
+      and any("둔화 예상" in x for x in _imp) and any("인하 예상" in x for x in _imp_f)
+      and all(x.startswith("  ") and not x.startswith("   ") and _mb4._display_width(x) <= 32
+              for x in _imp + _imp_f)
+      and "발표 직후 급등락" not in _m_cpi and "📈 코인 시장 영향" in _m_cpi)
+from datetime import date as _dmac
+_fixed = {(e["type"], e["date"]) for e in _mac._apply_static_dates(_mac._generate_rule_events(_dmac(2026, 10, 1), 6))}
+check("MAC-9 일정: 규칙 날짜가 공식 일정표와 다르면 공식 날짜(CPI 11-12·NFP 2027-01-08)",
+      ("CPI", "2026-11-12") in _fixed and ("CPI", "2026-11-11") not in _fixed
+      and ("NFP", "2027-01-08") in _fixed and ("NFP", "2027-01-01") not in _fixed
+      and ("CPI", "2026-10-14") in _fixed)
+
+# MAC-10~12 (10-09 최종 리뷰): FF 가 확인 못 해도 일정표로 폴백 · FOMC 2027 정적 보강
+_old_ff = [{"title": "Federal Funds Rate", "country": "USD", "date": "2026-10-28T14:00:00-04:00",
+            "forecast": "3.75%", "previous": "4.00%"}]          # 지난 FOMC 주 캐시(NFP 행 없음)
+_rule_nfp = {"date": "2026-11-06", "type": "NFP", "label": "비농업 고용", "kst_time": "한국 22:30"}
+_t_nfp = _mac.event_datetime_utc(_rule_nfp).timestamp()
+_mdb2 = _osm.path.join(_tfm.mkdtemp(), "m2.db")
+db.init_db(_mdb2)
+_sends2 = []
+with _pm("monitor.macro.get_macro_events", return_value=[_rule_nfp]), \
+        _pm("notify.telegram.send", side_effect=lambda t, **k: _sends2.append(t) or 1), \
+        _pm.object(_ma, "fetch_release_rows", return_value=_old_ff):
+    _r_nfp = _ma.maybe_send_macro_prealert(_mdb2, now=_t_nfp - 31 * 60)
+    _r_nfp2 = _ma.maybe_send_macro_prealert(_mdb2, now=_t_nfp - 27 * 60)
+check("MAC-10 FF 에 해당 지표 행이 없으면(지난주 캐시·제목 변경) 일정표 시각으로 1회 발송",
+      _r_nfp == "ok" and _r_nfp2 == "skipped" and len(_sends2) == 1 and "비농업 고용" in _sends2[0])
+# FF 와 일정표 날짜가 하루 달라도(11-11 vs 11-12) 같은 달 같은 지표는 한 번만
+_mdb3 = _osm.path.join(_tfm.mkdtemp(), "m3.db")
+db.init_db(_mdb3)
+_sends3 = []
+with _pm("monitor.macro.get_macro_events", return_value=[_rule_cpi]), \
+        _pm("notify.telegram.send", side_effect=lambda t, **k: _sends3.append(t) or 1), \
+        _pm.object(_ma, "fetch_release_rows", return_value=_ff_wk):
+    _ma.maybe_send_macro_prealert(_mdb3, now=_fe[0]["_utc"].timestamp() - 31 * 60)
+with _pm("monitor.macro.get_macro_events", return_value=[_rule_cpi]), \
+        _pm("notify.telegram.send", side_effect=lambda t, **k: _sends3.append(t) or 1), \
+        _pm.object(_ma, "fetch_release_rows", return_value=[]), \
+        _pm.object(_ma, "_cached_rows", return_value=None):
+    _ma.maybe_send_macro_prealert(_mdb3, now=_mac.event_datetime_utc(_rule_cpi).timestamp() - 31 * 60)
+check("MAC-11 같은 달 같은 지표는 FF·일정표 경로가 달라도 1회만(키 '타입|연-월')", len(_sends3) == 1)
+import monitor.macro as _mm
+_mm_conn = _sqm.connect(_osm.path.join(_tfm.mkdtemp(), "c.db"))
+with _pm.object(_mm, "_fetch_fomc_calendar", return_value=[]), _pm.object(_mm.db, "set_meta", lambda *a, **k: None):
+    _cal_ev = _mm.refresh_macro_calendar(_mm_conn)
+check("MAC-12 외부 FOMC 일정이 비어도 정적 공식 일정의 FOMC(2027-01-27 등)가 일정에 포함",
+      any(e["type"] == "FOMC" and e["date"] == "2027-01-27" for e in _cal_ev))
+# ─── NEWS-CMP*: 뉴스 압축 항목 (2026-10-09 대표 요청) ─────────────────────
+# "코인별 뉴스를 더 함축해서 시세와 관련된 최고 중요내용만 · 핵심 키워드 + 그래서 오른다/내린다 ·
+# 최대한 여러 코인 · 시총 200위 안쪽만". 항목 = 최대 3줄, 줄마다 32칸 이내.
+import html as _h_cmp
+import re as _re_cmp
+import runpy as _rp_cmp
+from notify import morning_brief as _mbc_cmp
+from notify import news_brief as _nbc_cmp
+from notify import news_parse as _np_cmp
+
+_cfg_arm.SETTINGS["news_compact_enabled"] = True
+
+
+def _cmp_plain(ln):
+    """표시 텍스트(태그 제거 + 엔티티 복원) — 폭 검사용."""
+    return _h_cmp.unescape(_re_cmp.sub(r"</?b>", "", ln))
+
+
+def _cmp_render(sym, en, ch="cryptosignals0rg", chg=-2.4, age_h=3.0, ko="", rank=None):
+    p = _np_cmp.parse(en)
+    row = {"channel": ch, "summary_en": en, "symbol": sym, "summary": ko}
+    return p, _mbc_cmp._compact_item_lines(p, sym, row, {"chg24": chg, "age_h": age_h}, rank=rank)
+
+
+def _cmp_layout_ok(ls):
+    """10-09 대표 결정 레이아웃 C: 머리줄 0열('<b>') · 하위 줄은 정확히 2칸 · **4~5줄**(머리 /
+    키워드 / 요약 1~2줄 / 꼬리) · 줄마다 32칸 이내 · '위↑ 밑↓' 중복 줄 없음."""
+    return (bool(ls) and 4 <= len(ls) <= 5 and ls[0].startswith("<b>")
+            and all(x.startswith("  ") and not x.startswith("   ") for x in ls[1:])
+            and all(_mbc_cmp._display_width(_cmp_plain(x)) <= 32 for x in ls)
+            and not any("위↑" in x for x in ls) and len(set(ls[1:])) == len(ls) - 1)
+
+
+_CMP_FACTS = [   # (sym, 원문, 기대 칩, 기대 키워드 조각, 기대 판정)
+    ("BTC", "Bitcoin ETFs log $188M in net inflows as institutions return\n"
+            "Spot bitcoin ETFs recorded $188 million of net inflows on Tuesday.",
+     "🟢", "ETF 순유입 $188M", "상승 재료"),
+    ("SUI", "Upbit to list Sui (SUI) on its KRW market\nTrading opens at 15:00 KST, the exchange said.",
+     "🟢", "업비트 상장", "상승 재료"),
+    ("CRO", "Cronos exploit drains $6M from bridge contracts\nAttackers exploited a signature bug "
+            "in the Cronos bridge and drained $6 million.",
+     "🔴", "해킹 피해 $6M", "하락 재료"),
+    ("ETH", "Whale sells $50M worth of ETH as market cools\nA whale dumped 20,000 ETH worth $50M "
+            "on Binance over the weekend.",
+     "🔴", "고래 매도 $50M", "하락 재료"),
+    ("APT", "Aptos to unlock 11.31M APT tokens next week\nThe unlock equals 3.2% of circulating supply.",
+     "🔴", "언락 3.2%", "하락 재료"),
+    ("MARKET", "Fed hikes rates by 25 basis points, signals more tightening\n"
+               "The Fed raised rates by 25 bps on Wednesday.",
+     "🔴", "연준 금리 인상 25bp", "하락 재료"),
+    ("MARKET", "Fed holds rates steady at September meeting\nThe Fed held rates unchanged as expected.",
+     "⚪", "연준 금리 동결", "방향 중립"),
+]
+_cmp_all_ok, _cmp_bad = True, []
+for _s, _en, _chip, _kw, _vd in _CMP_FACTS:
+    _p, _ls = _cmp_render(_s, _en, rank=None if _s == "MARKET" else 7)
+    _head = "<b>🌐 시장</b> [전체]" if _s == "MARKET" else f"<b>{_s}</b> [시총 7위]"
+    _ok1 = (_p.get("kind") == "fact" and _cmp_layout_ok(_ls)
+            and _ls[0] == f"{_head} {_chip} {_vd}"
+            and _cmp_plain(_ls[1]).strip().startswith(_kw)
+            and ("BTC" in _ls[-1] if _s == "MARKET" else "24h -2.4%" in _ls[-1])
+            and "-2.4%" in _ls[-1] and "@cryptosignals0rg" in _ls[-1])
+    if not _ok1:
+        _cmp_all_ok = False
+        _cmp_bad.append((_s, _ls))
+check("NEWS-CMP1 사실형 7종 — 머리 'SYM [시총 N위] 칩 판정' · 키워드 줄 · 요약 ≥1줄 · 꼬리 · 4~5줄·32칸",
+      _cmp_all_ok)
+if _cmp_bad:
+    print("   NEWS-CMP1 실패 샘플:", _cmp_bad)
+_p, _ls = _cmp_render("MARKET", _CMP_FACTS[6][1])
+check("NEWS-CMP1b 🌐: '🌐 시장 [전체]' 머리 · 키워드에 든 말은 이유로 반복하지 않음 · BTC 등락 + 출처",
+      _ls[0] == "<b>🌐 시장</b> [전체] ⚪ 방향 중립" and "금리 동결 · 금리 동결" not in "".join(_ls)
+      and _ls[-1].strip().startswith("BTC ") and _ls[-1].endswith("@cryptosignals0rg"))
+_p, _ls = _cmp_render("PIEVERSE", "#PIEVERSE Market Analysis\nPIEVERSE is at 1.2345 on the 4h, pulling back "
+                      "from the 1.4000 highs.\nBull case: hold above 1.2000 and resume toward 1.4000.\n"
+                      "Bear case: lose 1.1500 and slide toward 1.0500.", ch="BitcoinBullets", rank=131)
+_p2, _ls2 = _cmp_render("XYZ", _CMP_FACTS[0][1], rank=None)
+check("NEWS-CMP1e 긴 심볼+3자리 순위 → 머리줄은 칩만(접지 않음) / 순위 모름 → 괄호 없이",
+      _ls[0] == "<b>PIEVERSE</b> [시총 131위] 💬" and _cmp_layout_ok(_ls)
+      and _ls2[0] == "<b>XYZ</b> 🟢 상승 재료")
+# 판단 보강 요약(③): 번역문이 있으면 2줄 이내로 실리고, ②를 되풀이하지 않는다.
+_p, _ls = _cmp_render("SOL", "Solana ETFs log $188M weekly inflows, the largest on record\n"
+                      "Spot solana ETFs drew $188 million over the week.",
+                      ko="솔라나 현물 ETF로 1주 $188M 유입, 역대 최대 주간 규모")
+check("NEWS-CMP1c 요약 보강: 번역 제목(수치·규모) 1~2줄이 ②와 꼬리 사이에 · 5줄 이내",
+      _cmp_layout_ok(_ls) and 4 <= len(_ls) <= 5
+      and "역대 최대" in "".join(_ls[2:-1]) and _ls[1] not in _ls[2:-1])
+_p, _ls = _cmp_render("CRO", _CMP_FACTS[2][1])
+check("NEWS-CMP1d 요약 후보가 2줄에 안 들어가도 사실 항목은 이유로 요약 1줄 이상(모양 통일) · '…' 없음",
+      _cmp_layout_ok(_ls) and "…" not in "".join(_ls) and len(_ls[2:-1]) >= 1)
+# 번역 제목 압축(10-09 레이아웃 C): 괄호·'규모의'·서술 어미를 줄이고 수치는 지킨다.
+_ck = _np_cmp._condense_ko_title("테더, 276만 달러 규모의 스테이블코인 동결 소송으로 타격")
+_ck2 = _np_cmp._condense_ko_title("SEC가 비트코인 현물 ETF(블랙록) 승인 기한을 연장했습니다")
+check("NEWS-CMP1f 제목 압축: '규모의' 삭제·괄호 삭제·'~했습니다' → 명사형, 수치 유지",
+      _ck == "테더, 276만 달러 스테이블코인 동결 소송으로 타격"
+      and _ck2 == "SEC가 비트코인 현물 ETF 승인 기한을 연장"
+      and _np_cmp._condense_ko_title("") == "")
+_p, _ls = _cmp_render("USDT", "Tether Hit With Lawsuit Over $2.76 Million Stablecoin Freeze\nThe firm alleges "
+                      "Tether froze its wallet.", ko="테더, 276만 달러 규모의 스테이블코인 동결 소송으로 타격")
+check("NEWS-CMP1g 사실 요약 첫 후보 = 압축 제목(2줄 안, 수치 포함)",
+      "276만 달러 스테이블코인" in "".join(_ls[2:-1]) and _cmp_layout_ok(_ls))
+
+_CMP_SC = ("#SUI Market Analysis\nSUI is at 1.1238 on the 8h, sliding out of the 1.16 to 1.25 range "
+           "that held since late September. Price is now testing the steep ascending trendline from "
+           "the mid September lows near 0.68.\nBull case: hold the trendline near 1.11 and reclaim 1.16, "
+           "opening a path back toward the 1.25 highs.\nBear case: lose 1.10 and break the trendline, "
+           "exposing 1.04 and the 0.96 zone below.")
+_CMP_OPN = [   # (sym, 원문, 채널, 기대 인용어)
+    ("SUI", _CMP_SC, "BitcoinBullets", "채널"),
+    ("LINK", "$LINKUSDT Update:\nWent for a solid head and shoulders break-out from below.\n"
+             "Expecting to see either a retest around 13.583 the neckline, then a further crash "
+             "unntil 12.614\nOr simply a continuation to the downside from here.", "wolfoftrading", "채널"),
+    ("DOGE", "Dogecoin (DOGE) Faces Strong Resistance at $0.1000\nOver the past four sessions, DOGE has "
+             "gained an impressive 42.86% as bulls push toward the $0.1000 resistance.",
+     "cryptosignals0rg", "채널"),     # 텔레그램 채널이 올린 기사형 글 → 인용은 "채널"(출처 종류 기준)
+    ("BTC", "Bitcoin falls to $83,000 while altcoins unwind Friday's rally\nBitcoin fell 3% to $83,000 as bears "
+            "took control and the sell-off deepened.", "CoinDesk", "기사"),
+    ("BTC", "Bitcoin remains locked in range as stocks notch new record\nBTC trades near 81,500 with "
+            "support at 80,000 and resistance at 84,000 in a sideways range.", "CoinDesk", "기사"),
+]
+_cmp_all_ok, _cmp_bad = True, []
+for _s, _en, _ch, _who in _CMP_OPN:
+    _p, _ls = _cmp_render(_s, _en, ch=_ch)
+    _txt = "\n".join(_cmp_plain(x) for x in (_ls or []))
+    # 요약 줄(②와 꼬리 사이)도 출처 인용("채널"/"기사")으로 시작해야 한다 — 우리 예측처럼 쓰지 않는다.
+    _ok2 = (_p.get("kind") in ("scenario", "call") and _cmp_layout_ok(_ls)
+            and _cmp_plain(_ls[0]).endswith(f"💬 {_who} 의견")
+            and (_cmp_plain(_ls[2]).strip().startswith(_who)
+                 or _cmp_plain(_ls[2]).strip().startswith("확인된"))
+            and "🟢" not in _txt and "🔴" not in _txt and "⚪" not in _txt
+            and "재료" not in _txt)        # 의견에 '상승/하락 재료'(우리 판정) 금지
+    if not _ok2:
+        _cmp_all_ok = False
+        _cmp_bad.append((_s, _p.get("kind"), _ls))
+check("NEWS-CMP2 의견·차트·분석 기사 5종 —'💬 채널/기사 의견' · 요약 인용 · 색 칩·'재료' 없음 · 4~5줄·32칸",
+      _cmp_all_ok)
+if _cmp_bad:
+    print("   NEWS-CMP2 실패 샘플:", _cmp_bad)
+_p, _ls = _cmp_render("SUI", _CMP_SC, ch="BitcoinBullets")
+check("NEWS-CMP2b 차트 — 키워드 줄은 셋업만('지지 1.10 시험') · 요약이 분기선+목표(1.11→1.25 · 1.10→0.96)",
+      "지지 1.10 시험" in _ls[1] and "1.11" not in _ls[1]
+      and all(x in "".join(_ls[2:-1]) for x in ("1.11", "1.25", "1.10", "0.96"))
+      and _ls[2].startswith("  채널:"))
+_p, _ls = _cmp_render("BTC", _CMP_OPN[3][1], ch="CoinDesk")
+check("NEWS-CMP2c 이미 일어난 이동 기사 — '$83,000 도달' · RSS 출처는 '@' 없이 · '기사 의견'",
+      "$83,000 도달" in _ls[1] and _ls[0].endswith("💬 기사 의견")
+      and _ls[-1].endswith("· CoinDesk") and "@CoinDesk" not in _ls[-1])
+
+# 최종 리뷰 10-09 #1: 정보 0 의견은 건너뜀(None) — 사실형은 절대 건너뛰지 않는다.
+_p, _sp = _cmp_render("XRP", "Could XRP hit $5 if the SEC approves an ETF?\nAnalysts speculate a spot ETF "
+                      "approval might push XRP higher.", ch="Cointelegraph")
+_p, _bx = _cmp_render("ADA", "Cardano's ADA leads gains in narrow range-bound market\nIn traditional markets, "
+                      "the U.S. Dollar Index jumped to 102.53 early today, the highest since April 2025, "
+                      "extending its rise from the Sept. 9 low of 98.60.", ch="CoinDesk")   # 실측 큐 119
+_p, _fx = _cmp_render("MARKET", "Community banks sue OCC over trust bank charters of crypto firms\n"
+                      "The group says the regulator overstepped.", ch="Cointelegraph")
+check("NEWS-CMP10 전망·가정 기사(요약=일반 안내문뿐)·수치 없는 '박스권 관망' → 건너뜀 / 사실형은 표시",
+      _sp is None and _bx is None and _fx and _cmp_layout_ok(_fx))
+# 최종 리뷰 10-09 #2: 같은 기사형 글이라도 인용 주체는 출처 종류 — RSS "기사", 텔레그램 "채널".
+_art = ("Solana (SOL) Keeps Buoyancy as Price Floats Towards the $150 Mark\nAlthough the Solana market "
+        "cooled, SOL holds near $142 with support at $135.")
+_p, _tg = _cmp_render("SOL", _art, ch="cryptosignals0rg")
+_p, _rs = _cmp_render("SOL", _art, ch="CoinDesk")
+check("NEWS-CMP11 인용 주체 = 출처 종류: 텔레그램 → '💬 채널 의견'·'채널:' / RSS → '💬 기사 의견'·'기사:'",
+      _tg[0].endswith("💬 채널 의견") and _tg[2].startswith("  채널")
+      and "기사" not in "".join(_tg[1:-1])
+      and _rs[0].endswith("💬 기사 의견") and _rs[2].startswith("  기사"))
+
+# 폭 한계 — 긴 심볼·긴 채널명·큰 숫자에서도 32칸을 넘지 않는다(후보 축약·꼬리 조각 생략).
+_p, _ls = _cmp_render("PIEVERSE", "PIEVERSE exploit drains $351.6M from vaults\nAttackers drained "
+                      "$351.6 million from Bitget hot wallets.", ch="averyveryverylongchannelname_x",
+                      chg=-12.34, age_h=40)
+check("NEWS-CMP3 긴 심볼·긴 채널명도 줄마다 32칸 이내(넘치는 꼬리 조각은 생략)",
+      _cmp_layout_ok(_ls) and "24h -12.3%" in _ls[-1])
+# 리뷰 10-09 #5: 24h 등락이 없고 채널명이 폭보다 길면 꼬리 줄을 생략(32칸 초과 금지).
+_p, _ls = _cmp_render("CRO", _CMP_FACTS[2][1], ch="averyveryverylongchannelname_xyz", chg=None)
+check("NEWS-CMP3c 등락 없음 + 30자 넘는 채널명 → 꼬리 줄 생략, 모든 줄 32칸 이내",
+      all(_mbc_cmp._display_width(_cmp_plain(x)) <= 32 for x in _ls)
+      and not any("averyvery" in x for x in _ls))
+_p, _ls = _cmp_render("BTC", "#BTC Market Analysis\nBTC is at 81,719.86 on the daily, dropping sharply "
+                      "after another rejection at the rising resistance trendline near 87,000.\n"
+                      "Bull case: hold 80,000 and reclaim 84,000, opening a path back toward 87,000.\n"
+                      "Bear case: lose 80,000, exposing the 78,000 to 76,000 zone.", ch="BitcoinBullets")
+check("NEWS-CMP3b 큰 숫자 분기(80,000 공통 기준선)도 요약 2줄 안에 인용(목표 87,000·76,000)",
+      _cmp_layout_ok(_ls) and _ls[2].startswith("  채널: 80,000")
+      and "87,000" in "".join(_ls[2:-1]) and "76,000" in "".join(_ls[2:-1]))
+_p, _ls = _cmp_render("ETH", "ETH <script> exploit drains $6M & more\nAttackers exploited ETH bridge "
+                      "contracts & drained $6 million.", ch="a&b", ko="ETH 브릿지 <해킹> & $6M 탈취")
+check("NEWS-CMP4 HTML escape 는 폭 맞춘 뒤 줄마다(& → &amp;, 태그는 <b> 만)",
+      "@a&amp;b" in _ls[-1] and "<script>" not in "\n".join(_ls) and "<해킹>" not in "\n".join(_ls)
+      and all(_re_cmp.sub(r"</?b>", "", x).count("<") == 0 for x in _ls))
+
+# 리뷰 10-09 #1: 자금 흐름 기사에 'filing' 단어가 섞여도 'ETF 신청' 이 아니다. 순수 신청 기사만.
+_p, _ls = _cmp_render("BTC", "Spot bitcoin ETFs log $100M inflows, a day after Fidelity's filing update\n"
+                      "Bitcoin ETFs drew $100 million of net inflows.")
+_p2, _ls2 = _cmp_render("BTC", "Bitcoin ETF outflows hit $1.2 billion as Grayscale filing approved\n"
+                        "Spot bitcoin ETFs saw $1.2 billion in net outflows this week.")
+_p3, _ls3 = _cmp_render("MARKET", "Winklevoss-backed Zcash ETF files with SEC for Nasdaq listing\n"
+                        "The proposed fund would hold ZEC directly, eyeing up to a $100 million investment.")
+check("NEWS-CMP6 ETF 자금 흐름 + filing 단어 → 'ETF 신청' 아님 / 순수 신청 기사는 'ETF 신청'",
+      "ETF 신청" not in _ls[1] and "ETF 신청" not in _ls2[1] and "ETF 신청" in _ls3[1]
+      and "승인 전 단계" in "".join(_ls3[1:]) and "승인 전 단계" not in "".join(_ls + _ls2))
+# 리뷰 10-09 #2: 소송 취하(호재) → '소송 해소'
+_p, _ls = _cmp_render("XRP", "SEC drops lawsuit against Ripple, ending years-long case\n"
+                      "The SEC dismissed its lawsuit against Ripple Labs on Thursday.")
+check("NEWS-CMP7 'SEC drops lawsuit' → '🟢 상승 재료' · 키워드 'SEC 소송 해소' · 이유 '소송 … 해소'",
+      _p.get("pol") == 1 and _ls[0].endswith("🟢 상승 재료") and "SEC 소송 해소" in _ls[1]
+      and ("소송 리스크 해소" in "".join(_ls[1:]) or "소송 부담 해소" in "".join(_ls[1:])))
+
+# 스위치 OFF → 종전 긴 형식 그대로(롤백 경로)
+_cmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+db.init_db(_cmp_db)
+_cmpc = sqlite3.connect(_cmp_db)
+_cmpc.row_factory = sqlite3.Row
+db.queue_news_digest(_cmpc, "BTC", "cryptosignals0rg", "번역", "https://t.me/cmp/1", "2026-10-09",
+                     1791500000, summary_en=_CMP_FACTS[0][1], posted_at=1791500000)
+_cmpc.commit()
+_orig_ft_cmp = _mbc_cmp._fetch_tickers
+_mbc_cmp._fetch_tickers = lambda markets, timeout: {}
+_cmp_on = _mbc_cmp._news_items(_cmpc, [], timeout=1.0, now=1791500000)
+_cfg_arm.SETTINGS["news_compact_enabled"] = False
+_cmp_off = _mbc_cmp._news_items(_cmpc, [], timeout=1.0, now=1791500000)
+_cfg_arm.SETTINGS["news_compact_enabled"] = True
+check("NEWS-CMP5 스위치 ON = 압축(머리 0열) / OFF = 종전 긴 형식(머리줄 '   <b>BTC</b> · @채널' + '🟢 호재' 요약줄)",
+      _cmp_layout_ok(_cmp_on[1][0][0]) and _cmp_on[1][0][0][0].startswith("<b>BTC</b>")
+      and _cmp_on[1][0][0][0].endswith("🟢 상승 재료") and "ETF 순유입 $188M" in _cmp_on[1][0][0][1]
+      and _cmp_on[0].startswith("📰 <b>주요 뉴스</b> (시총순")
+      and _cmp_off[1][0][0][0] == "   <b>BTC</b> · @cryptosignals0rg"
+      and any("🟢 호재" in x for x in _cmp_off[1][0][0]) and len(_cmp_off[1][0][0]) > 3)
+
+# ─── NEWS-MCAP*: 시총 200위 게이트 (고정 픽스처 유니버스) ───────────────────
+_rk_dir = tempfile.mkdtemp()
+_rk_path = os.path.join(_rk_dir, "universe.json")
+with open(_rk_path, "w", encoding="utf-8") as _f:
+    json.dump({"updated_at": 1791500000, "universe": [
+        {"symbol": "RKA", "rank": 150}, {"symbol": "RKB", "rank": 250}, {"symbol": "RKN", "rank": None},
+        {"symbol": "RKT", "rank": 200}]}, _f)
+_rk_orig_path = _cfg_arm.SETTINGS["universe_cache_path"]
+_cfg_arm.SETTINGS["universe_cache_path"] = _rk_path
+_cfg_arm.SETTINGS["news_max_mcap_rank"] = 200
+check("NEWS-MCAP1 판정: 150위·200위 통과 / 250위·rank 없음 제외 / 🌐 MARKET·캐시에 없는 심볼은 통과",
+      _nbc_cmp.mcap_rank_ok("RKA") and _nbc_cmp.mcap_rank_ok("rkt")
+      and not _nbc_cmp.mcap_rank_ok("RKB") and not _nbc_cmp.mcap_rank_ok("RKN")
+      and _nbc_cmp.mcap_rank_ok("MARKET") and _nbc_cmp.mcap_rank_ok("NOTINCACHE"))
+_cfg_arm.SETTINGS["universe_cache_path"] = os.path.join(_rk_dir, "missing.json")
+_rk_missing = _nbc_cmp.mcap_rank_ok("RKB")
+_cfg_arm.SETTINGS["universe_cache_path"] = _rk_path
+_cfg_arm.SETTINGS["news_max_mcap_rank"] = 0
+_rk_off = _nbc_cmp.mcap_rank_ok("RKB")
+_cfg_arm.SETTINGS["news_max_mcap_rank"] = 200
+check("NEWS-MCAP2 fail-open: 캐시 파일 없음 → 통과 · 설정 0 → 제한 없음", _rk_missing and _rk_off)
+
+# 수집 단계: 순위 밖 코인은 상한 판정 **전에** 스킵 → alerts_log(상한 카운트)를 먹지 않는다.
+_cfg_arm.SETTINGS["news_alert_send_enabled"] = False     # 운영값(브리핑 큐 적재)
+_cfg_arm.SETTINGS["news_translate_enabled"] = False      # 네트워크 없음
+_rk_post ={"description": "RKB holds near 126.19 after pulling back from the 140.00 high, keeping "
+                           "the multi-month uptrend intact.", "url": "https://t.me/rk/1",
+            "published_at": 1791500000 - 600}
+_rk_res = _nbc_cmp.maybe_send_news_brief(_cmpc, _rk_post, "RKB", "chrk", now=1791500000)
+_rk_res2 = _nbc_cmp.maybe_send_news_brief(_cmpc, dict(_rk_post, url="https://t.me/rk/2",
+                                          description=_rk_post["description"].replace("RKB", "RKA")),
+                                          "RKA", "chrk", now=1791500000)
+_cmpc.commit()
+check("NEWS-MCAP3 수집: 250위 코인 글은 skipped·상한 카운트 0 / 150위 코인 글은 적재(queued)",
+      _rk_res == "skipped" and _rk_res2 == "queued" and _cmpc.execute(
+          "SELECT COUNT(*) n FROM alerts_log WHERE kind='news' AND coin_symbol='RKB'").fetchone()["n"] == 0)
+
+# 렌더 단계: 큐 잔존분 — 150위 표시 · 250위/None 제외(소비는 됨) · 🌐 MARKET 표시
+_cmpc.execute("UPDATE news_digest_queue SET consumed=1")
+for _i, (_s, _en) in enumerate((("RKA", _CMP_FACTS[2][1]), ("RKB", _CMP_FACTS[3][1]),
+                                ("RKN", _CMP_FACTS[1][1]), ("MARKET", _CMP_FACTS[5][1]))):
+    db.queue_news_digest(_cmpc, _s, f"chr{_i}", "번역", f"https://t.me/rkq/{_i}", "2026-10-09",
+                         1791500000 + _i, summary_en=_en, posted_at=1791500000)
+_cmpc.commit()
+_rk_ids = []
+_rk_got = _mbc_cmp._news_items(_cmpc, _rk_ids, timeout=1.0, now=1791500100)
+_rk_body = "\n".join(x for ls, _rid in _rk_got[1] for x in ls)
+check("NEWS-MCAP4 브리핑: RKA(150위)·🌐 시장 표시 / RKB(250위)·RKN(rank 없음) 제외 / 4건 모두 판정(소비)",
+      "<b>RKA</b>" in _rk_body and "<b>🌐" in _rk_body
+      and "RKB" not in _rk_body and "RKN" not in _rk_body and len(_rk_ids) == 4
+      and len(_rk_got[1]) == 2)
+
+# 레이아웃 C 순서: **선택은 중요도**(사실 H > 🌐 > 💬 차트), **표시는 시총순**(🌐 맨 끝).
+_cmpc.execute("UPDATE news_digest_queue SET consumed=1")
+for _i, (_s, _en) in enumerate((("RKA", _CMP_SC.replace("SUI", "RKA")), ("RKT", _CMP_FACTS[2][1]),
+                                ("MARKET", _CMP_FACTS[5][1]))):
+    db.queue_news_digest(_cmpc, _s, f"cho{_i}", "번역", f"https://t.me/rko/{_i}", "2026-10-09",
+                         1791500000 + _i, summary_en=_en, posted_at=1791500000)
+_cmpc.commit()
+_ord_max = _mbc_cmp._NEWS_BLOCK_MAX
+_mbc_cmp._NEWS_BLOCK_MAX = 2
+_ord2 = _mbc_cmp._news_items(_cmpc, [], timeout=1.0, now=1791500100)
+_mbc_cmp._NEWS_BLOCK_MAX = 3
+_ord3 = _mbc_cmp._news_items(_cmpc, [], timeout=1.0, now=1791500100)
+_mbc_cmp._NEWS_BLOCK_MAX = _ord_max
+_heads2 = [ls[0] for ls, _r in _ord2[1]]
+_heads3 = [ls[0] for ls, _r in _ord3[1]]
+check("NEWS-CMP9 상한 2: 중요도로 RKT(해킹)·🌐 선택(RKA 150위 차트는 탈락) → 표시 RKT 다음 🌐",
+      len(_heads2) == 2 and _heads2[0].startswith("<b>RKT</b> [시총 200위]")
+      and _heads2[1].startswith("<b>🌐 시장</b> [전체]"))
+check("NEWS-CMP9b 상한 3: 표시는 시총 오름차순(RKA 150 → RKT 200) · 🌐 맨 끝 · 헤더 '(시총순'",
+      len(_heads3) == 3 and _heads3[0].startswith("<b>RKA</b> [시총 150위] 💬 채널 의견")
+      and _heads3[1].startswith("<b>RKT</b>") and _heads3[2].startswith("<b>🌐 시장</b>")
+      and _ord3[0].startswith("📰 <b>주요 뉴스</b> (시총순"))
+
+# 리뷰 10-09 #3: 판정한 후보가 전부 '내용 없는 의견'(건너뜀)이면 블록 없음(None) — 호출부가
+# "📰 새 뉴스 없음" 안내를 붙인다. 종전엔 (헤더, []) 라 뉴스 메시지도 안내도 없었다.
+_cmpc.execute("UPDATE news_digest_queue SET consumed=1")
+for _i in range(2):
+    db.queue_news_digest(_cmpc, "RKA" if _i == 0 else "RKT", f"che{_i}", "번역", f"https://t.me/rke/{_i}",
+                         "2026-10-09", 1791500000 + _i,
+                         summary_en="Crypto Market Pulls Back: Is This a Warning or a Breakout Opportunity?\n"
+                                    "The crypto market is cooling after a strong week as traders reassess.",
+                         posted_at=1791500000)
+_cmpc.commit()
+_em_ids = []
+_em_got = _mbc_cmp._news_items(_cmpc, _em_ids, timeout=1.0, now=1791500100)
+check("NEWS-CMP8 후보가 전부 내용 없는 의견 → _news_items None(안내 줄 경로) · 판정 id 2건은 소비 목록에",
+      _em_got is None and len(_em_ids) == 2)
+_mbc_cmp._fetch_tickers = _orig_ft_cmp
+_cmpc.close()
+_cfg_arm.SETTINGS["universe_cache_path"] = _rk_orig_path
+_cfg_arm.SETTINGS["news_max_mcap_rank"] = 0
+_cfg_arm.SETTINGS["news_compact_enabled"] = False
+
+# 운영 기본값(설정 파일 원본 — 이 파일 상단의 테스트용 덮어쓰기와 무관)
+_cfg_src = _rp_cmp.run_path(str(Path(__file__).resolve().parent.parent / "config" / "settings.py"))["SETTINGS"]
+check("NEWS-CMP-CFG 기본값: 압축 ON · 시총 200위 · 상한 15/일·채널 5/일 · 코인 24h · 신선도 48h · 블록 15",
+      _cfg_src["news_compact_enabled"] is True and _cfg_src["news_max_mcap_rank"] == 200
+      and _cfg_src["news_alert_max_global_per_day"] == 15
+      and _cfg_src["news_alert_max_per_channel_per_day"] == 5
+      and _cfg_src["news_alert_coin_cooldown_hours"] == 24 and _cfg_src["news_max_age_hours"] == 48
+      and _mbc_cmp._NEWS_BLOCK_MAX == 15)
+
+# ── NEWS-CMP-X: 10-09 미리보기 후속 — 스테이블코인 제외 · 내용 없는 의견 생략 ──
+from notify import news_brief as _nbx, morning_brief as _mbx, news_parse as _npx
+check("NEWS-CMP-X1 스테이블코인(USDG·USDT·USDC)은 뉴스 대상 아님, BTC·MARKET 은 대상",
+      not _nbx.mcap_rank_ok("USDG") and not _nbx.mcap_rank_ok("USDT") and not _nbx.mcap_rank_ok("usdc")
+      and _nbx.mcap_rank_ok("MARKET"))
+_x_t = "XRP price analysis: what traders are watching this week\nAnalysts discuss the XRP chart."
+_x_p = _npx.parse(_x_t)
+_x_lines = _mbx._compact_item_lines(_x_p, "XRP", {"channel": "cryptosignals0rg", "summary_en": _x_t}, {})
+check("NEWS-CMP-X2 내용 없는 의견('방향 단정 없음' + 수치 없음)은 생략(None) 또는 비노이즈 항목",
+      _x_lines is None or _x_lines == [] or not any("방향 단정 없음" in ln for ln in _x_lines))
 
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")

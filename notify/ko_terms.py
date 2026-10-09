@@ -89,6 +89,9 @@ _RULES = [
     (r"유동성\s*청소", "유동성 스윕"),
     (r"공정\s*가치\s*(?:격차|갭)", "FVG(공정가치갭)"),
     (r"주문\s*블록", "오더블록"),
+    # 10-09: "Zcash ETF files with SEC" → "Zcash ETF 파일" — ETF·상품 '신청'(files) 직역.
+    (r"(ETF|ETP|펀드)\s*파일(?![가-힣])", r"\1 신청"),
+    (r"(ETF|ETP|펀드)\s*파일(?=을|를|이|가|은|는)", r"\1 신청"),
 ]
 _COMPILED = [(re.compile(p), r) for p, r in _RULES]
 

@@ -482,10 +482,26 @@ def _fetch_fomc_calendar(timeout=10.0):
 
 
 # ── 캘린더 캐시 ──────────────────────────────────────────────────────────
-_CAL_CACHE_KEY = "macro_calendar_v3"
+_CAL_CACHE_KEY = "macro_calendar_v4"   # v4(10-09): 정적 공식 일정 우선 적용 — 기존 캐시 무효화
 _CAL_CACHE_TTL = 604800.0   # 7일
 _mem_cal = None              # type: list | None
 _mem_cal_ts = 0.0
+
+
+def _apply_static_dates(events: list) -> list:
+    """규칙 생성 일정의 날짜를, 같은 (타입, 연-월)이 정적 일정표(_STATIC_EVENTS — 공식 발표 일정
+    수기 입력)에 있으면 그 날짜로 바꾼다 (2026-10-09 리뷰: '둘째 화요일+1일' 규칙이 CPI 11-11 vs
+    실제 11-12, NFP 2027-01-01(공휴일) vs 01-08 처럼 매달 어긋났다). 정적 표가 없는 달은 규칙 그대로."""
+    static = {}
+    for s in _STATIC_EVENTS:
+        static[(s["type"], s["date"][:7])] = s["date"]
+    out = []
+    for ev in events:
+        d = static.get((ev.get("type"), (ev.get("date") or "")[:7]))
+        if d and d != ev.get("date"):
+            ev = _ev(date.fromisoformat(d), ev["type"], ev.get("label", ""))
+        out.append(ev)
+    return out
 
 
 def refresh_macro_calendar(conn, timeout=10.0):
@@ -493,10 +509,16 @@ def refresh_macro_calendar(conn, timeout=10.0):
     FOMC fetch timeout 은 3s 상한 — 주 1회 핫패스 블로킹 최소화."""
     global _mem_cal, _mem_cal_ts
     today = date.today()
-    events = _generate_rule_events(today, months=8)
+    events = _apply_static_dates(_generate_rule_events(today, months=8))
     fomc = _fetch_fomc_calendar(min(timeout, 3.0))
     if fomc:
         events.extend(fomc)
+    # 10-09 최종 리뷰: 외부 FOMC 일정이 2026-12 까지만 와서 2027 FOMC(01-27·03-17)가 빠졌다 —
+    # 정적 공식 일정 중 오늘 이후·가져온 목록에 없는 FOMC 금리결정을 보탠다.
+    have = {(e.get("type"), e.get("date")) for e in events}
+    for s in _STATIC_EVENTS:
+        if s["type"] == "FOMC" and s["date"] >= today.isoformat() and ("FOMC", s["date"]) not in have:
+            events.append(s)
     events.sort(key=lambda e: e.get("date", ""))
     now = time.time()
     try:
