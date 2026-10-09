@@ -420,7 +420,11 @@ morning_brief._TELEGRAM_MAX_CHARS = _orig_max2
 _cmp_news = _cmp_msgs[1:]
 _cmp_items = []           # 메시지별 항목(빈 줄 경계) 목록
 for _t, _ids in _cmp_news:
-    _body = _t.split("\n")[1:]
+    _hl = _t.split("\n")
+    _k = 1                # 헤더 보조 줄(3칸 들여, 10-10)까지 건너뛴다
+    while _k < len(_hl) and _hl[_k].startswith("   "):
+        _k += 1
+    _body = _hl[_k:]
     _blk = "\n".join(_body).split("\n\n")
     _cmp_items.append([b.split("\n") for b in _blk if b])
 _cmp_flat = [it for m in _cmp_items for it in m]
@@ -452,7 +456,7 @@ check("NEWS-CMP-MB4 레이아웃 C 차트: 머리 '[시총 N위] 💬 채널 의
       and "🟢" not in _cmp_txt and "🔴" not in _cmp_txt)
 _cmp_ranks = [int(_re_cmp.search(r"시총 (\d+)위", it[0]).group(1)) for it in _cmp_flat]
 check("NEWS-CMP-MB6 표시 순서 = 시총 오름차순(메시지 경계를 넘어서도) · 헤더 '(시총순'",
-      _cmp_ranks == sorted(_cmp_ranks) and _cmp_news[0][0].startswith("📰 <b>주요 뉴스</b> (시총순"))
+      _cmp_ranks == sorted(_cmp_ranks) and _cmp_news[0][0].startswith("📰 <b>주요 뉴스</b>\n   시총순"))
 # 한 통 경로(build_brief → _fit_telegram): 압축 항목은 머리줄 뒤 하위 줄이 여럿 — 길이 방어가
 # **항목 경계**까지 되돌려 반쪽 항목이 남지 않고, 소비 id 수 = 온전히 실린 항목 수(구조 기반 경계).
 with db.connect(TEST_DB) as conn:

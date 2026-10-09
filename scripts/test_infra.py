@@ -3251,7 +3251,7 @@ _cfg_arm.SETTINGS["news_compact_enabled"] = True
 check("NEWS-CMP5 스위치 ON = 압축(머리 0열) / OFF = 종전 긴 형식(머리줄 '   <b>BTC</b> · @채널' + '🟢 호재' 요약줄)",
       _cmp_layout_ok(_cmp_on[1][0][0]) and _cmp_on[1][0][0][0].startswith("<b>BTC</b>")
       and _cmp_on[1][0][0][0].endswith("🟢 상승 재료") and "ETF 순유입 $188M" in _cmp_on[1][0][0][1]
-      and _cmp_on[0].startswith("📰 <b>주요 뉴스</b> (시총순")
+      and _cmp_on[0].startswith("📰 <b>주요 뉴스</b>\n   시총순")
       and _cmp_off[1][0][0][0] == "   <b>BTC</b> · @cryptosignals0rg"
       and any("🟢 호재" in x for x in _cmp_off[1][0][0]) and len(_cmp_off[1][0][0]) > 3)
 
@@ -3329,7 +3329,14 @@ check("NEWS-CMP9 상한 2: 중요도로 RKT(해킹)·🌐 선택(RKA 150위 차�
 check("NEWS-CMP9b 상한 3: 🌐 맨 위 → 시총 오름차순(RKA 150 → RKT 200) · 헤더 '(시총순'",
       len(_heads3) == 3 and _heads3[0].startswith("<b>🌐 시장</b>")
       and _heads3[1].startswith("<b>RKA</b> [시총 150위] 💬 채널 의견") and _heads3[2].startswith("<b>RKT</b>")
-      and _ord3[0].startswith("📰 <b>주요 뉴스</b> (시총순"))
+      and _ord3[0].startswith("📰 <b>주요 뉴스</b>\n   시총순"))
+# NEWS-HEAD1 (10-10 대표): '주요 뉴스' 뒤 줄내림 · 보조 줄은 3칸(📰+공백) 들여 '주요' 열에 맞춤 · 조각 안 쪼갬 · 32칸
+_nh = _mb.news_head(["10-10 01:21 수시", "시총순", "외 12건"])
+_nhl = _nh.split("\n")
+check("NEWS-HEAD1 헤더 줄내림·열 맞춤·고아 단어 없음(조각 단위 줄바꿈, 32칸) · 보조 조각 되읽기",
+      _nhl[0] == "📰 <b>주요 뉴스</b>" and all(l.startswith("   ") and not l.startswith("    ") for l in _nhl[1:])
+      and all(_mb._display_width(l) <= 32 for l in _nhl[1:]) and len(_nhl) == 3
+      and _mb.news_head_parts(_nh + "\n<b>BTC</b> x") == ["10-10 01:21 수시", "시총순", "외 12건"])
 
 # 리뷰 10-09 #3: 판정한 후보가 전부 '내용 없는 의견'(건너뜀)이면 블록 없음(None) — 호출부가
 # "📰 새 뉴스 없음" 안내를 붙인다. 종전엔 (헤더, []) 라 뉴스 메시지도 안내도 없었다.

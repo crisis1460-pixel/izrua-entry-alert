@@ -1187,13 +1187,44 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
         # 붙이고 판정 id 는 본문 메시지와 함께 소비한다(리뷰 10-09: (헤더, []) 면 안내도 뉴스도 없었다).
         return None
     remain = max(0, db.count_news_digest(conn) - len(consumed_ids))
-    head = "📰 <b>주요 뉴스</b>"
-    if compact:
-        # 레이아웃 C — 표시 순서가 시총순임을 헤더에 밝힌다(잔여 건수는 같은 괄호에).
-        head += f" (시총순 · 외 {remain}건)" if remain else " (시총순)"
-    elif remain:
-        head += f" (외 {remain}건)"
-    return head, items
+    # 레이아웃 C — 표시 순서가 시총순임을 헤더 보조 줄에 밝힌다(잔여 건수도 같은 줄).
+    parts = (["시총순"] if compact else []) + ([f"외 {remain}건"] if remain else [])
+    return news_head(parts), items
+
+
+def news_head(parts: list) -> str:
+    """'📰 주요 뉴스' 헤더 + 보조 줄들(시총순·외 N건·수시 시각 등).
+
+    10-10 대표 요청: 고아 단어 없게 '주요 뉴스' 뒤에서 줄내림, 보조 줄 시작 열은 윗줄 텍스트('주요')
+    시작 열에 맞춘다(📰+공백 = 3칸). 조각은 쪼개지 않고 ' · ' 로 이어 32칸 넘으면 다음 줄로.
+    """
+    out, cur = ["📰 <b>주요 뉴스</b>"], ""
+    for p in parts:
+        cand = f"{cur} · {p}" if cur else p
+        if cur and _display_width(_NEWS_INDENT + cand) > _NEWS_WRAP_W:
+            out.append(_NEWS_INDENT + cur)
+            cur = p
+        else:
+            cur = cand
+    if cur:
+        out.append(_NEWS_INDENT + cur)
+    # 마지막 줄에 조각 하나만 남으면(예: '외 3건') 윗줄 끝 조각을 내려 균형(고아 방지).
+    if len(out) >= 3 and " · " not in out[-1] and " · " in out[-2]:
+        head, tail = out[-2].rsplit(" · ", 1)
+        moved = f"{_NEWS_INDENT}{tail} · {out[-1].strip()}"
+        if _display_width(moved) <= _NEWS_WRAP_W:
+            out[-2], out[-1] = head, moved
+    return "\n".join(out)
+
+
+def news_head_parts(text: str) -> list:
+    """news_head 로 만든 메시지 첫머리에서 보조 조각 목록을 되읽는다(수시 발송이 시각을 덧붙일 때)."""
+    parts = []
+    for ln in text.split("\n")[1:]:
+        if not ln.startswith(_NEWS_INDENT) or ln.startswith(_NEWS_INDENT + " "):
+            break
+        parts += [p for p in ln.strip().split(" · ") if p]
+    return parts
 
 
 def _news_lines(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0) -> list:
@@ -1551,7 +1582,7 @@ def build_brief_messages(conn, now: float, timeout: float) -> list:
     head = lines[news_start]
     shown_ids = {rid for _l, rid in items}
     extra_ids = [i for i in consumed_ids if i not in shown_ids]
-    cont_head = "📰 <b>주요 뉴스</b> (이어서)"
+    cont_head = news_head(["이어서"])
     cur_lines, cur_ids = [head], []
     for item_lines, rid in items:
         # 항목 사이 빈 줄(09-28 대표 요청 "시각적으로 눈에 잘 들어오게") — 코인 경계가 보이게.

@@ -76,7 +76,10 @@ def main() -> int:
         print("NO_NEWS")
         return 0
     stamp = time.strftime("%m-%d %H:%M", time.gmtime(time.time() + 9 * 3600))
-    news[0] = news[0].replace("📰 <b>주요 뉴스</b>", f"📰 <b>주요 뉴스</b> ({stamp} 수시)", 1)
+    # 수시 시각은 헤더 보조 줄 맨 앞 조각으로(10-10: '주요 뉴스' 뒤 줄내림·열 맞춤, 고아 단어 없음).
+    old_parts = morning_brief.news_head_parts(news[0])
+    old_head = morning_brief.news_head(old_parts)
+    news[0] = news[0].replace(old_head, morning_brief.news_head([f"{stamp} 수시"] + old_parts), 1)
     for t in news:
         print(t)
         print("-----")
