@@ -2227,7 +2227,11 @@ _before_rs = len(sent_messages)
 price_check.run_once(now + 2000)
 check("RS1 정상 첫 발송은 나간다", len(sent_messages) == _before_rs + 1)
 
-_dup_before = (_obs_row() or {})["suppressed_dup"]
+# 2026-10-09 시계 의존 수리: 차단은 run_once(now+2060) 회차의 KST 날짜 행에 집계된다.
+# 자정 가드는 +1800초만 보호하므로 23:25~23:30 KST 실행이면 obs_day(=now 날짜)와
+# 갈라져 RS3 가 깨졌다 — 집계 날짜를 그 회차 시각으로 맞춘다.
+_rs_day = price_check._day_kst(now + 2060)
+_dup_before = (_obs_row(_rs_day) or {}).get("suppressed_dup", 0)
 with db.connect(TEST_DB) as conn:   # 앞 회차 상태 전이만 유실된 DB 재현
     conn.execute("UPDATE levels SET status='watching', touched_at=NULL "
                  "WHERE coin_symbol='RSND'")
@@ -2237,7 +2241,7 @@ price_check.run_once(now + 2060)    # 60초 뒤 = 실사고와 같은 간격
 check("RS2 상태 전이가 유실돼도 재발송하지 않는다(alerts_log 방어선)",
       len(sent_messages) == _before_rs2)
 check("RS3 재발송 차단이 관찰지표(suppressed_dup)에 잡힌다",
-      (_obs_row() or {})["suppressed_dup"] == _dup_before + 1)
+      (_obs_row(_rs_day) or {}).get("suppressed_dup", 0) == _dup_before + 1)
 
 # 차단 창(_RESEND_BLOCK_SEC)을 넘기면 다시 보낼 수 있어야 한다 - 영구 봉인이 아니라
 # '경합 구간만' 막는 장치임을 고정한다.
@@ -3989,8 +3993,15 @@ with db.connect(_TPO_DB) as conn:
     _tpo_id = conn.execute("SELECT id FROM levels WHERE signal_key=?",
                            (_tpo_lv["signal_key"],)).fetchone()["id"]
 fake["price"] = 100.0 * USDT_KRW * 1.001
-fake["low"] = 99.0 * USDT_KRW
-fake["candles"] = fake["high"] = None
+# 2026-10-09 시계 의존 수리: 종전엔 fake["low"] 기본 캔들(모듈 `now`-120~-60)을 썼는데,
+# KST 자정 가드(23:30~24:00 실행 시 now-=3600)가 걸리면 그 캔들이 collected_at
+# (=_tpo_now-3600) **이전**이 되어 _eff_low 가 버린다 → 터치 대신 예고가 나가고
+# 터치는 다음 회차로 밀려 TPOFF1 이 1건을 본다(23:43 KST 실측). 캔들을 _tpo_now
+# 기준으로 명시해 실행 시각과 무관하게 수집 이후 저가 터치를 재현한다.
+fake["candles"] = [(_tpo_now - 120, _tpo_now - 60,
+                    100.0 * USDT_KRW * 1.001, 99.0 * USDT_KRW,
+                    100.0 * USDT_KRW * 1.001)]
+fake["low"] = fake["high"] = None
 _tpo_before = len(sent_messages)
 price_check.run_once(_tpo_now)
 check("TPOFF-pre 터치 본알림 1건 (M-2 게이트 통과 전제)",
@@ -4100,8 +4111,12 @@ with db.connect(_MFE_DB) as conn:
 
 # 터치 — 기준가(base_eff) = 자기 진입가 KRW (지정가 체결 모델)
 fake["price"] = 100.0 * USDT_KRW * 1.001
-fake["low"] = 99.0 * USDT_KRW
-fake["candles"] = fake["high"] = None
+# 2026-10-09 시계 의존 수리(TPOFF-pre 와 동일 원인): 기본 캔들(모듈 now 기준)은
+# 자정 가드로 now 가 1시간 당겨지면 collected_at 이전이 돼 터치가 안 잡힌다.
+fake["candles"] = [(_mfe_now - 120, _mfe_now - 60,
+                    100.0 * USDT_KRW * 1.001, 99.0 * USDT_KRW,
+                    100.0 * USDT_KRW * 1.001)]
+fake["low"] = fake["high"] = None
 price_check.run_once(_mfe_now)
 
 # 회차1: 하락만 (저가 96 → MAE -4%), TP·SL 미도달 → 미종결
@@ -4221,8 +4236,12 @@ def _dly_touch_score(delay_sec, enabled, tag):
         lv["signal_key"] = db.make_signal_key("DLYC", 100.0, "DLY_auth", "dly")
         db.upsert_level(conn, lv)
     fake["price"] = 100.0 * USDT_KRW * 1.001
-    fake["low"] = 99.0 * USDT_KRW
-    fake["candles"] = fake["high"] = None
+    # 2026-10-09 시계 의존 수리: 기본 캔들(모듈 now-120~-60)은 자정 가드(now-=3600)나
+    # 긴 실행 시간(>180초)이면 collected_at(t0-300) 이전이 돼 터치가 안 잡힌다 —
+    # t0 기준으로 명시한다.
+    fake["candles"] = [(t0 - 120, t0 - 60, 100.0 * USDT_KRW * 1.001,
+                        99.0 * USDT_KRW, 100.0 * USDT_KRW * 1.001)]
+    fake["low"] = fake["high"] = None
     price_check.run_once(t0)
     with db.connect(path) as conn:
         row = conn.execute(
@@ -4454,8 +4473,11 @@ with db.connect(_RX_DB) as conn:
                           (_rx_lv["signal_key"],)).fetchone()["id"]
 
 fake["price"] = 100.0 * USDT_KRW * 1.001
-fake["low"] = 99.0 * USDT_KRW
-fake["candles"] = fake["high"] = None
+# 2026-10-09 시계 의존 수리(TPOFF-pre 와 동일 원인): _rx_now 기준 명시 캔들.
+fake["candles"] = [(_rx_now - 120, _rx_now - 60,
+                    100.0 * USDT_KRW * 1.001, 99.0 * USDT_KRW,
+                    100.0 * USDT_KRW * 1.001)]
+fake["low"] = fake["high"] = None
 price_check.run_once(_rx_now)
 with db.connect(_RX_DB) as conn:
     _rx_row0 = conn.execute(
