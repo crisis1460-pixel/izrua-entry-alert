@@ -1128,17 +1128,17 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
     ranks = {}
     if compact:
         # 레이아웃 C(10-09 대표 결정): **어떤 항목을 실을지**는 위 중요도 선택이 정하고, 고른 뒤의
-        # **표시 순서만** 시총 순위 오름차순(1위 먼저)으로 바꾼다. 순위 모름(fail-open)은 순위 있는
-        # 코인 뒤, 🌐 시장은 맨 끝. 같은 그룹 안에서는 선택 순서(중요도)를 유지한다.
+        # **표시 순서만** 바꾼다: 🌐 시장(전체 공통) 맨 위(10-10 대표 수정) → 코인 시총 순위 오름차순
+        # (1위 먼저) → 순위 모름(fail-open). 같은 그룹 안에서는 선택 순서(중요도)를 유지한다.
         ranks = nb.load_mcap_ranks() or {}
 
         def _disp_key(ic):
             i, c = ic
             s = str(c["row"].get("symbol") or "").upper()
             if s == news_parse.MARKET_SYMBOL:
-                return (2, 0, i)
+                return (0, 0, i)
             rk = ranks.get(s)
-            return (0, rk, i) if rk else (1, 0, i)
+            return (1, rk, i) if rk else (2, 0, i)
 
         picked = [c for _i, c in sorted(enumerate(picked), key=_disp_key)]
 

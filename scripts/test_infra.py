@@ -3306,12 +3306,13 @@ _ord3 = _mbc_cmp._news_items(_cmpc, [], timeout=1.0, now=1791500100)
 _mbc_cmp._NEWS_BLOCK_MAX = _ord_max
 _heads2 = [ls[0] for ls, _r in _ord2[1]]
 _heads3 = [ls[0] for ls, _r in _ord3[1]]
-check("NEWS-CMP9 상한 2: 중요도로 RKT(해킹)·🌐 선택(RKA 150위 차트는 탈락) → 표시 RKT 다음 🌐",
-      len(_heads2) == 2 and _heads2[0].startswith("<b>RKT</b> [시총 200위]")
-      and _heads2[1].startswith("<b>🌐 시장</b> [전체]"))
-check("NEWS-CMP9b 상한 3: 표시는 시총 오름차순(RKA 150 → RKT 200) · 🌐 맨 끝 · 헤더 '(시총순'",
-      len(_heads3) == 3 and _heads3[0].startswith("<b>RKA</b> [시총 150위] 💬 채널 의견")
-      and _heads3[1].startswith("<b>RKT</b>") and _heads3[2].startswith("<b>🌐 시장</b>")
+# 10-10 대표 수정: 🌐 시장(전체 공통) 맨 위 → 코인 시총순.
+check("NEWS-CMP9 상한 2: 중요도로 RKT(해킹)·🌐 선택(RKA 150위 차트는 탈락) → 표시 🌐 다음 RKT",
+      len(_heads2) == 2 and _heads2[0].startswith("<b>🌐 시장</b> [전체]")
+      and _heads2[1].startswith("<b>RKT</b> [시총 200위]"))
+check("NEWS-CMP9b 상한 3: 🌐 맨 위 → 시총 오름차순(RKA 150 → RKT 200) · 헤더 '(시총순'",
+      len(_heads3) == 3 and _heads3[0].startswith("<b>🌐 시장</b>")
+      and _heads3[1].startswith("<b>RKA</b> [시총 150위] 💬 채널 의견") and _heads3[2].startswith("<b>RKT</b>")
       and _ord3[0].startswith("📰 <b>주요 뉴스</b> (시총순"))
 
 # 리뷰 10-09 #3: 판정한 후보가 전부 '내용 없는 의견'(건너뜀)이면 블록 없음(None) — 호출부가

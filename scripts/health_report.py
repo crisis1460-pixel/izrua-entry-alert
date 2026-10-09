@@ -336,12 +336,35 @@ def render(m: dict, ci=None) -> str:
     return "\n".join(out)
 
 
+def sources_status() -> str:
+    """외부 소스 도달 점검(2026-10-10) — 러너에서 경제지표 캘린더(FF)·뉴스 RSS 가 열리는지.
+    바이낸스 선물 데이터가 미국 러너에서 451 로 막혔던 전례가 있어 새 소스는 러너 도달을 확인한다."""
+    lines = ["### 외부 소스 도달", "| 소스 | 결과 |", "|---|---|"]
+    try:
+        from notify import macro_alert
+        rows = macro_alert.fetch_release_rows()
+        lines.append(f"| 경제지표 캘린더(FF) | {'✅ ' + str(len(rows)) + '행' if rows else '⚠️ 0행/실패'} |")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"| 경제지표 캘린더(FF) | ⚠️ {type(e).__name__} |")
+    try:
+        from collector import rss_source
+        from config import settings as _s
+        for name, url in (_s.get("rss_news_feeds") or [])[:3]:
+            items = rss_source.fetch_items(name, url, 10.0, max_age_hours=48, max_items=50)
+            lines.append(f"| RSS {name} | {'✅ ' + str(len(items)) + '건' if items else '⚠️ 0건/실패'} |")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"| RSS | ⚠️ {type(e).__name__} |")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="주간 건강표 (내부용, 읽기 전용)")
     ap.add_argument("--db", default=None, help="DB 경로 (기본: settings db_path)")
     ap.add_argument("--out", default=None, help="Markdown 파일로도 저장")
     ap.add_argument("--now", type=float, default=None, help="기준 시각 epoch (기본: 현재)")
     ap.add_argument("--no-ci", action="store_true", help="CI 조회 생략")
+    ap.add_argument("--check-sources", action="store_true",
+                    help="외부 소스 도달 점검(경제지표 캘린더·뉴스 RSS) — 워크플로 전용, 테스트는 미사용")
     a = ap.parse_args(argv)
 
     db_path = a.db
@@ -358,6 +381,8 @@ def main(argv=None) -> int:
         conn.close()
     ci = ("CI: 조회 생략(--no-ci)", False) if a.no_ci else ci_status()
     md = render(m, ci)
+    if a.check_sources:
+        md += "\n" + sources_status()
     print(md)
     if a.out:
         Path(a.out).write_text(md, encoding="utf-8")

@@ -33,4 +33,4 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/health_report.py
+        run: python scripts/health_report.py --check-sources
