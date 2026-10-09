@@ -178,7 +178,8 @@ _TYPES = [
     ("hack", r"\bhack(?:ed|s|er|ers)?\b|\bexploit(?:ed|s)?\b|\bdrain(?:ed|s)?\b|\bstolen\b|\bheist\b|\bbreach|"
              r"\bsteal(?:s|ing)?\b|\bstole\b|\btheft\b", "해킹", -1, "단기", "H"),
     ("etf", r"\bETFs?\b", "ETF", 0, "단기", "H"),
-    ("reg", r"\bSEC\b|\bCFTC\b|\bclarity act\b|\bact\b.{0,20}\bsenate|\bsenate\b|\bbill\b|\bregulat\w*|"
+    # 10-09: "regulated stablecoins"(규제 대상인 ~) 같은 형용사는 규제 사건이 아니다 — regulated 제외.
+    ("reg", r"\bSEC\b|\bCFTC\b|\bclarity act\b|\bact\b.{0,20}\bsenate|\bsenate\b|\bbill\b|\bregulat(?!ed\b)\w*|"
             r"\blawsuit\b|\bsu(?:e|es|ed|ing)\b|\bcourt\b|\bruling\b|\binjunction\b|\bexemption\b", "규제", 0, "중장기", "H"),
     # 09-28 디버깅: "Upbit to list Sui (SUI)"·"Binance will list Plasma" — 원형 list 도 예정 상장.
     ("listing", r"\bdelist\w*|\blist(?:ing|ed|s)\b(?! of)|\b(?:to|will)\s+list\b", "상장", 1, "단기", "H"),
@@ -1158,7 +1159,8 @@ def _fact_what(p: dict, text: str, sym: str) -> str:
             return f"{josa(actor, '이/가')} 가상자산에 우호적인 조치를 내놨습니다."
         if pol < 0:
             return f"{josa(actor, '이/가')} 가상자산에 불리한 결정을 내렸거나 관련 일정이 틀어졌습니다."
-        return f"{actor} 관련 규제 소식입니다."
+        # 10-09: 주체 미상이면 "규제 당국 관련 규제 소식입니다" 처럼 같은 말이 겹쳤다.
+        return "규제 관련 소식입니다." if actor == "규제 당국" else f"{actor} 관련 규제 소식입니다."
     if k == "macro":
         mv, bp = _fed_move(text), _bp(text)
         if mv == "동결":

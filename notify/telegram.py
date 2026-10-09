@@ -645,6 +645,11 @@ def _verdict_line(head: str, reason, verdict: str, value=None) -> str:
         cand = f"{head}: {'·'.join(toks)}{tail}"
         if _line_width(cand) <= _MAX_LINE_COLS:
             return cand
+        # 10-09 대표 캡처("🧭 돈 흐름: 매수 우호" — 근거 '자금 유입'이 1칸 넘쳐 통째로 빠짐):
+        # 덜어내기 전에 근거 안 띄어쓰기를 붙여 한 번 더 맞춰 본다("자금유입").
+        cand = f"{head}: {'·'.join(t.replace(' ', '') for t in toks)}{tail}"
+        if _line_width(cand) <= _MAX_LINE_COLS:
+            return cand
         toks = toks[:-1]
     return f"{head}: {verdict}"
 
@@ -921,6 +926,10 @@ def render_alert(kind: str, coin_symbol: str, cluster: list, current_krw: float,
     entry_rep = hi  # 트리거 기준 = 클러스터 상단
 
     tier = rep.get("mcap_tier_icon") or ""
+    # 시총 순위 밖(등급 아이콘 '·' 플레인)은 줄머리가 '·'로 시작해 다른 줄과 열이 어긋났다
+    # (10-09 ORCA 캡처 "· 시총 223위…") — 이모지 자리를 맞추는 중립 아이콘으로.
+    if tier.strip() in ("", "·"):
+        tier = "🔹"
     rank = rep.get("mcap_rank")
     rank_part = f"{tier} 시총 {rank}위" if rank else ""
     kind_kr = "🎯 <b>[진입가 터치]</b>" if kind == "touch" else "⚠️ <b>[진입가 접근]</b>"

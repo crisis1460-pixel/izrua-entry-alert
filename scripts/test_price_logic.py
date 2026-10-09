@@ -505,13 +505,13 @@ msg_neutral = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT
 check("T14O 수급 폴백: 롱과열→주의(추격 위험) / 숏과열→우호(반등 여지) / 그 외→중립",
       # 2026-09-27 v3c 형식: '🧭 돈 흐름: {근거} · {판정}', 넘치면 '🧭 돈 흐름: {판정}'
       "🧭 돈 흐름: 추격 위험 · 주의" in msg_hot
-      and "🧭 돈 흐름: 매수 우호" in msg_cold
+      and "🧭 돈 흐름: 반등여지 · 매수 우호" in msg_cold  # 10-09: 근거 붙여쓰기로 한 줄
       and "🧭 돈 흐름: 중립 · 관망" in msg_neutral and "💰 펀딩" not in msg_neutral)
 # T14O2: supply 명시 전달 시 그대로 렌더 + 원시 펀딩 수치는 미노출.
 msg_sup = tg.render_alert("touch", "BTC", [_fund_lv], 100.0 * USDT_KRW, USDT_KRW,
                           funding_rate=-0.05, supply=("우호", "반등 연료"))
 check("T14O2 수급 명시 전달 - 합성 판정 렌더·펀딩 수치 미노출",
-      "🧭 돈 흐름: 매수 우호" in msg_sup and "-0.05" not in msg_sup)
+      "🧭 돈 흐름: 반등연료 · 매수 우호" in msg_sup and "-0.05" not in msg_sup)
 
 # ── SV1~SV5: derive_supply_verdict 판정 매트릭스 (2026-08-07) ──────────────
 from monitor.binance import derive_supply_verdict as _sv

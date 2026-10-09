@@ -155,8 +155,10 @@ with db.connect(TEST_DB) as conn:
 check("B3h PPI D-1 표시", "PPI 생산자물가 D-1" in text_ev)
 check("B3i CPI D-2 표시", "CPI 소비자물가 D-2" in text_ev)
 check("B3j 이벤트가 1개가 아닌 복수", text_ev.count("📅") >= 2)
-check("B3k 한국 시간 표기", "한국 21:30" in text_ev)
-check("B3l FOMC 익일 표기", "한국 익일03:00" in text_ev)
+# 10-09: 32칸을 넘는 줄은 '한국'을 빼고 한 줄로("(21:30)") — 시각 자체는 항상 표기.
+check("B3k 한국 시간 표기", "21:30" in text_ev and all(
+    morning_brief._display_width(x) <= 32 for x in text_ev.splitlines() if x.startswith("📅")))
+check("B3l FOMC 익일 표기", "익일03:00" in text_ev)
 
 # B4: 어제 성과·대기 레벨은 로컬 DB 원천 — 데이터가 있으면 행이 나온다
 YESTERDAY = "2026-08-14"

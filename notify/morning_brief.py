@@ -268,7 +268,13 @@ def _macro_event_lines(now: float, conn) -> list:
             if not label:
                 continue
             base = f"📅 {label} {tag}"
-            if kst_part and _display_width(base + kst_part) > _MACRO_LINE_MAX_W:
+            # 10-09 대표 캡처: "PPI 생산자물가 D-4" / "(한국 21:30)" 두 줄 — 넘치면 먼저 '한국'을 빼
+            # 한 줄("(21:30)")에 맞추고, 그래도 넘칠 때만 다음 줄로.
+            _short = kst_part.replace("한국 ", "")
+            if kst_part and _display_width(base + kst_part) > _MACRO_LINE_MAX_W \
+                    and _display_width(base + _short) <= _MACRO_LINE_MAX_W:
+                line = base + _short
+            elif kst_part and _display_width(base + kst_part) > _MACRO_LINE_MAX_W:
                 line = f"{base}\n{_MACRO_INDENT}{kst_part.lstrip()}"
             else:
                 line = base + kst_part

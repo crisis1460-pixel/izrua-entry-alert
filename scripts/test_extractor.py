@@ -408,11 +408,15 @@ from collector import extractor as _ex  # noqa: E402
 # 다른 정규식 비용이 섞여 이 수리의 효과가 묻힌다(측정 확인: 683ms vs 1,835ms).
 # 실측(같은 머신): 상한 있음 4.2ms / 없음 987ms — 230배.
 _redos_text = "TARGETS: " + ("1" * 3200) + "\nSTOP LOSS: 990"
-_t0 = _time.perf_counter()
-_ex._grab_after(_ex._TP_LABEL, _redos_text)
-_elapsed_ms = (_time.perf_counter() - _t0) * 1000
-# 임계 200ms: 상한 실측(4.2ms)의 47배 여유 — 느린 CI 도 통과하고, 상한이 사라지면
-# (987ms) 반드시 걸린다.
+# 3회 측정 중 최솟값(2026-10-09: 단발 측정이 느린 러너에서 211.9ms 로 임계를 넘어 dependabot
+# PR 테스트가 실패 — 첫 호출의 정규식 컴파일·캐시 냉기). 상한이 사라지면 매번 ~1초라 최솟값도 걸린다.
+_redos_runs = []
+for _ in range(3):
+    _t0 = _time.perf_counter()
+    _ex._grab_after(_ex._TP_LABEL, _redos_text)
+    _redos_runs.append((_time.perf_counter() - _t0) * 1000)
+_elapsed_ms = min(_redos_runs)
+# 임계 200ms: 상한 실측(4.2ms)의 47배 여유 — 상한이 사라지면(987ms) 반드시 걸린다.
 _redos_ok = _elapsed_ms < 200 and _ex._LADDER_MAX_WINDOW == 200
 print(("✅" if _redos_ok else "❌"),
       f"ReDoS 방어 - 200자 초과 긴 숫자 런에서 시간 폭주 없음 ({_elapsed_ms:.1f}ms)")
