@@ -663,7 +663,8 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
 
     # 고변동 경제지표(CPI·FOMC·고용) 발표 30분 전 개별 알림 (2026-10-09) — 실패 격리.
     from notify import macro_alert
-    macro_alert_status = macro_alert.maybe_send_macro_prealert(db_path, now=now)
+    # now 는 수집(5~8분) 전 회차 시작 시각이라 '발표 전' 판정이 늦어진다 — 현재 시각으로(10-10 리뷰).
+    macro_alert_status = macro_alert.maybe_send_macro_prealert(db_path, now=time.time())
 
     # 감사 덤프 정체 감시 — collect_stale 과 동일 패턴
     _check_audit_dump_stale(db_path, now)

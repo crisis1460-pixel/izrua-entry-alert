@@ -1103,6 +1103,18 @@ def _news_items(conn, consumed_ids: list, kimchi=None, timeout: float = 5.0,
         ck = c["key"] if c["v2"] else c["key"][:2]
         if cur is None or ck < (cur["key"] if cur["v2"] else cur["key"][:2]):
             best_by_symbol[sym] = c
+    # 🌐 시장(keep) 끼리 같은 사건 중복 제거(10-10 최종 리뷰: 은행들의 OCC 소송을 두 매체가 각각 보도 →
+    # 🌐 두 줄). 제목 단어 집합의 자카드 유사도 0.5 이상이면 같은 사건 — 더 좋은 키(중요도·최신) 1건만.
+    def _title_words(c):
+        t = (c["row"].get("summary_en") or c["row"].get("summary") or "").split("\n", 1)[0].lower()
+        return {w for w in re.findall(r"[a-z0-9$]+", t) if len(w) > 2}
+    _mk = []
+    for c in sorted(keep, key=lambda c: c["key"]):
+        tw = _title_words(c)
+        if any(tw and ow and len(tw & ow) / len(tw | ow) >= 0.5 for ow in (_title_words(o) for o in _mk)):
+            continue   # 판정 시 이미 consumed_ids 에 들어가 소비된다(09-22 계약)
+        _mk.append(c)
+    keep = _mk
     deduped = list(best_by_symbol.values()) + keep
 
     # 등급 → 최신순(1차 정렬) → 선택 중 **이미 뽑힌 채널과 다른 채널 우선**(그리디).

@@ -3009,6 +3009,22 @@ with _pm.object(_mm, "_fetch_fomc_calendar", return_value=[]), _pm.object(_mm.db
     _cal_ev = _mm.refresh_macro_calendar(_mm_conn)
 check("MAC-12 외부 FOMC 일정이 비어도 정적 공식 일정의 FOMC(2027-01-27 등)가 일정에 포함",
       any(e["type"] == "FOMC" and e["date"] == "2027-01-27" for e in _cal_ev))
+# MAC-13~14 (10-10 최종 리뷰): FF 값 HTML 이스케이프 · FF 조회 실패는 1시간 재조회 안 함
+_ff_lt = [{"title": "Federal Funds Rate", "country": "USD", "date": "2026-10-28T14:00:00-04:00",
+           "forecast": "<0.25%", "previous": "<0.25%"}]
+_fomc_ev = {"date": "2026-10-28", "type": "FOMC"}
+_rv = _ma.release_values(_fomc_ev, _dt_i.fromisoformat("2026-10-28T18:00:00+00:00"), _ff_lt)
+check("MAC-13 FF 값의 꺾쇠('<0.25%')는 &lt; 로 이스케이프(HTML 모드 400 거절 방지)",
+      bool(_rv) and "&lt;0.25%" in _rv[0][1] and "<" not in _rv[0][1])
+_ndb = _osm.path.join(_tfm.mkdtemp(), "n.db"); db.init_db(_ndb)
+_calls = []
+with _pm.object(_ma, "fetch_release_rows", side_effect=lambda *a, **k: _calls.append(1) or []):
+    with db.connect(_ndb) as _cn:
+        _ma._cached_rows(_cn, 1_800_000_000.0)
+        _ma._cached_rows(_cn, 1_800_000_000.0 + 600)
+        _ma._cached_rows(_cn, 1_800_000_000.0 + 3700)
+check("MAC-14 FF 조회 실패 후 1시간은 재조회 안 함(매 회차 타임아웃 방지) · 1시간 뒤 재시도",
+      len(_calls) == 2)
 # ─── NEWS-CMP*: 뉴스 압축 항목 (2026-10-09 대표 요청) ─────────────────────
 # "코인별 뉴스를 더 함축해서 시세와 관련된 최고 중요내용만 · 핵심 키워드 + 그래서 오른다/내린다 ·
 # 최대한 여러 코인 · 시총 200위 안쪽만". 항목 = 최대 3줄, 줄마다 32칸 이내.
@@ -3354,6 +3370,24 @@ _x_p = _npx.parse(_x_t)
 _x_lines = _mbx._compact_item_lines(_x_p, "XRP", {"channel": "cryptosignals0rg", "summary_en": _x_t}, {})
 check("NEWS-CMP-X2 내용 없는 의견('방향 단정 없음' + 수치 없음)은 생략(None) 또는 비노이즈 항목",
       _x_lines is None or _x_lines == [] or not any("방향 단정 없음" in ln for ln in _x_lines))
+
+# ── FIN-*: 10-10 최종 리뷰 회귀 ──
+from notify import news_parse as _nf
+def _cf(t):
+    p = _nf.parse(t)
+    return p, _nf.compact(p, "BTC", t, {}, source="CoinDesk", is_feed=True, avail=30)
+_p1, _c1 = _cf("ETH breaks above $2,600 resistance, eyes $3,000\nEther rallied.")
+_p2, _c2 = _cf("Bitcoin breaks below $60K support\nBTC slid.")
+check("FIN-1 이미 일어난 돌파·이탈 기사는 '여부 주목' 아님 → '$2,600 돌파'·'$60,000 이탈'",
+      _c1 and "돌파" in _c1["kw"] and "여부" not in (_c1.get("call") or "")
+      and _c2 and "이탈" in _c2["kw"] and "여부" not in (_c2.get("call") or ""))
+_p3, _c3 = _cf("Trump Taps Jay Clayton, the SEC Chair Who Sued Ripple, to Lead AI Push\nThe former chair will lead.")
+_p4, _c4 = _cf("Crypto industry paid $8 million to Clarity Act lobbyists who didn't close the deal\nThe bill stalled.")
+_p5, _c5 = _cf("SEC sues Binance over unregistered securities\nThe agency filed charges.")
+check("FIN-2 관계절 'who sued'·로비·'didn't close' 는 소송·진전 아님(⚪), 실제 제소는 🔴 · 규제 키워드에 금액 없음",
+      _c3 and _c3["chip"] == "⚪" and "소송" not in _c3["kw"]
+      and _c4 and _c4["chip"] != "🟢" and "$8M" not in _c4["kw"]
+      and _c5 and _c5["chip"] == "🔴" and "소송" in _c5["kw"])
 
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")

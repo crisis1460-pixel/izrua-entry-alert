@@ -13,6 +13,7 @@
 어떤 실패도 회차를 죽이지 않는다(run_cycle 의 다른 maybe_* 와 동일 격리).
 """
 
+import html
 import json
 import logging
 import time
@@ -93,7 +94,9 @@ def release_values(ev: dict, ev_utc: datetime, rows: list) -> list:
                 continue
             if abs((d.astimezone(timezone.utc) - ev_utc).total_seconds()) > 6 * 3600:
                 continue
-            f, p = (e.get("forecast") or "").strip(), (e.get("previous") or "").strip()
+            # HTML 모드 발송 — FF 값에 '<0.25%' 같은 꺾쇠가 오면 400 거절로 알림 유실(10-10 리뷰).
+            f = html.escape((e.get("forecast") or "").strip())
+            p = html.escape((e.get("previous") or "").strip())
             if f or p:
                 out.append((lab, f, p))
             break
@@ -252,8 +255,13 @@ def _cached_rows(conn, now: float) -> Optional[list]:
     if isinstance(cached, dict) and now - float(cached.get("at") or 0) < _FF_TTL_SEC \
             and isinstance(cached.get("rows"), list):
         return cached["rows"]
-    rows = fetch_release_rows()
+    # 조회 실패는 1시간 동안 재조회하지 않는다(10-10 리뷰: FF 장애 시 ±2일 동안 매 회차 타임아웃).
+    failed_recently = isinstance(cached, dict) and now - float(cached.get("fail_at") or 0) < 3600
+    rows = None if failed_recently else fetch_release_rows()
     if not rows:
+        if not failed_recently:
+            base = cached if isinstance(cached, dict) else {"at": 0, "rows": None}
+            db.set_meta(conn, META_FF_CACHE, json.dumps({**base, "fail_at": now}))
         return cached.get("rows") if isinstance(cached, dict) and isinstance(cached.get("rows"), list) \
             and now - float(cached.get("at") or 0) < 7 * 86400 else None
     db.set_meta(conn, META_FF_CACHE, json.dumps({"at": now, "rows": rows}))

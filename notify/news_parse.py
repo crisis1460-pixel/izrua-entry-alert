@@ -212,7 +212,8 @@ _POL_WORDS = {
             r"outflow|net sold|selling|(?<!in-kind )redemption"),
     "reg": (r"approv|opens? (?:the )?door|exemption|pass(?:es|ed)\b|green light|clears?\b|dismiss|roadmap|framework|"
             r"\bdrops?\b|\bdropped\b|withdr[ae]w\w*|\bends?\b|\bended\b|\bcloses?\b|\bclosed\b|in favou?r",
-            r"fail|reject|odds (?:crash|drop|fall)|crash|lawsuit|sues?\b|sued|charges?\b|\bban\b|delay|crackdown"),
+            r"fail|reject|odds (?:crash|drop|fall)|crash|lawsuit|(?<!who )(?<!that )\bsues?\b|"
+            r"(?<!who )(?<!that )\bsued\b|charges?\b|\bban\b|delay|crackdown"),
     "macro": (r"\bcuts?\b|lowers?\b|eas(?:e|es|ing)\b|cooling|ceasefire|de-?escalat",
               r"hikes?\b|raises?\b|risk-off|tensions?|escalat|war\b|tariff|rising yields|higher yields|inflation (?:concerns|fears)|oil"),
     "whale": (r"\bbought\b|\bbuy(?:s|ing)?\b|accumulat",
@@ -530,6 +531,14 @@ def _polarity(key: str, base: int, text: str, amts: list) -> int:
             return {"인하": 1, "인상": -1}.get(mv, 0)
         lead = _RATE_WORD_RX.sub(" ", lead)
     p, n = len(pos_rx.findall(lead)), len(neg_rx.findall(lead))
+    if key == "reg":
+        # 10-10 최종 리뷰: 부정된 진전("lobbyists who didn't close the deal")은 진전이 아니라 실패로,
+        # 로비스트 고용·정책 로비 기사는 결정이 아니라 방향 없음(0)으로 본다.
+        lead = re.sub(r"\b(?:didn'?t|did not|failed to|won'?t|not)\s+(?:close|pass|clear|approve)\w*",
+                      " fail ", lead, flags=re.I)
+        if re.search(r"\blobby(?:ist|ists|ing)?\b", lead, re.I) and not re.search(
+                r"\b(?:approv\w*|reject\w*|lawsuit|ban)\b", lead, re.I):
+            return 0
     if key == "reg" and _REG_RESOLVE_RX.search(lead):
         # 소송·제소 단어가 '취하·기각·승소' 동사와 함께면 악재 단어로 세지 않는다
         # ("SEC drops lawsuit against Coinbase" 가 🔴 SEC 난항이던 문제, 09-28).
@@ -1573,7 +1582,8 @@ _EX_KO = {"Upbit": "업비트", "Bithumb": "빗썸", "Binance": "바이낸스", 
           "Robinhood": "로빈후드", "Kraken": "크라켄", "Bybit": "바이비트", "OKX": "OKX"}
 _UNLOCK_PCT_RX = re.compile(r"(\d+(?:\.\d+)?)\s?%[^.\n]{0,40}\bsupply\b", re.I)
 _ETF_FILING_RX = re.compile(r"\bfil(?:es|ed|ing)\b|\bS-1\b|\b19b-4\b", re.I)
-_REG_SUIT_RX = re.compile(r"\blawsuits?\b|\bsu(?:es|ed|ing)\b", re.I)
+# "the SEC Chair Who Sued Ripple"(인사 기사)의 관계절 'who/that sued' 는 새 소송이 아니다(10-10 최종 리뷰).
+_REG_SUIT_RX = re.compile(r"\blawsuits?\b|(?<!who )(?<!that )\bsu(?:es|ed|ing)\b", re.I)
 # 규제 주체(키워드용 짧은 이름) — 위에서부터 먼저 걸린 것.
 _REG_ACTORS = [
     (re.compile(r"\bSEC\b"), "SEC"),
@@ -1644,6 +1654,8 @@ def _compact_fact_kw(p: dict, text: str) -> list:
         else:
             ev = f"{actor or '규제'} " + ("규제 완화" if pol > 0 else ("규제 강화" if pol < 0 else "규제 이슈"))
             ev = ev.replace("규제 규제", "규제")
+    if k == "reg":
+        amt = ""   # 규제 기사의 금액은 로비 비용 등 사건 크기와 무관한 경우가 많다(10-10 최종 리뷰)
     full = " ".join(x for x in (ev, amt, extra) if x)
     out = [full, " ".join(x for x in (ev, amt) if x), " ".join(x for x in (ev, extra) if x), ev]
     if p.get("stale"):
@@ -1721,7 +1733,8 @@ def _compact_scenario(p: dict, who: str) -> tuple:
     elif act == "저항에 막힘":
         core = [f"저항 막혀 {price}" if price else "", "저항에 막힘"]
     elif act == "돌파":
-        core = [f"{up or price} 돌파 시도", "돌파 시도"]
+        # 'hold above X' 의 X 는 지지선 — 돌파 대상이 아니다(10-10 최종 리뷰: ENA "0.2200 돌파 시도").
+        core = [f"{res_lv} 돌파 시도" if res_lv else "", "돌파 시도"]
     elif act == "되돌림":
         core = [f"{p['high']} 고점서 되돌림" if p.get("high") else "", f"{price} 되돌림" if price else "",
                 "되돌림"]
@@ -1783,7 +1796,14 @@ def _compact_call(p: dict, who: str, body: str) -> tuple:
     d = {"강세": "상승", "약세": "하락"}.get(st, "")
     kws, l2 = [], []
     if p.get("source") == "기사":
-        if tl and sup == tl:
+        _ttl0 = p.get("title") or ""
+        if tl and re.search(r"\bbreaks?\s+(?:out\s+)?above\b|\bbroke\s+(?:out\s+)?above\b|\bbreaks?\s+out\b|"
+                            r"\breclaim(?:s|ed)?\b", _ttl0, re.I):
+            kws.append(f"{tl} 돌파")
+        elif tl and re.search(r"\bbreaks?\s+below\b|\bbroke\s+below\b|\bbreaks?\s+down\b|"
+                              r"\blos(?:es|t)\s+(?:the\s+)?\$?\d", _ttl0, re.I):
+            kws.append(f"{tl} 이탈")
+        elif tl and sup == tl:
             kws.append(f"지지 {tl}")
         elif tl and res == tl:
             kws.append(f"저항 {tl}")
@@ -1799,7 +1819,18 @@ def _compact_call(p: dict, who: str, body: str) -> tuple:
                 l2.append(f"{pre} {tl} 기준 {d} 전망")
             l2 += [f"{pre} {d} 쪽 전망", f"{pre} {st}"]
         else:
-            if tl and sup == tl:
+            # 제목이 이미 일어난 돌파·이탈을 보도하면 "여부 주목"은 모순(10-10 최종 리뷰:
+            # "ETH breaks above $2,600 resistance" → "돌파 여부 주목").
+            _ttl = p.get("title") or ""
+            _broke_up = re.search(r"\bbreaks?\s+(?:out\s+)?above\b|\bbroke\s+(?:out\s+)?above\b|"
+                                  r"\bbreaks?\s+out\b|\breclaim(?:s|ed)?\b", _ttl, re.I)
+            _broke_dn = re.search(r"\bbreaks?\s+below\b|\bbroke\s+below\b|\bbreaks?\s+down\b|"
+                                  r"\blos(?:es|t)\s+(?:the\s+)?\$?\d", _ttl, re.I)
+            if tl and _broke_up:
+                l2.append(f"{pre} {tl} 돌파")
+            elif tl and _broke_dn:
+                l2.append(f"{pre} {tl} 이탈")
+            elif tl and sup == tl:
                 l2.append(f"{pre} {tl} 지지 여부 주목")
             elif tl and res == tl:
                 l2.append(f"{pre} {tl} 돌파 여부 주목")
