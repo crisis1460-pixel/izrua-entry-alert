@@ -661,6 +661,10 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
     # 재시도한다. 어떤 실패도 예외를 던지지 않는다(다른 maybe_* 와 동일 격리).
     brief_status = morning_brief.maybe_send_brief(db_path, now=now)
 
+    # 고변동 경제지표(CPI·FOMC·고용) 발표 30분 전 개별 알림 (2026-10-09) — 실패 격리.
+    from notify import macro_alert
+    macro_alert_status = macro_alert.maybe_send_macro_prealert(db_path, now=now)
+
     # 감사 덤프 정체 감시 — collect_stale 과 동일 패턴
     _check_audit_dump_stale(db_path, now)
 
@@ -687,7 +691,8 @@ def run_cycle(now: float = None, force_collect: bool = False, force_report: bool
             "author_snapshot": snapshot_status,
             "reverse_check": reverse_status,
             "weekly_report": report_status,
-            "morning_brief": brief_status, "summary": price_summary}
+            "morning_brief": brief_status, "macro_prealert": macro_alert_status,
+            "summary": price_summary}
 
 
 def _env_flag(name: str) -> bool:

@@ -590,6 +590,18 @@ _STATIC_EVENTS = [
 MACRO_EVENTS = _STATIC_EVENTS
 
 
+def event_datetime_utc(ev: dict) -> Optional[datetime]:
+    """이벤트 발표 시각(UTC aware). 타입별 미국 동부 발표시각 + DST. 실패 시 None."""
+    try:
+        h, m = _RELEASE_TIMES_ET.get(ev.get("type"), (8, 30))
+        ev_d = date.fromisoformat(ev["date"])
+        utc_off = -4 if _is_us_dst(ev_d) else -5
+        return datetime(ev_d.year, ev_d.month, ev_d.day, h, m,
+                        tzinfo=timezone(timedelta(hours=utc_off))).astimezone(timezone.utc)
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def get_nearby_macro_event(hours_before: int = 24,
                            hours_after: int = 2,
                            conn=None) -> Optional[dict]:

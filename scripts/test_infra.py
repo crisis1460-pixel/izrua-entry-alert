@@ -2870,6 +2870,38 @@ check("DBG3-6 통계 기사('Crypto theft falls 50% in Q3')는 개별 해킹 사
        or {}).get("type") != "hack"
       and (_n3.classify_event("Scammers steal $2M in ETH as fake network fools users") or {}).get("type") == "hack")
 
+# ── MAC-*: 고변동 지표 발표 30분 전 알림 (2026-10-09 대표 요청) ──
+from notify import macro_alert as _ma
+from monitor import macro as _mac
+_ev_cpi = {"date": "2026-10-14", "type": "CPI", "label": "CPI 소비자물가", "kst_time": "한국 21:30"}
+_ev_fomc = {"date": "2026-10-28", "type": "FOMC", "label": "FOMC 금리결정", "kst_time": "한국 익일03:00"}
+_ev_ppi = {"date": "2026-10-13", "type": "PPI", "label": "PPI 생산자물가", "kst_time": "한국 21:30"}
+_ev_nfp_w = {"date": "2026-11-06", "type": "NFP", "label": "비농업 고용", "kst_time": "한국 22:30"}
+_u_cpi = _mac.event_datetime_utc(_ev_cpi)
+_u_fomc = _mac.event_datetime_utc(_ev_fomc)
+_u_nfp = _mac.event_datetime_utc(_ev_nfp_w)
+check("MAC-1 발표 시각 UTC 환산(서머타임 CPI 21:30·FOMC 익일 03:00·11월 NFP 22:30 KST)",
+      _u_cpi.strftime("%Y-%m-%d %H:%M") == "2026-10-14 12:30"
+      and _u_fomc.strftime("%Y-%m-%d %H:%M") == "2026-10-28 18:00"
+      and _u_nfp.strftime("%Y-%m-%d %H:%M") == "2026-11-06 13:30")
+_T = {"CPI", "FOMC", "NFP"}
+_evs = [_ev_cpi, _ev_fomc, _ev_ppi]
+_t_cpi = _u_cpi.timestamp()
+check("MAC-2 발송 창: 31분 전 1건 · 40분 전 0건 · 발표 후 0건 · 이미 보냄 0건 · PPI 제외",
+      len(_ma.due_events(_evs, _t_cpi - 31 * 60, _T, 35, set())) == 1
+      and len(_ma.due_events(_evs, _t_cpi - 40 * 60, _T, 35, set())) == 0
+      and len(_ma.due_events(_evs, _t_cpi + 60, _T, 35, set())) == 0
+      and len(_ma.due_events(_evs, _t_cpi - 31 * 60, _T, 35, {"CPI|2026-10-14"})) == 0
+      and len(_ma.due_events([_ev_ppi], _mac.event_datetime_utc(_ev_ppi).timestamp() - 31 * 60,
+                             _T, 35, set())) == 0)
+_m_cpi = _ma.build_message(_ev_cpi, _u_cpi, _t_cpi - 32 * 60)
+_m_fomc = _ma.build_message(_ev_fomc, _u_fomc, _u_fomc.timestamp() - 31 * 60)
+_plain = lambda s: s.replace("<b>", "").replace("</b>", "")
+check("MAC-3 본문: 남은 분·한국 시각·지표명, 모든 줄 32칸 이내",
+      "[32분 후 발표]" in _m_cpi and "오늘 21:30 (한국)" in _m_cpi and "CPI 소비자물가" in _m_cpi
+      and "오늘 03:00 (한국)" in _m_fomc
+      and all(_mb4._display_width(x) <= 32 for m in (_m_cpi, _m_fomc) for x in _plain(m).split("\n")))
+
 print(f"\n{'='*40}")
 print(f"  infra 테스트: {n_checks}건 {'전부 통과 ✅' if ok else '실패 있음 ❌'}")
 print(f"{'='*40}")

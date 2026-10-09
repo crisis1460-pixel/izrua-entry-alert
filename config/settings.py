@@ -259,6 +259,11 @@ SETTINGS = {
     # 하루 1회, KST 아침 시간창에 시장환경 요약 1통. 엔트리 알림 양식과 무관한
     # 별도 메시지 종류 — 주간리포트와 같은 meta 주기 판정 패턴(외부 크론 불필요).
     "morning_brief_enabled": True,
+    # 고변동 경제지표 발표 30분 전 개별 알림 (2026-10-09 대표 요청 — notify/macro_alert.py).
+    # 대상: CPI·FOMC 금리결정·비농업 고용(암호화폐 발표 직후 변동성 최상위 3종). 소리 있는 발송.
+    "macro_prealert_enabled": True,
+    "macro_prealert_types": ["CPI", "FOMC", "NFP"],
+    "macro_prealert_window_minutes": 35,   # 발표 전 이 분 이내 첫 회차가 1회 발송(회차 ~4분 간격)
     "morning_brief_kst_hour_from": 8,    # 이 시각(포함)부터 발송 창
     "morning_brief_kst_hour_to": 10,     # 이 시각(미만)까지 — 놓치면 그날 생략
 
