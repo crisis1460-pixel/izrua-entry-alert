@@ -1,0 +1,1465 @@
+{
+  "_week": "2026-W47",
+  "_generated_at": 1794784344.9342506,
+  "grade_hit_rates": {
+    "A": {
+      "wins": 16,
+      "losses": 30,
+      "total": 46,
+      "hit_rate": 0.348
+    },
+    "B": {
+      "wins": 68,
+      "losses": 52,
+      "total": 120,
+      "hit_rate": 0.567
+    },
+    "C": {
+      "wins": 98,
+      "losses": 128,
+      "total": 226,
+      "hit_rate": 0.434
+    },
+    "D": {
+      "wins": 124,
+      "losses": 172,
+      "total": 296,
+      "hit_rate": 0.419
+    },
+    "S": {
+      "wins": 3,
+      "losses": 11,
+      "total": 14,
+      "hit_rate": 0.214
+    }
+  },
+  "score_bucket_hit_rates": {
+    "5-9": {
+      "wins": 1,
+      "losses": 6,
+      "total": 7,
+      "hit_rate": 0.143
+    },
+    "10-14": {
+      "wins": 0,
+      "losses": 1,
+      "total": 1,
+      "hit_rate": 0.0
+    },
+    "15-19": {
+      "wins": 5,
+      "losses": 2,
+      "total": 7,
+      "hit_rate": 0.714
+    },
+    "20-24": {
+      "wins": 8,
+      "losses": 26,
+      "total": 34,
+      "hit_rate": 0.235
+    },
+    "25-29": {
+      "wins": 22,
+      "losses": 45,
+      "total": 67,
+      "hit_rate": 0.328
+    },
+    "30-34": {
+      "wins": 21,
+      "losses": 38,
+      "total": 59,
+      "hit_rate": 0.356
+    },
+    "35-39": {
+      "wins": 67,
+      "losses": 54,
+      "total": 121,
+      "hit_rate": 0.554
+    },
+    "40-44": {
+      "wins": 35,
+      "losses": 62,
+      "total": 97,
+      "hit_rate": 0.361
+    },
+    "45-49": {
+      "wins": 40,
+      "losses": 58,
+      "total": 98,
+      "hit_rate": 0.408
+    },
+    "50-54": {
+      "wins": 32,
+      "losses": 32,
+      "total": 64,
+      "hit_rate": 0.5
+    },
+    "55-59": {
+      "wins": 54,
+      "losses": 40,
+      "total": 94,
+      "hit_rate": 0.574
+    },
+    "60-64": {
+      "wins": 12,
+      "losses": 7,
+      "total": 19,
+      "hit_rate": 0.632
+    },
+    "65-69": {
+      "wins": 3,
+      "losses": 2,
+      "total": 5,
+      "hit_rate": 0.6
+    },
+    "70-74": {
+      "wins": 1,
+      "losses": 3,
+      "total": 4,
+      "hit_rate": 0.25
+    },
+    "75-79": {
+      "wins": 4,
+      "losses": 4,
+      "total": 8,
+      "hit_rate": 0.5
+    },
+    "80-84": {
+      "wins": 1,
+      "losses": 2,
+      "total": 3,
+      "hit_rate": 0.333
+    },
+    "85-89": {
+      "wins": 1,
+      "losses": 2,
+      "total": 3,
+      "hit_rate": 0.333
+    },
+    "90-94": {
+      "wins": 0,
+      "losses": 3,
+      "total": 3,
+      "hit_rate": 0.0
+    },
+    "95-99": {
+      "wins": 2,
+      "losses": 3,
+      "total": 5,
+      "hit_rate": 0.4
+    },
+    "100-104": {
+      "wins": 0,
+      "losses": 2,
+      "total": 2,
+      "hit_rate": 0.0
+    },
+    "105-109": {
+      "wins": 0,
+      "losses": 1,
+      "total": 1,
+      "hit_rate": 0.0
+    }
+  },
+  "grade_ret_distribution": {
+    "C": {
+      "ret_24h": {
+        "n": 214,
+        "mean": -1.183,
+        "median": -0.827,
+        "stdev": 5.59
+      },
+      "ret_72h": {
+        "n": 214,
+        "mean": -0.623,
+        "median": -1.02,
+        "stdev": 8.692
+      }
+    },
+    "S": {
+      "ret_24h": {
+        "n": 11,
+        "mean": -1.813,
+        "median": -0.812,
+        "stdev": 4.072
+      },
+      "ret_72h": {
+        "n": 11,
+        "mean": -1.59,
+        "median": 0.058,
+        "stdev": 5.36
+      }
+    },
+    "D": {
+      "ret_24h": {
+        "n": 297,
+        "mean": -4.398,
+        "median": -1.153,
+        "stdev": 15.347
+      },
+      "ret_72h": {
+        "n": 294,
+        "mean": -3.911,
+        "median": -1.435,
+        "stdev": 16.296
+      }
+    },
+    "A": {
+      "ret_24h": {
+        "n": 46,
+        "mean": -0.811,
+        "median": -0.486,
+        "stdev": 4.006
+      },
+      "ret_72h": {
+        "n": 46,
+        "mean": -0.265,
+        "median": -0.166,
+        "stdev": 5.398
+      }
+    },
+    "B": {
+      "ret_24h": {
+        "n": 121,
+        "mean": 0.217,
+        "median": 0.284,
+        "stdev": 4.264
+      },
+      "ret_72h": {
+        "n": 121,
+        "mean": 0.909,
+        "median": -0.352,
+        "stdev": 6.869
+      }
+    }
+  },
+  "author_advanced": {
+    "AK47SH": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Aadil_A1000x": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Altsignals": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Arthursh": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "BigBeluga": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "BitmexSignalsFee": {
+      "profit_factor": 1.651,
+      "r_expectancy": 0.256,
+      "max_consec_loss": 16,
+      "monthly_consistency": 0.299,
+      "r_track_n": 48
+    },
+    "ByteSignals": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "Capital-Insights": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Crypto-Adda_Official": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "CryptoPatel": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Crypto_Andy_": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "DiamondCapital_ict": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "DrDodofortrading": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "EhsanZeydabadi": {
+      "profit_factor": 0.627,
+      "r_expectancy": -0.314,
+      "max_consec_loss": 7,
+      "monthly_consistency": 0.176,
+      "r_track_n": 25
+    },
+    "Elephantun": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "Elite_Forex_Signals_pro": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "Ernst_Journal": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Fibonacci_Flow": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "Forex_King_0786": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "GlebInvestor": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Hamzatheinsider": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Honeybee-Crypto": {
+      "profit_factor": 0.105,
+      "r_expectancy": -0.649,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.083,
+      "r_track_n": 9
+    },
+    "Jasmine-Flower": {
+      "profit_factor": 0.0,
+      "r_expectancy": -1.0,
+      "max_consec_loss": 5,
+      "monthly_consistency": null,
+      "r_track_n": 5
+    },
+    "John_Isige": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Juliia": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "KSM_Trader": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Katsumi-Nohara": {
+      "profit_factor": 1.233,
+      "r_expectancy": 0.116,
+      "max_consec_loss": 2,
+      "monthly_consistency": 0.354,
+      "r_track_n": 8
+    },
+    "Macki87": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "MarketFlowResearch": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "MarkhorTrader": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "MasTerRichh": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "MasterAnanda": {
+      "profit_factor": 2.421,
+      "r_expectancy": 0.888,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.354,
+      "r_track_n": 8
+    },
+    "Master_Hunter": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "Miketubarao": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "MuthuAlphaTrader": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "NEXTIn_Financials": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Nambou_Signals": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "NorthEdgeOfficial": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Primal_Signals": {
+      "profit_factor": 0.171,
+      "r_expectancy": -0.637,
+      "max_consec_loss": 5,
+      "monthly_consistency": 0.094,
+      "r_track_n": 7
+    },
+    "QilanX": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Rajkuta": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Richtv_official": {
+      "profit_factor": 0.907,
+      "r_expectancy": -0.073,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.083,
+      "r_track_n": 7
+    },
+    "Roddy01SIGNALSPROVIDER": {
+      "profit_factor": 0.0,
+      "r_expectancy": -0.715,
+      "max_consec_loss": 7,
+      "monthly_consistency": 0.0,
+      "r_track_n": 7
+    },
+    "SEER1618777": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Terminator_Crypto_Analyst": {
+      "profit_factor": 0.868,
+      "r_expectancy": -0.088,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.222,
+      "r_track_n": 12
+    },
+    "TheChartist_Code2trade": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "The_Trading_G3ek": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "TradeAnalyzerPro": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "TradeMing": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "Wall_Street_Levels": {
+      "profit_factor": 1.905,
+      "r_expectancy": 0.425,
+      "max_consec_loss": 2,
+      "monthly_consistency": 0.298,
+      "r_track_n": 12
+    },
+    "Wealthy_Vikish": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "WickWhisper": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "XAUxBTC_Pro": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "aAbraham1x": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "aminrahmani888": {
+      "profit_factor": 0.989,
+      "r_expectancy": -0.009,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.236,
+      "r_track_n": 6
+    },
+    "badalworld": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "celkemircan": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "coinpediamarkets": {
+      "profit_factor": 0.855,
+      "r_expectancy": -0.113,
+      "max_consec_loss": 6,
+      "monthly_consistency": 0.196,
+      "r_track_n": 17
+    },
+    "cryptosignals0rg": {
+      "profit_factor": 0.78,
+      "r_expectancy": -0.142,
+      "max_consec_loss": 5,
+      "monthly_consistency": 0.152,
+      "r_track_n": 22
+    },
+    "crytobee": {
+      "profit_factor": 0.903,
+      "r_expectancy": -0.047,
+      "max_consec_loss": 4,
+      "monthly_consistency": 0.5,
+      "r_track_n": 7
+    },
+    "davidjulien369": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    },
+    "drivingwithary": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "ferdontknow": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "gongroupvn": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "johwilliam756": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "kiv1n": {
+      "profit_factor": 0.001,
+      "r_expectancy": -0.888,
+      "max_consec_loss": 8,
+      "monthly_consistency": 0.1,
+      "r_track_n": 9
+    },
+    "marisakel": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "mastercrypto2020": {
+      "profit_factor": 0.805,
+      "r_expectancy": -0.118,
+      "max_consec_loss": 6,
+      "monthly_consistency": 0.318,
+      "r_track_n": 47
+    },
+    "melikatrader94": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "mrsignalll": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "origami_capital33": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "quantlinesystems": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "rakeshmalviya5995": {
+      "profit_factor": 0.385,
+      "r_expectancy": -0.127,
+      "max_consec_loss": 3,
+      "monthly_consistency": 0.337,
+      "r_track_n": 9
+    },
+    "s0ckchanhkute": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 3
+    },
+    "saimabd": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 4
+    },
+    "vf_investment": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 1
+    },
+    "wolfoftrading": {
+      "profit_factor": null,
+      "r_expectancy": null,
+      "max_consec_loss": null,
+      "monthly_consistency": null,
+      "r_track_n": 2
+    }
+  },
+  "touch_time_analysis": {
+    "overall": {
+      "<1h": {
+        "n": 350,
+        "wins": 151,
+        "hit_rate": 0.431
+      },
+      "1-6h": {
+        "n": 98,
+        "wins": 42,
+        "hit_rate": 0.429
+      },
+      "6-24h": {
+        "n": 115,
+        "wins": 52,
+        "hit_rate": 0.452
+      },
+      "24-72h": {
+        "n": 101,
+        "wins": 51,
+        "hit_rate": 0.505
+      },
+      ">72h": {
+        "n": 38,
+        "wins": 13,
+        "hit_rate": 0.342
+      }
+    },
+    "by_grade": {
+      "C": {
+        "<1h": {
+          "n": 105,
+          "wins": 49,
+          "hit_rate": 0.467
+        },
+        "1-6h": {
+          "n": 36,
+          "wins": 13,
+          "hit_rate": 0.361
+        },
+        "6-24h": {
+          "n": 53,
+          "wins": 20,
+          "hit_rate": 0.377
+        },
+        "24-72h": {
+          "n": 24,
+          "wins": 11,
+          "hit_rate": 0.458
+        },
+        ">72h": {
+          "n": 8,
+          "wins": 5,
+          "hit_rate": 0.625
+        }
+      },
+      "S": {
+        "<1h": {
+          "n": 5,
+          "wins": 2,
+          "hit_rate": 0.4
+        },
+        "6-24h": {
+          "n": 4,
+          "wins": 0,
+          "hit_rate": 0.0
+        },
+        "24-72h": {
+          "n": 3,
+          "wins": 1,
+          "hit_rate": 0.333
+        },
+        ">72h": {
+          "n": 2,
+          "wins": 0,
+          "hit_rate": 0.0
+        }
+      },
+      "D": {
+        "<1h": {
+          "n": 172,
+          "wins": 62,
+          "hit_rate": 0.36
+        },
+        "1-6h": {
+          "n": 30,
+          "wins": 10,
+          "hit_rate": 0.333
+        },
+        "6-24h": {
+          "n": 31,
+          "wins": 21,
+          "hit_rate": 0.677
+        },
+        "24-72h": {
+          "n": 43,
+          "wins": 25,
+          "hit_rate": 0.581
+        },
+        ">72h": {
+          "n": 20,
+          "wins": 6,
+          "hit_rate": 0.3
+        }
+      },
+      "A": {
+        "<1h": {
+          "n": 14,
+          "wins": 4,
+          "hit_rate": 0.286
+        },
+        "1-6h": {
+          "n": 10,
+          "wins": 4,
+          "hit_rate": 0.4
+        },
+        "6-24h": {
+          "n": 11,
+          "wins": 4,
+          "hit_rate": 0.364
+        },
+        "24-72h": {
+          "n": 8,
+          "wins": 3,
+          "hit_rate": 0.375
+        },
+        ">72h": {
+          "n": 3,
+          "wins": 1,
+          "hit_rate": 0.333
+        }
+      },
+      "B": {
+        "<1h": {
+          "n": 54,
+          "wins": 34,
+          "hit_rate": 0.63
+        },
+        "1-6h": {
+          "n": 22,
+          "wins": 15,
+          "hit_rate": 0.682
+        },
+        "6-24h": {
+          "n": 16,
+          "wins": 7,
+          "hit_rate": 0.438
+        },
+        "24-72h": {
+          "n": 23,
+          "wins": 11,
+          "hit_rate": 0.478
+        },
+        ">72h": {
+          "n": 5,
+          "wins": 1,
+          "hit_rate": 0.2
+        }
+      }
+    }
+  },
+  "signal_quality": {
+    "ic": {
+      "ic": 0.1614,
+      "n": 682
+    },
+    "icir": {
+      "icir": 0.389,
+      "mean_ic": 0.0873,
+      "std_ic": 0.2244,
+      "weeks": 17
+    },
+    "weekly_ics": {
+      "2026-W30": 0.0708,
+      "2026-W31": 0.2482,
+      "2026-W32": 0.3271,
+      "2026-W33": 0.1305,
+      "2026-W34": 0.2906,
+      "2026-W35": 0.181,
+      "2026-W36": -0.1936,
+      "2026-W37": 0.3386,
+      "2026-W38": 0.1323,
+      "2026-W39": 0.2652,
+      "2026-W40": -0.0545,
+      "2026-W41": -0.0803,
+      "2026-W42": -0.4657,
+      "2026-W43": -0.1824,
+      "2026-W44": 0.2898,
+      "2026-W45": -0.0217,
+      "2026-W46": 0.2074
+    }
+  },
+  "author_deletion_rates": [
+    {
+      "author": "QilanX",
+      "total": 5,
+      "checked": 4,
+      "deleted": 3,
+      "rate": 0.6
+    },
+    {
+      "author": "CryptoAnalystSignal",
+      "total": 200,
+      "checked": 37,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "mastercrypto2020",
+      "total": 106,
+      "checked": 28,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "BitmexSignalsFee",
+      "total": 57,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "coinpediamarkets",
+      "total": 37,
+      "checked": 9,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Wall_Street_Levels",
+      "total": 33,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "EhsanZeydabadi",
+      "total": 32,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "cryptosignals0rg",
+      "total": 26,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "MasterAnanda",
+      "total": 23,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "kiv1n",
+      "total": 19,
+      "checked": 5,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "aminrahmani888",
+      "total": 16,
+      "checked": 3,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Katsumi-Nohara",
+      "total": 14,
+      "checked": 4,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Master_Hunter",
+      "total": 14,
+      "checked": 3,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Primal_Signals",
+      "total": 14,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Terminator_Crypto_Analyst",
+      "total": 14,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "XAUxBTC_Pro",
+      "total": 14,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "Roddy01SIGNALSPROVIDER",
+      "total": 13,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "CryptoPatel",
+      "total": 12,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "quantlinesystems",
+      "total": 12,
+      "checked": 0,
+      "deleted": 0,
+      "rate": 0.0
+    },
+    {
+      "author": "BigBeluga",
+      "total": 10,
+      "checked": 2,
+      "deleted": 0,
+      "rate": 0.0
+    }
+  ],
+  "misses": {
+    "total": 23,
+    "class_counts": {
+      "즉시반전": 9,
+      "이익반납": 11,
+      "중간": 3
+    },
+    "signals": [
+      {
+        "coin": "BTC",
+        "author": "Crypto-Adda_Official",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 28,
+        "mfe_pct": 0.4662190105058716,
+        "mae_pct": -4.555516658783061,
+        "time_to_fail_h": 8.8,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "AVAX",
+        "author": "DrDodofortrading",
+        "outcome": "miss",
+        "grade": "A",
+        "score": 55,
+        "mfe_pct": 12.969402586888917,
+        "mae_pct": -13.420489744477287,
+        "time_to_fail_h": 381.0,
+        "supply_verdict": "중립|투매 진행",
+        "position_verdict": "우호|바닥권·RSI28",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "ARB",
+        "author": "BitmexSignalsFee",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 41,
+        "mfe_pct": 2.624557267134351,
+        "mae_pct": -9.682643495593133,
+        "time_to_fail_h": 13.6,
+        "supply_verdict": "중립|",
+        "position_verdict": "중립|조정중·4h급락",
+        "btc_regime": "below",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "ICP",
+        "author": "BitmexSignalsFee",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 44,
+        "mfe_pct": 0.7549258618049874,
+        "mae_pct": -9.674905269157733,
+        "time_to_fail_h": 22.1,
+        "supply_verdict": "중립|",
+        "position_verdict": "우호|20일지지·RSI44",
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "AVAX",
+        "author": "BitmexSignalsFee",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 43,
+        "mfe_pct": 4.6355282960627475,
+        "mae_pct": -9.776606878631467,
+        "time_to_fail_h": 103.7,
+        "supply_verdict": "중립|지표 발표",
+        "position_verdict": "우호|120일지지·RSI44",
+        "btc_regime": "below",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "ONDO",
+        "author": "BitmexSignalsFee",
+        "outcome": "miss",
+        "grade": "A",
+        "score": 60,
+        "mfe_pct": 11.699286095867135,
+        "mae_pct": -9.911037149184821,
+        "time_to_fail_h": 127.4,
+        "supply_verdict": "중립|투매 진행",
+        "position_verdict": "중립|조정중·4h급락",
+        "btc_regime": "below",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "ADA",
+        "author": "BitmexSignalsFee",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 46,
+        "mfe_pct": 4.234001292824818,
+        "mae_pct": -9.56373545985836,
+        "time_to_fail_h": 202.5,
+        "supply_verdict": "중립|",
+        "position_verdict": "중립|조정중·RSI31",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "SUI",
+        "author": "coinpediamarkets",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 0.5730778117294616,
+        "mae_pct": -12.551582280833667,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "above",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "BTC",
+        "author": "Jasmine-Flower",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 0.3128861578252459,
+        "mae_pct": -10.59639376974586,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "above",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "SOL",
+        "author": "XAUxBTC_Pro",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 1.639954543673356,
+        "mae_pct": -11.211032640127726,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "above",
+        "failure_class": "중간"
+      },
+      {
+        "coin": "BTC",
+        "author": "MarketFlowResearch",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 26,
+        "mfe_pct": 0.02445064610877873,
+        "mae_pct": -2.54285476275449,
+        "time_to_fail_h": 3.4,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "BTC",
+        "author": "MarketFlowResearch",
+        "outcome": "timeboxed_loss",
+        "grade": "D",
+        "score": 26,
+        "mfe_pct": 0.1372884299437656,
+        "mae_pct": -9.22681098013895,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "above",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "BTC",
+        "author": "MasterAnanda",
+        "outcome": "miss",
+        "grade": "A",
+        "score": 75,
+        "mfe_pct": 1.3363279056709714,
+        "mae_pct": -3.798481397864867,
+        "time_to_fail_h": 88.4,
+        "supply_verdict": "중립|",
+        "position_verdict": "중립|조정중·RSI37",
+        "btc_regime": "below",
+        "failure_class": "중간"
+      },
+      {
+        "coin": "TIA",
+        "author": "Jasmine-Flower",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 1.4078617228881947,
+        "mae_pct": -1.6987841966441894,
+        "time_to_fail_h": 1.3,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "중간"
+      },
+      {
+        "coin": "VIRTUAL",
+        "author": "coinpediamarkets",
+        "outcome": "timeboxed_loss",
+        "grade": "A",
+        "score": 60,
+        "mfe_pct": 8.024092518964512,
+        "mae_pct": -7.8880955662951795,
+        "time_to_fail_h": 279.1,
+        "supply_verdict": "중립|투매 진행",
+        "position_verdict": "중립|조정중·RSI30",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "AAVE",
+        "author": "Jasmine-Flower",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 0.0,
+        "mae_pct": -0.7205436829607696,
+        "time_to_fail_h": 0.3,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "SUI",
+        "author": "Jasmine-Flower",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 2.181576661727889,
+        "mae_pct": -1.5419892674706697,
+        "time_to_fail_h": 12.6,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "AERO",
+        "author": "Primal_Signals",
+        "outcome": "timeboxed_loss",
+        "grade": "A",
+        "score": 58,
+        "mfe_pct": 11.700537955768102,
+        "mae_pct": -7.252954616231337,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": "주의|매도 우위",
+        "position_verdict": "중립|조정중·RSI34",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "AERO",
+        "author": "BitmexSignalsFee",
+        "outcome": "timeboxed_loss",
+        "grade": "A",
+        "score": 56,
+        "mfe_pct": 11.700537955768102,
+        "mae_pct": -7.252954616231337,
+        "time_to_fail_h": 168.1,
+        "supply_verdict": "주의|매도 우위",
+        "position_verdict": "중립|조정중·RSI34",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "ADA",
+        "author": "Jasmine-Flower",
+        "outcome": "miss",
+        "grade": "D",
+        "score": 33,
+        "mfe_pct": 0.4145275639927476,
+        "mae_pct": -1.562207762804292,
+        "time_to_fail_h": 1.9,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "TAO",
+        "author": "BitmexSignalsFee",
+        "outcome": "timeboxed_loss",
+        "grade": "A",
+        "score": 60,
+        "mfe_pct": 6.8948694472476,
+        "mae_pct": -4.927448109949737,
+        "time_to_fail_h": 168.0,
+        "supply_verdict": "주의|매도 우위",
+        "position_verdict": "우호|바닥권·4h급락",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      },
+      {
+        "coin": "UNI",
+        "author": "Jasmine-Flower",
+        "outcome": "miss",
+        "grade": "C",
+        "score": 46,
+        "mfe_pct": 0.06249424693377707,
+        "mae_pct": -1.0771667740836817,
+        "time_to_fail_h": 0.6,
+        "supply_verdict": null,
+        "position_verdict": null,
+        "btc_regime": "below",
+        "failure_class": "즉시반전"
+      },
+      {
+        "coin": "BTC",
+        "author": "MasterAnanda",
+        "outcome": "miss",
+        "grade": "A",
+        "score": 71,
+        "mfe_pct": 4.307531591280471,
+        "mae_pct": -4.84021164522649,
+        "time_to_fail_h": 247.1,
+        "supply_verdict": "주의|매도 우위",
+        "position_verdict": "우호|120일지지·RSI34",
+        "btc_regime": "above",
+        "failure_class": "이익반납"
+      }
+    ]
+  },
+  "post_age_stats": {
+    "<24h": {
+      "n": 440,
+      "wins": 192,
+      "win_rate": 0.44
+    },
+    "24-72h": {
+      "n": 172,
+      "wins": 85,
+      "win_rate": 0.49
+    },
+    "72-120h": {
+      "n": 48,
+      "wins": 20,
+      "win_rate": 0.42
+    },
+    "120h+": {
+      "n": 42,
+      "wins": 12,
+      "win_rate": 0.29
+    }
+  }
+}
